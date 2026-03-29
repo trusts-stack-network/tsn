@@ -62,9 +62,8 @@ const MAX_FUTURE_TIME_DRIFT: u64 = 2 * 60; // 2 minutes in seconds
 /// Maximum allowed age for a block (2 hours)
 const MAX_BLOCK_AGE: u64 = 2 * 60 * 60; // 2 hours in seconds
 
-/// Minimum time between blocks (prevents spam)
-/// Set to 1/10th of target time to allow some variance
-const MIN_BLOCK_INTERVAL: u64 = TARGET_BLOCK_TIME_SECS / 10;
+/// Minimum time between blocks — consensus rule, same as config::MIN_BLOCK_INTERVAL_SECS
+const MIN_BLOCK_INTERVAL: u64 = crate::config::MIN_BLOCK_INTERVAL_SECS;
 
 /// Validator for blocks and transactions
 pub struct Validator {
@@ -446,7 +445,7 @@ mod tests {
         
         assert_eq!(constants.max_future_drift, 15 * 60);
         assert_eq!(constants.max_block_age, 2 * 60 * 60);
-        assert_eq!(constants.min_block_interval, TARGET_BLOCK_TIME_SECS / 10);
+        assert_eq!(constants.min_block_interval, crate::config::MIN_BLOCK_INTERVAL_SECS);
         assert_eq!(constants.target_block_time, TARGET_BLOCK_TIME_SECS);
     }
 

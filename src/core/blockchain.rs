@@ -746,14 +746,14 @@ impl ShieldedBlockchain {
         }
 
         // Minimum block interval: reject blocks with timestamp too close to previous block
-        const MIN_BLOCK_INTERVAL_SECS: u64 = 5;
+        let min_interval = crate::config::MIN_BLOCK_INTERVAL_SECS;
         if self.height() > 0 {
             if let Some(prev_block) = self.get_block_by_height(self.height()) {
-                if block.header.timestamp < prev_block.header.timestamp + MIN_BLOCK_INTERVAL_SECS {
+                if block.header.timestamp < prev_block.header.timestamp + min_interval {
                     return Err(BlockchainError::InvalidTransaction(
                         format!(
                             "Block timestamp {} is less than {}s after previous block timestamp {}",
-                            block.header.timestamp, MIN_BLOCK_INTERVAL_SECS, prev_block.header.timestamp
+                            block.header.timestamp, min_interval, prev_block.header.timestamp
                         )
                     ));
                 }

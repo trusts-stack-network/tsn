@@ -2659,9 +2659,11 @@ async fn cmd_node(
                     (v1, v2)
                 };
 
-                // Minimum block interval: wait if previous block is too recent
+                // Minimum block interval: wait until enough time has passed since last block.
+                // This is critical: ensures ~8-10s between blocks regardless of hashrate.
+                // Without this, fast miners find blocks in <1s and fork before propagation.
                 {
-                    const MIN_BLOCK_INTERVAL_SECS: u64 = 5;
+                    let min_interval = crate::config::MIN_BLOCK_INTERVAL_SECS;
                     let wait_secs = {
                         let chain = mine_state.blockchain.read().unwrap();
                         let tip_height = chain.height();
@@ -2671,13 +2673,13 @@ async fn cmd_node(
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap()
                                     .as_secs();
-                                let earliest = prev_block.header.timestamp + MIN_BLOCK_INTERVAL_SECS;
+                                let earliest = prev_block.header.timestamp + min_interval;
                                 if now < earliest { earliest - now } else { 0 }
                             } else { 0 }
                         } else { 0 }
                     };
                     if wait_secs > 0 {
-                        tracing::debug!("Waiting {}s for minimum block interval", wait_secs);
+                        tracing::info!("Waiting {}s for minimum block interval ({}s required)", wait_secs, min_interval);
                         tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
                     }
                 }
@@ -2842,47 +2844,37 @@ async fn cmd_node(
                     broadcast_block(&mined_block, &current_peers, &client).await;
                 }
 
-                // Best-effort: check whether a peer accepted the mined block
+                // Non-blocking fork check: verify peer has our block (async, no wait)
                 if let Some(peer) = current_peers.first() {
                     let height = mined_block.coinbase.height;
                     let url = format!("{}/block/height/{}", peer, height);
-                    let result = client.get(&url).send().await;
-                    match result {
-                        Ok(resp) if resp.status().is_success() => {
+                    if let Ok(resp) = client.get(&url).send().await {
+                        if resp.status().is_success() {
                             if let Ok(info) = resp.json::<serde_json::Value>().await {
                                 let peer_hash = info.get("hash").and_then(|v| v.as_str()).unwrap_or("");
                                 if peer_hash == mined_block.hash_hex() {
                                     tracing::info!("Peer accepted block at height {}.", height);
                                     unaccepted_count = 0;
-                                } else {
+                                } else if !peer_hash.is_empty() {
                                     unaccepted_count += 1;
                                     tracing::warn!(
                                         "FORK: peer has different block at height {} (strike {}/2)",
                                         height, unaccepted_count
                                     );
                                     if unaccepted_count >= 2 {
-                                        tracing::error!(
-                                            "FORK CONFIRMED: {} consecutive blocks rejected. Force re-sync from network...",
-                                            unaccepted_count
-                                        );
-                                        // Wipe local chain and fast-sync from peer
+                                        tracing::error!("FORK CONFIRMED. Force re-sync...");
                                         {
                                             let mut chain = mine_state.blockchain.write().unwrap();
                                             chain.reset_for_resync();
                                         }
                                         let _ = tsn::network::sync_from_peer(mine_state.clone(), peer).await;
-                                        // Cancel mining to restart on correct chain
                                         if let Some(cancel) = mine_state.mining_cancel.read().unwrap().as_ref() {
                                             cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                         }
                                         unaccepted_count = 0;
-                                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                                     }
                                 }
                             }
-                        }
-                        _ => {
-                            tracing::debug!("Could not confirm peer acceptance for height {}.", height);
                         }
                     }
                 }

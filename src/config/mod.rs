@@ -9,6 +9,12 @@
 /// Numeric difficulty: hash_prefix (u64 big-endian) must be < u64::MAX / difficulty.
 pub const GENESIS_DIFFICULTY: u64 = 1_000_000;
 
+/// Minimum time between consecutive blocks (seconds).
+/// Blocks with timestamp < prev_block_timestamp + this value are rejected by ALL nodes.
+/// This is a consensus rule — ensures propagation time between blocks regardless of hashrate.
+/// With 8s minimum and 10s target, there's always 8+ seconds for block propagation.
+pub const MIN_BLOCK_INTERVAL_SECS: u64 = 8;
+
 /// Activation height for Poseidon Goldilocks PoW hash.
 /// Blocks at height >= this value use Poseidon over GoldilocksField (plonky2).
 /// Blocks below this height use legacy BN254 Poseidon (light-poseidon).
