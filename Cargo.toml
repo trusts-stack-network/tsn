@@ -10,7 +10,7 @@ license = "MIT"
 fips204 = "0.4"
 
 # Hashing
-sha2 = { version = "0.10", features = ["asm", "compress"] }
+sha2 = { version = "0.10", features = ["compress"] }
 blake2 = "0.10"
 light-poseidon = "0.2"
 pbkdf2 = "0.12"
