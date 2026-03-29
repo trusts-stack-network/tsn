@@ -2304,8 +2304,11 @@ async fn cmd_node(
                                             // Stored as orphan or side chain — trigger immediate sync
                                             // to fetch missing blocks and resolve potential fork
                                             let local_height = p2p_blockchain.blockchain.read().unwrap().height();
-                                            if height > local_height {
+                                            {
+                                                // Any orphan block means potential fork — trigger sync regardless
                                                 tracing::info!("P2P: block #{} stored as orphan (local: {}), triggering sync", height, local_height);
+                                                // Cancel mining during sync to prevent fork divergence
+                                                p2p_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                                 let sync_state = p2p_blockchain.clone();
                                                 let sync_peers = p2p_blockchain.peers.read().unwrap().clone();
                                                 tokio::spawn(async move {
@@ -2823,7 +2826,18 @@ async fn cmd_node(
                                 if peer_hash == mined_block.hash_hex() {
                                     tracing::info!("Peer accepted block at height {}.", height);
                                 } else {
-                                    tracing::info!("Peer has different block at height {}.", height);
+                                    tracing::warn!("FORK DETECTED: peer has different block at height {}. Pausing mining and re-syncing...", height);
+                                    // Force re-sync from this peer to resolve the fork
+                                    let resync_state = mine_state.clone();
+                                    let resync_peer = peer.clone();
+                                    tokio::spawn(async move {
+                                        let _ = tsn::network::sync_from_peer(resync_state, &resync_peer).await;
+                                    });
+                                    // Cancel current mining attempt to pick up the re-synced chain
+                                    if let Some(cancel) = mine_state.mining_cancel.read().unwrap().as_ref() {
+                                        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    }
+                                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                                 }
                             }
                         }
