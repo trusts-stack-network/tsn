@@ -484,6 +484,7 @@ impl ShieldedBlockchain {
         self.cumulative_work = 0;
         self.difficulty = crate::config::GENESIS_DIFFICULTY;
         self.fast_sync_base_height = 0;
+        self.last_checkpoint_height = 0;
         self.prev_block_states.clear();
         // Clear DB snapshot so fast-sync can reimport
         if let Some(ref db) = self.db {
