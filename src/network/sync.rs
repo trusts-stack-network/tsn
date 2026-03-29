@@ -131,23 +131,13 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
             );
             return Ok(0);
         }
-        // Same height: compare cumulative work — take the heavier chain
+        // Same height but different block: ALWAYS take the peer's chain.
+        // The peer's block was already accepted by the network (seeds follow it).
+        // Our block hasn't been propagated yet. Network consensus wins.
         if peer_info.height == local_height {
-            let local_work = {
-                let chain = state.blockchain.read()
-                    .map_err(|e| SyncError::LockPoisoned(format!("Blockchain read lock poisoned: {}", e)))?;
-                chain.cumulative_work()
-            };
-            if peer_info.cumulative_work <= local_work {
-                warn!(
-                    "Ignoring fork from peer {} — same height {} but peer work {} <= local work {}.",
-                    peer_id(peer_url), peer_info.height, peer_info.cumulative_work, local_work
-                );
-                return Ok(0);
-            }
             info!(
-                "Fork from peer {} at same height {} but heavier chain (peer work: {}, local: {}). Switching.",
-                peer_id(peer_url), peer_info.height, peer_info.cumulative_work, local_work
+                "Fork at same height {} — taking peer's chain (network consensus). Switching.",
+                peer_info.height
             );
         }
         info!(
