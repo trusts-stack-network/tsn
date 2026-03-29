@@ -135,7 +135,12 @@ cd tsn-*
 
 ### Build from source
 
+Requires **Rust nightly** (automatically selected via `rust-toolchain.toml`):
+
 ```bash
+# Install Rust if needed
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
 git clone https://github.com/trusts-stack-network/trust-stack-network.git
 cd trust-stack-network
 cargo build --release
@@ -144,7 +149,7 @@ cargo build --release
 ./target/release/tsn miner -t 4
 ```
 
-That's it. Peer discovery is automatic via DNS seeds (seed1-4.tsnchain.com). New nodes fast-sync from a snapshot in ~2 seconds.
+Peer discovery is automatic via DNS seeds (seed1-4.tsnchain.com). New nodes fast-sync from a snapshot in ~2 seconds.
 
 ### CLI Reference
 
