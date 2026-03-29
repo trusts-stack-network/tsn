@@ -1173,18 +1173,13 @@ async fn add_peer(
         });
     }
 
-    // Block private/reserved IP ranges (anti-SSRF)
-    let is_private = normalized.contains("://127.") || normalized.contains("://0.")
-        || normalized.contains("://10.") || normalized.contains("://192.168.")
-        || normalized.contains("://172.16.") || normalized.contains("://172.17.")
-        || normalized.contains("://172.18.") || normalized.contains("://172.19.")
-        || normalized.contains("://172.2") || normalized.contains("://172.30.")
-        || normalized.contains("://172.31.") || normalized.contains("://169.254.")
-        || normalized.contains("://[::1]") || normalized.contains("://localhost");
-    if is_private {
-        warn!("Rejected peer with private IP: {}", peer_id(&normalized));
+    // Note: private IPs are allowed for peers (local miners, LAN nodes).
+    // Only block loopback to prevent self-connection.
+    let is_loopback = normalized.contains("://127.") || normalized.contains("://[::1]") || normalized.contains("://localhost");
+    if is_loopback {
+        warn!("Rejected loopback peer: {}", peer_id(&normalized));
         return Json(AddPeerResponse {
-            status: "rejected: private IP".to_string(),
+            status: "rejected: loopback IP".to_string(),
             peer_count: state.peers.read().unwrap_or_else(|e| e.into_inner()).len(),
         });
     }
