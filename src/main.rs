@@ -261,9 +261,16 @@ async fn wait_for_initial_sync(
                     return Ok(());
                 } else {
                     println!(
-                        "Fork detected at height {}. Re-syncing from peer...",
+                        "Fork detected at height {}. Force re-sync from network (wiping local chain)...",
                         local_height
                     );
+                    // Nuclear option: wipe local chain and fast-sync from peer.
+                    // This is safe because we haven't started mining yet.
+                    {
+                        let mut chain = state.blockchain.write().unwrap();
+                        chain.reset_for_resync();
+                    }
+                    // Now sync_from_peer will fast-sync from scratch
                     let _ = tsn::network::sync_from_peer(state.clone(), &peer_url).await;
                 }
             } else {
@@ -2849,28 +2856,27 @@ async fn cmd_node(
                                     unaccepted_count = 0;
                                 } else {
                                     unaccepted_count += 1;
-                                    if unaccepted_count >= 3 {
-                                        tracing::warn!(
-                                            "FORK DETECTED: {} consecutive blocks not accepted. Pausing mining and re-syncing...",
+                                    tracing::warn!(
+                                        "FORK: peer has different block at height {} (strike {}/2)",
+                                        height, unaccepted_count
+                                    );
+                                    if unaccepted_count >= 2 {
+                                        tracing::error!(
+                                            "FORK CONFIRMED: {} consecutive blocks rejected. Force re-sync from network...",
                                             unaccepted_count
                                         );
-                                        // Force re-sync from this peer to resolve the fork
-                                        let resync_state = mine_state.clone();
-                                        let resync_peer = peer.clone();
-                                        tokio::spawn(async move {
-                                            let _ = tsn::network::sync_from_peer(resync_state, &resync_peer).await;
-                                        });
-                                        // Cancel current mining attempt to pick up the re-synced chain
+                                        // Wipe local chain and fast-sync from peer
+                                        {
+                                            let mut chain = mine_state.blockchain.write().unwrap();
+                                            chain.reset_for_resync();
+                                        }
+                                        let _ = tsn::network::sync_from_peer(mine_state.clone(), peer).await;
+                                        // Cancel mining to restart on correct chain
                                         if let Some(cancel) = mine_state.mining_cancel.read().unwrap().as_ref() {
                                             cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                         }
                                         unaccepted_count = 0;
-                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                                    } else {
-                                        tracing::info!(
-                                            "Peer has different block at height {} (orphan {}/3). Continuing mining.",
-                                            height, unaccepted_count
-                                        );
+                                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                                     }
                                 }
                             }

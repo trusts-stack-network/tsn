@@ -291,6 +291,14 @@ impl Database {
         Ok(())
     }
 
+    /// Clear the state snapshot (used during resync).
+    pub fn clear_state_snapshot(&self) -> Result<(), DatabaseError> {
+        let _ = self.metadata.remove("state_snapshot_pq");
+        let _ = self.metadata.remove("state_snapshot_height");
+        self.db.flush()?;
+        Ok(())
+    }
+
     /// Load the state snapshot if available.
     pub fn load_state_snapshot(&self) -> Result<Option<(crate::core::StateSnapshotPQ, u64)>, DatabaseError> {
         let snapshot_data = match self.metadata.get("state_snapshot_pq")? {

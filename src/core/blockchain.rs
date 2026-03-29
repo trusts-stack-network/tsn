@@ -472,6 +472,26 @@ impl ShieldedBlockchain {
         self.canonical_height
     }
 
+    /// Reset the blockchain for a complete re-sync from network.
+    /// Wipes state, height index, and metadata back to genesis.
+    /// Used when the node detects it's on an incompatible fork during initial sync.
+    pub fn reset_for_resync(&mut self) {
+        tracing::warn!("RESYNC: Wiping local chain state for fresh sync from network");
+        self.state = crate::core::state::ShieldedState::new();
+        self.height_index.clear();
+        self.height_index.push([0u8; 32]); // genesis placeholder
+        self.canonical_height = 0;
+        self.cumulative_work = 0;
+        self.difficulty = crate::config::GENESIS_DIFFICULTY;
+        self.fast_sync_base_height = 0;
+        self.prev_block_states.clear();
+        // Clear DB snapshot so fast-sync can reimport
+        if let Some(ref db) = self.db {
+            let _ = db.clear_state_snapshot();
+        }
+        tracing::info!("RESYNC: Chain reset to height 0, ready for fast-sync");
+    }
+
     /// Rollback the chain to a specific height, discarding all blocks above it.
     /// Rebuilds state by replaying blocks from genesis (or fast-sync base) to target height.
     /// Returns true if rollback happened, false if already at or below target height.
