@@ -78,15 +78,63 @@ const OUTPUT_VKEY_SHA256: &str = "c97a5eb20c85009a2abd2f85b1bece88c054e913a24423
 /// Also verifies checksums for committed keys to ensure integrity.
 fn find_verification_keys() -> anyhow::Result<(String, String)> {
     use sha2::{Sha256, Digest};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
-    // Paths to check (in order of preference)
+    // Build list of directories to search (CWD, next to binary, parent of binary)
+    let mut search_dirs: Vec<PathBuf> = vec![PathBuf::from(".")];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            search_dirs.push(parent.to_path_buf());
+            // Also check parent of parent (for target/release/tsn → project root)
+            if let Some(grandparent) = parent.parent() {
+                search_dirs.push(grandparent.to_path_buf());
+                if let Some(ggp) = grandparent.parent() {
+                    search_dirs.push(ggp.to_path_buf());
+                }
+            }
+        }
+    }
+
+    for base in &search_dirs {
+        let committed_spend = base.join("circuits/keys/spend_vkey.json");
+        let committed_output = base.join("circuits/keys/output_vkey.json");
+        if committed_spend.exists() && committed_output.exists() {
+            let spend_data = std::fs::read(&committed_spend)?;
+            let output_data = std::fs::read(&committed_output)?;
+            let spend_hash = hex::encode(Sha256::digest(&spend_data));
+            let output_hash = hex::encode(Sha256::digest(&output_data));
+            if spend_hash != SPEND_VKEY_SHA256 {
+                return Err(anyhow::anyhow!(
+                    "Spend verification key checksum mismatch!\n  Expected: {}\n  Got: {}",
+                    SPEND_VKEY_SHA256, spend_hash
+                ));
+            }
+            if output_hash != OUTPUT_VKEY_SHA256 {
+                return Err(anyhow::anyhow!(
+                    "Output verification key checksum mismatch!\n  Expected: {}\n  Got: {}",
+                    OUTPUT_VKEY_SHA256, output_hash
+                ));
+            }
+            println!("  Using committed verification keys (checksums verified)");
+            return Ok((committed_spend.to_string_lossy().to_string(), committed_output.to_string_lossy().to_string()));
+        }
+    }
+
+    for base in &search_dirs {
+        let build_spend = base.join("circuits/build/spend_vkey.json");
+        let build_output = base.join("circuits/build/output_vkey.json");
+        if build_spend.exists() && build_output.exists() {
+            println!("  Using local build verification keys (development mode)");
+            return Ok((build_spend.to_string_lossy().to_string(), build_output.to_string_lossy().to_string()));
+        }
+    }
+
+    // Legacy: check relative paths (backward compat)
     let committed_spend = "circuits/keys/spend_vkey.json";
     let committed_output = "circuits/keys/output_vkey.json";
     let build_spend = "circuits/build/spend_vkey.json";
     let build_output = "circuits/build/output_vkey.json";
 
-    // Check committed keys first (production)
     if Path::new(committed_spend).exists() && Path::new(committed_output).exists() {
         // Verify checksums for committed keys
         let spend_data = std::fs::read(committed_spend)?;
