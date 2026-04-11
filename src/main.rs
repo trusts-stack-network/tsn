@@ -2423,6 +2423,47 @@ async fn cmd_node(
                     }
                 }
 
+                // Check 2c: Solo ahead — local node is far AHEAD of all peers (on a solo fork)
+                // v2.1.0: If we're >100 blocks ahead of all verified peers, we're on a fork.
+                // This catches nodes that mined solo without connecting to seeds.
+                {
+                    let sync_client = &watchdog_state.http_client;
+                    let peers_list = watchdog_state.peers.read().unwrap().clone();
+                    let mut verified_peer_heights: Vec<u64> = Vec::new();
+                    for peer in &peers_list {
+                        if !tsn::network::is_contactable_peer(peer) { continue; }
+                        let url = format!("{}/tip", peer);
+                        if let Ok(resp) = sync_client.get(&url).timeout(std::time::Duration::from_secs(2)).send().await {
+                            if let Ok(tip) = resp.json::<serde_json::Value>().await {
+                                let h = tip["height"].as_u64().unwrap_or(0);
+                                if h > 0 { verified_peer_heights.push(h); }
+                            }
+                        }
+                    }
+                    // Only trigger if we have 2+ verified peers and ALL are far behind us
+                    if verified_peer_heights.len() >= 2 && current_height > 100 {
+                        let max_peer = *verified_peer_heights.iter().max().unwrap_or(&0);
+                        let ahead_gap = current_height.saturating_sub(max_peer);
+                        if ahead_gap > 100 {
+                            tracing::warn!(
+                                "WATCHDOG: SOLO FORK — local at {} but all {} peers are at max {}. Gap={}. Auto wipe + resync.",
+                                current_height, verified_peer_heights.len(), max_peer, ahead_gap
+                            );
+                            if is_auto {
+                                let _reorg_guard = watchdog_state.reorg_lock.write().await;
+                                let mut chain = watchdog_state.blockchain.write().unwrap();
+                                chain.reset_for_snapshot_resync();
+                                drop(chain);
+                                drop(_reorg_guard);
+                                stuck_since = None;
+                                last_height = 0;
+                            } else {
+                                tracing::info!("WATCHDOG: Mode validation — solo fork detected (gap={}), action proposée via /admin/force-resync", ahead_gap);
+                            }
+                        }
+                    }
+                }
+
                 // Check 3: Too many resyncs in short window → wipe completely
                 if resync_count >= 3 {
                     let msg = format!("{} resyncs in 5 min — chain is unstable", resync_count);
@@ -2554,12 +2595,15 @@ async fn cmd_node(
             let p2p = P2pNode::start(p2p_config).await
                 .expect("FATAL: P2P layer failed to start — node cannot propagate blocks");
 
+            // v2.1.1: Peer ID displayed prominently in color — users need this
+            let magenta = "\x1b[1;35m"; // bold magenta
+            let cyan = "\x1b[1;36m";
+            let reset_color = "\x1b[0m";
             println!();
-            println!("  ╔═══════════════════════════════════════════╗");
-            println!("  ║  Node ID: {}  ║", &p2p.peer_id.to_string()[..38]);
-            println!("  ╚═══════════════════════════════════════════╝");
-            println!("  Full PeerID: {}", p2p.peer_id);
-            println!("  P2P port:    {}", p2p_port);
+            println!("  {}YOUR NODE ID:{}", magenta, reset_color);
+            println!("  {}{}{}", cyan, p2p.peer_id, reset_color);
+            println!("  P2P port: {}", p2p_port);
+            println!("  API:      http://localhost:{}/node/info", port);
 
             // Store PeerID and shared peer list in AppState
             {
@@ -3513,9 +3557,13 @@ async fn cmd_node(
     }
 
     let chain_height = state.blockchain.read().unwrap().height();
+    let node_id = state.p2p_peer_id.read().unwrap().clone().unwrap_or_default();
     println!();
     println!("Chain height: {}", chain_height);
     println!("Node is running. Press Ctrl+C to stop.");
+    if !node_id.is_empty() {
+        println!("Your Node ID: \x1b[1;36m{}\x1b[0m", node_id);
+    }
     println!();
 
     // Keep the main task alive (API + sync + P2P all run in spawned tasks)
