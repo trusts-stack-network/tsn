@@ -256,18 +256,34 @@ impl ShieldedBlockchain {
             // With snapshots every 10 blocks, this replays at most ~9 blocks
             if blocks_to_replay > 0 && start_height <= height {
                 tracing::info!("Replaying {} blocks from height {} to {}...", blocks_to_replay, start_height, height);
+                let mut replay_failed = false;
                 for h in start_height..=height {
-                    let hash = height_index.get(h as usize).copied()
-                        .or_else(|| db.get_block_hash_by_height(h).ok().flatten())
-                        .ok_or_else(|| {
-                            BlockchainError::StorageError(format!("Missing block hash at height {}", h))
-                        })?;
-                    let block = db
-                        .load_block(&hash)
-                        .map_err(|e| BlockchainError::StorageError(e.to_string()))?
-                        .ok_or_else(|| {
-                            BlockchainError::StorageError(format!("Missing block data at height {}", h))
-                        })?;
+                    let hash = match height_index.get(h as usize).copied()
+                        .or_else(|| db.get_block_hash_by_height(h).ok().flatten()) {
+                        Some(hash) if hash != [0u8; 32] => hash,
+                        _ => {
+                            tracing::error!(
+                                "Missing block hash at height {} during replay ({} of {}). \
+                                 Database is incomplete — will wipe and re-sync from peers.",
+                                h, h - start_height + 1, blocks_to_replay
+                            );
+                            replay_failed = true;
+                            break;
+                        }
+                    };
+                    let block = match db.load_block(&hash)
+                        .map_err(|e| BlockchainError::StorageError(e.to_string()))? {
+                        Some(b) => b,
+                        None => {
+                            tracing::error!(
+                                "Missing block data at height {} (hash={}) during replay. \
+                                 Database is incomplete — will wipe and re-sync from peers.",
+                                h, hex::encode(&hash[..8])
+                            );
+                            replay_failed = true;
+                            break;
+                        }
+                    };
 
                     for tx in &block.transactions {
                         state.apply_transaction(tx);
@@ -279,6 +295,15 @@ impl ShieldedBlockchain {
 
                     blocks.put(hash, block);
                 }
+
+                if replay_failed {
+                    // Wipe DB and restart — node will fast-sync from peers
+                    tracing::warn!("Wiping corrupted database for fresh sync...");
+                    drop(db);
+                    let _ = std::fs::remove_dir_all(db_path);
+                    return Self::open(db_path, difficulty);
+                }
+
                 tracing::info!("Replay complete ({} blocks)", blocks_to_replay);
             } else {
                 tracing::info!("Snapshot is up-to-date, no replay needed");
@@ -1242,7 +1267,14 @@ impl ShieldedBlockchain {
     /// Check if a block hash at a given height violates a hardcoded checkpoint.
     /// Returns Err if the hash doesn't match a known checkpoint at this height.
     /// Returns Ok(()) if height is not a checkpoint or if the hash matches.
+    /// Validate a block against hardcoded checkpoints.
+    /// Returns Err(CheckpointViolation) if the block hash doesn't match.
+    /// v2.1.2: Skips validation if no checkpoints defined or genesis mismatch detected.
     pub fn validate_against_hardcoded_checkpoints(height: u64, hash: &[u8; 32]) -> Result<(), BlockchainError> {
+        if crate::config::HARDCODED_CHECKPOINTS.is_empty() {
+            return Ok(());
+        }
+
         let hash_hex = hex::encode(hash);
         for &(cp_height, cp_hash) in crate::config::HARDCODED_CHECKPOINTS {
             if height == cp_height && hash_hex != cp_hash {
@@ -1254,6 +1286,25 @@ impl ShieldedBlockchain {
             }
         }
         Ok(())
+    }
+
+    /// Check if hardcoded checkpoints should be bypassed due to genesis mismatch.
+    /// Called once at startup. If genesis doesn't match, log a warning and disable checkpoints.
+    /// v2.1.2: Handles emergency genesis resets without needing a CLI flag.
+    pub fn check_genesis_checkpoint_compatibility(genesis_hash: &[u8; 32]) -> bool {
+        if crate::config::HARDCODED_CHECKPOINTS.is_empty() {
+            return true; // No checkpoints to validate
+        }
+        let expected = crate::config::EXPECTED_GENESIS_HASH;
+        let actual = hex::encode(genesis_hash);
+        if !expected.is_empty() && actual != expected && actual != "0".repeat(64) {
+            tracing::warn!(
+                "Genesis mismatch (expected={}, got={}) — hardcoded checkpoints will be skipped (genesis reset mode)",
+                &expected[..16], &actual[..16]
+            );
+            return false; // Checkpoints invalid for this genesis
+        }
+        true
     }
 
     /// Internal: insert a block into the chain (shared by add_block and add_block_trusted).
@@ -1472,14 +1523,20 @@ impl ShieldedBlockchain {
                 );
                 return Ok(false);
             }
-            // Cap orphans to prevent memory exhaustion from fork chain spam
+            // Cap orphans to prevent memory exhaustion — evict oldest when full
             const MAX_ORPHANS: usize = 500;
             if self.orphans.len() >= MAX_ORPHANS {
-                tracing::warn!(
-                    "SYNC_DEBUG: REJECT ORP_FULL block={} height={} pool={}",
-                    block_hash_hex, block_height, self.orphans.len()
+                // Evict the lowest-height orphan to make room
+                let lowest = self.orphans.iter()
+                    .min_by_key(|(_, b)| b.coinbase.height)
+                    .map(|(k, _)| *k);
+                if let Some(key) = lowest {
+                    self.orphans.remove(&key);
+                }
+                tracing::debug!(
+                    "SYNC_DEBUG: ORP_EVICT pool full, evicted lowest to accept block={} height={}",
+                    block_hash_hex, block_height
                 );
-                return Ok(false);
             }
             tracing::debug!("SYNC_DEBUG: STORED_ORPHAN block={} height={} parent={}", block_hash_hex, block_height, prev_hash_hex);
             self.orphans.insert(block_hash, block);
@@ -1887,86 +1944,39 @@ impl ShieldedBlockchain {
             reorg_depth, ancestor_h, current_height, new_tip_height
         );
 
-        // Rollback state: undo blocks from current_height down to ancestor_h+1
-        // We need to replay the state from the ancestor's state.
-        // Since we don't store intermediate states, we replay from the last snapshot
-        // or from the beginning of what we have.
-
-        // Strategy: rebuild state by replaying from fast_sync_base (or genesis)
-        // up to common ancestor, then apply fork blocks.
-        let replay_from = if self.fast_sync_base_height > 0 && ancestor_h >= self.fast_sync_base_height {
-            // Post fast-sync: we have the snapshot state at fast_sync_base_height.
-            // We can't easily restore it, so we re-read the snapshot from DB.
-            // Simpler: replay only the blocks from base to ancestor using current state logic.
-            // Actually, since we're replacing blocks ABOVE the ancestor, and the state
-            // at ancestor includes all blocks up to ancestor, we just need the state AT the ancestor.
-            // Problem: we don't store intermediate states.
-            //
-            // Pragmatic solution: re-import the snapshot and replay from there.
-            self.fast_sync_base_height
-        } else {
-            0
-        };
-
-        // v1.7.0: Rebuild state by replaying shared chain + fork blocks.
-        // cumulative_work comes from DB at ancestor, then per-block for fork.
-        let (mut new_state, actual_replay_from) =
-            if self.fast_sync_base_height > 0 && ancestor_h >= self.fast_sync_base_height {
-                let snapshot_state = if let Some(ref db) = self.db {
-                    match db.load_state_snapshot() {
-                        Ok(Some((snapshot, _))) => {
-                            let mut s = ShieldedState::new();
-                            s.restore_pq_from_snapshot(snapshot);
-                            Some(s)
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-                if let Some(state) = snapshot_state {
-                    let snap_h = if let Some(ref db) = self.db {
-                        db.load_state_snapshot().ok().flatten()
-                            .map(|(_, h)| h)
-                            .unwrap_or(self.fast_sync_base_height)
-                    } else {
-                        self.fast_sync_base_height
-                    };
-                    tracing::info!(
-                        "Reorg: using snapshot at height {}, replaying {} blocks to ancestor",
-                        snap_h, ancestor_h.saturating_sub(snap_h)
-                    );
-                    (state, snap_h + 1)
-                } else {
-                    tracing::warn!("Reorg: no snapshot in DB, replaying from genesis");
-                    (ShieldedState::new(), 0)
-                }
-            } else {
-                (ShieldedState::new(), 0)
-            };
-
-        let mut new_height_index: Vec<[u8; BLOCK_HASH_SIZE]> = Vec::new();
-        let mut new_difficulty = self.difficulty;
-
-        // Copy height_index entries up to actual_replay_from (fast-sync placeholders)
-        for h in 0..actual_replay_from.min(ancestor_h + 1) {
-            if let Some(hash) = self.height_index.get(h as usize) {
-                new_height_index.push(*hash);
+        // v2.1.2: Use rollback_to_height to restore state at ancestor.
+        // This uses the prev_block_states cache (exact clone, deterministic)
+        // or the slow replay path (which now fails on missing blocks instead of skipping).
+        // This is the single source of truth for state restoration.
+        tracing::info!(
+            "Reorg: rolling back state from height {} to ancestor {} (depth={})",
+            current_height, ancestor_h, reorg_depth
+        );
+        match self.rollback_to_height(ancestor_h) {
+            Ok(true) => {
+                tracing::info!(
+                    "Reorg: state rolled back to height {} successfully (commitment_count={}, pq_count={})",
+                    ancestor_h, self.state.commitment_count(), self.state.commitment_tree_pq().size()
+                );
+            }
+            Ok(false) => {
+                tracing::warn!("Reorg: rollback to {} returned false (already at target?)", ancestor_h);
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Reorg ABORTED: rollback to height {} failed: {}. Chain state preserved.",
+                    ancestor_h, e
+                );
+                return Err(e);
             }
         }
 
-        // Replay shared chain state from actual_replay_from to ancestor
-        for h in actual_replay_from..=ancestor_h {
+        // State is now at ancestor_h. Build the new height_index from current state.
+        let mut new_height_index: Vec<[u8; BLOCK_HASH_SIZE]> = Vec::new();
+        let mut new_difficulty = self.difficulty;
+        for h in 0..=ancestor_h {
             if let Some(hash) = self.height_index.get(h as usize) {
                 new_height_index.push(*hash);
-                if *hash != [0u8; BLOCK_HASH_SIZE] {
-                    if let Some(block) = self.get_block(hash) {
-                        for tx in &block.transactions { new_state.apply_transaction(tx); }
-                        for tx in &block.transactions_v2 { new_state.apply_transaction_v2(tx); }
-                        new_state.apply_coinbase(&block.coinbase);
-                        new_difficulty = block.header.difficulty;
-                    }
-                }
             }
         }
 
@@ -1980,12 +1990,13 @@ impl ShieldedBlockchain {
             let _ = db.remove_cumulative_work_from(ancestor_h + 1);
         }
 
-        // Apply fork blocks and store per-block cumulative_work in DB
+        // Apply fork blocks on top of the rolled-back state.
+        // self.state is now at ancestor_h (restored by rollback_to_height).
         let mut running_work = ancestor_work;
         for block in &fork_blocks {
-            for tx in &block.transactions { new_state.apply_transaction(tx); }
-            for tx in &block.transactions_v2 { new_state.apply_transaction_v2(tx); }
-            new_state.apply_coinbase(&block.coinbase);
+            for tx in &block.transactions { self.state.apply_transaction(tx); }
+            for tx in &block.transactions_v2 { self.state.apply_transaction_v2(tx); }
+            self.state.apply_coinbase(&block.coinbase);
             new_height_index.push(block.hash());
             new_difficulty = block.header.difficulty;
             running_work += block.header.difficulty as u128;
@@ -2001,9 +2012,8 @@ impl ShieldedBlockchain {
         self.blocks.clear();
         self.orphans.clear();
 
-        // Store new tip and switch
+        // Store new tip and update chain metadata
         self.blocks.put(new_tip.hash(), new_tip);
-        self.state = new_state;
         self.height_index = new_height_index;
         self.canonical_height = self.height_index.len() as u64 - 1;
         self.difficulty = new_difficulty;

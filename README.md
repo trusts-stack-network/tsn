@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-2.0.0-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-2.1.2-blue">
   <img alt="Rust" src="https://img.shields.io/badge/rust-97k+_lines-orange">
   <img alt="Tests" src="https://img.shields.io/badge/tests-370+_passing-brightgreen">
   <img alt="Testnet" src="https://img.shields.io/badge/testnet--v2-live-success">

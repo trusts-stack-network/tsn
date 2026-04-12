@@ -418,6 +418,11 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
         );
 
         for (idx, block) in blocks.into_iter().enumerate() {
+            // v2.1.2: Yield between blocks to let HTTP handlers process requests.
+            // Without this, a 100-block sync batch starves all concurrent readers.
+            if idx > 0 && idx % 5 == 0 {
+                tokio::task::yield_now().await;
+            }
             let block_hash_hex = hex::encode(&block.hash()[..8]);
             let block_h = block.coinbase.height;
             let mut chain = state.blockchain.write()
@@ -1187,7 +1192,14 @@ pub async fn sync_loop(state: Arc<AppState>, seed_peers: Vec<String>, sync_inter
             });
         }
 
-        let peers = state.peers.read().unwrap().clone();
+        let mut peers = state.peers.read().unwrap().clone();
+        // v2.1.2: Prioritize seed nodes for sync — they have the full chain
+        // and return large batches (50 blocks). Other peers may only be 1 block ahead.
+        peers.sort_by(|a, b| {
+            let a_is_seed = seed_peers.contains(a);
+            let b_is_seed = seed_peers.contains(b);
+            b_is_seed.cmp(&a_is_seed) // seeds first
+        });
 
         for peer in &peers {
             // Skip hashed peer IDs (not contactable URLs)
@@ -1238,8 +1250,9 @@ pub async fn sync_loop(state: Arc<AppState>, seed_peers: Vec<String>, sync_inter
                             warn!("Sync from {} failed ({} consecutive): {}", peer_id(peer), *peer_count, sanitize_error(&e));
                         }
 
-                        // Ghost peer cleanup
-                        if *peer_count >= 10 && !seed_peers.contains(peer) {
+                        // Ghost peer cleanup: remove after 5 consecutive failures (was 10)
+                        // Seed nodes are never removed.
+                        if *peer_count >= 5 && !seed_peers.contains(peer) {
                             info!("Removing ghost peer {} after {} failures", peer_id(peer), peer_count);
                             let mut peers_write = state.peers.write().unwrap();
                             peers_write.retain(|p| p != peer);

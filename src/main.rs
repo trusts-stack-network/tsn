@@ -3560,13 +3560,94 @@ async fn cmd_node(
     let node_id = state.p2p_peer_id.read().unwrap().clone().unwrap_or_default();
     println!();
     println!("Chain height: {}", chain_height);
-    println!("Node is running. Press Ctrl+C to stop.");
+    println!("Node is running. Type \x1b[1;35mhelp\x1b[0m for commands, Ctrl+C to stop.");
     if !node_id.is_empty() {
         println!("Your Node ID: \x1b[1;36m{}\x1b[0m", node_id);
     }
     println!();
 
-    // Keep the main task alive (API + sync + P2P all run in spawned tasks)
+    // Interactive console — reads stdin commands, displays in violet
+    let console_state = state.clone();
+    let console_start = std::time::Instant::now();
+    tokio::spawn(async move {
+        let stdin = tokio::io::BufReader::new(tokio::io::stdin());
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = stdin.lines();
+        let violet = "\x1b[1;35m";
+        let cyan = "\x1b[1;36m";
+        let reset = "\x1b[0m";
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let cmd = line.trim().to_lowercase();
+            match cmd.as_str() {
+                "id" => {
+                    let pid = console_state.p2p_peer_id.read().unwrap().clone().unwrap_or_default();
+                    println!("{violet}> {cyan}{pid}{reset}");
+                }
+                "status" => {
+                    let chain = console_state.blockchain.read().unwrap();
+                    let h = chain.height();
+                    let diff = chain.info().difficulty;
+                    let work = chain.cumulative_work();
+                    drop(chain);
+                    let peers = console_state.peers.read().unwrap().len();
+                    let p2p_count = console_state.p2p_shared_peers.read().unwrap()
+                        .as_ref().map(|sp| sp.read().unwrap().len()).unwrap_or(0);
+                    println!("{violet}> Height:     {reset}{h}");
+                    println!("{violet}  Peers:      {reset}{peers} HTTP, {p2p_count} P2P");
+                    println!("{violet}  Difficulty:  {reset}{diff}");
+                    println!("{violet}  Work:       {reset}{work}");
+                    println!("{violet}  Version:    {reset}{}", env!("CARGO_PKG_VERSION"));
+                }
+                "peers" => {
+                    let peers = console_state.p2p_shared_peers.read().unwrap()
+                        .as_ref().map(|sp| sp.read().unwrap().clone()).unwrap_or_default();
+                    println!("{violet}> {} P2P peers:{reset}", peers.len());
+                    for p in &peers {
+                        let h = p.height.map(|h| format!("{h}")).unwrap_or_else(|| "?".to_string());
+                        println!("{violet}  {reset}{} h={} {}", &p.peer_id[..20], h, p.protocol);
+                    }
+                }
+                "version" => {
+                    println!("{violet}> TSN v{}{reset}", env!("CARGO_PKG_VERSION"));
+                }
+                "difficulty" => {
+                    let chain = console_state.blockchain.read().unwrap();
+                    let diff = chain.info().difficulty;
+                    let next = chain.info().next_difficulty;
+                    println!("{violet}> Current:    {reset}{diff}");
+                    println!("{violet}  Next:       {reset}{next}");
+                }
+                "uptime" => {
+                    let elapsed = console_start.elapsed();
+                    let hours = elapsed.as_secs() / 3600;
+                    let mins = (elapsed.as_secs() % 3600) / 60;
+                    let secs = elapsed.as_secs() % 60;
+                    println!("{violet}> {reset}{hours}h {mins}m {secs}s");
+                }
+                "clear" => {
+                    print!("\x1b[2J\x1b[H");
+                }
+                "help" | "?" => {
+                    println!("{violet}> Commands:{reset}");
+                    println!("{violet}  id         {reset}Show your Node ID (PeerID)");
+                    println!("{violet}  status     {reset}Height, peers, difficulty, version");
+                    println!("{violet}  peers      {reset}List connected P2P peers");
+                    println!("{violet}  version    {reset}Show node version");
+                    println!("{violet}  difficulty {reset}Current and next difficulty");
+                    println!("{violet}  uptime     {reset}Time since node started");
+                    println!("{violet}  clear      {reset}Clear screen");
+                    println!("{violet}  help       {reset}This message");
+                }
+                "" => {} // ignore empty lines
+                _ => {
+                    println!("{violet}> Unknown command: {reset}{cmd}{violet}. Type help for commands.{reset}");
+                }
+            }
+        }
+    });
+
+    // Keep the main task alive
     tokio::signal::ctrl_c().await?;
     println!("Shutting down...");
 

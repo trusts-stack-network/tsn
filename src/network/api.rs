@@ -24,7 +24,7 @@ use crate::core::{ShieldedBlock, ShieldedBlockchain, ChainInfo, ShieldedTransact
 use crate::crypto::nullifier::Nullifier;
 use crate::faucet::{FaucetService, FaucetStatus, ClaimResult, FaucetStats, FaucetError};
 use crate::wallet::ShieldedWallet;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::Mempool;
 use super::sync_gate::SyncGate;
@@ -206,6 +206,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/peers", post(add_peer))
         .route("/peers/p2p", get(get_p2p_peers))
         .route("/peers/detailed", get(get_peers_detailed))
+        .route("/network/status", get(network_status))
         .route("/tx/relay", post(receive_transaction))
         .route("/tip", get(get_tip).post(receive_tip))
         .route("/sync/status", get(sync_status))
@@ -1067,6 +1068,10 @@ async fn receive_block(
     info!("Received block {} from peer", &block_hash[..16]);
 
     // Try to add the block (handles forks and reorgs automatically)
+    // v2.1.2: Acquire reorg_lock.read() before blockchain.write() — consistent with
+    // P2P handler and miner. Without this, HTTP-received blocks could trigger reorgs
+    // that race with watchdog resets (which hold reorg_lock.write()).
+    let _reorg_guard = state.reorg_lock.read().await;
     let (accepted, status) = {
         let mut chain = state.blockchain.write().unwrap_or_else(|e| e.into_inner());
         let old_height = chain.height();
@@ -1256,6 +1261,101 @@ async fn get_p2p_peers(State(state): State<Arc<AppState>>) -> Json<serde_json::V
     }))
 }
 
+/// Aggregated network status for the explorer.
+/// Fetches real heights from all seed nodes via HTTP (server-side, no CORS issues).
+/// Returns P2P peers with raw heights (no faking). Computes statuses.
+async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let local_tip = {
+        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        (chain.height(), hex::encode(chain.latest_hash()))
+    };
+    let tip_height = local_tip.0;
+    let tip_hash = local_tip.1;
+
+    // Fetch real height from each seed node via HTTP (server-side, 2s timeout)
+    let client = &state.http_client;
+    let mut seeds = Vec::new();
+    let seed_names = ["node-1", "seed-1", "seed-2", "seed-3", "seed-4"];
+    for (i, seed_url) in crate::config::SEED_NODES.iter().enumerate() {
+        let name = seed_names.get(i).unwrap_or(&"seed");
+        let ip = seed_url.trim_start_matches("http://").split(':').next().unwrap_or("?");
+        let tip_url = format!("{}/tip", seed_url);
+        let info_url = format!("{}/node/info", seed_url);
+
+        let mut seed_info = serde_json::json!({
+            "name": name,
+            "ip": ip,
+            "height": null,
+            "version": null,
+            "online": false,
+            "status": "offline",
+            "lag": null,
+        });
+
+        // Try /tip first (lighter)
+        if let Ok(resp) = client.get(&tip_url)
+            .timeout(std::time::Duration::from_secs(2)).send().await {
+            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                let h = data["height"].as_u64();
+                seed_info["height"] = serde_json::json!(h);
+                seed_info["online"] = serde_json::json!(true);
+                if let Some(h) = h {
+                    let lag = tip_height.saturating_sub(h);
+                    seed_info["lag"] = serde_json::json!(lag);
+                    seed_info["status"] = serde_json::json!(
+                        if lag <= 5 { "fresh" }
+                        else if lag <= 50 { "stale" }
+                        else { "behind" }
+                    );
+                }
+            }
+        }
+        // Try /node/info for version
+        if seed_info["online"].as_bool() == Some(true) {
+            if let Ok(resp) = client.get(&info_url)
+                .timeout(std::time::Duration::from_secs(2)).send().await {
+                if let Ok(data) = resp.json::<serde_json::Value>().await {
+                    seed_info["version"] = data["version"].clone();
+                }
+            }
+        }
+        seeds.push(seed_info);
+    }
+
+    // P2P peers with raw heights (no faking)
+    let p2p_peers: Vec<serde_json::Value> = {
+        let peers = state.p2p_shared_peers.read().unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|sp| sp.read().unwrap_or_else(|e| e.into_inner()).clone())
+            .unwrap_or_default();
+        peers.iter().map(|p| {
+            let h = p.height;
+            let lag = h.map(|ph| tip_height.saturating_sub(ph));
+            let status = match (h, lag) {
+                (None, _) => "unknown",
+                (Some(_), Some(l)) if l <= 5 => "fresh",
+                (Some(_), Some(l)) if l <= 50 => "stale",
+                (Some(_), Some(_)) => "behind",
+                _ => "unknown",
+            };
+            serde_json::json!({
+                "peer_id": p.peer_id,
+                "height": h,
+                "protocol": p.protocol,
+                "lag": lag,
+                "status": status,
+            })
+        }).collect()
+    };
+
+    Json(serde_json::json!({
+        "tip_height": tip_height,
+        "tip_hash": tip_hash,
+        "seeds": seeds,
+        "peers": p2p_peers,
+    }))
+}
+
 /// Returns detailed info about HTTP peers with stale cleanup (>5min offline removed).
 async fn get_peers_detailed(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let now = std::time::SystemTime::now()
@@ -1358,8 +1458,9 @@ async fn add_peer(
 
     let mut peers = state.peers.write().unwrap_or_else(|e| e.into_inner());
 
-    // Limit max peers to prevent memory exhaustion
-    const MAX_PEERS: usize = 200;
+    // Limit max peers to prevent relay saturation and memory exhaustion.
+    // With 8 max relay targets + P2P GossipSub, we don't need hundreds of HTTP peers.
+    const MAX_PEERS: usize = 50;
     if peers.len() >= MAX_PEERS {
         return Json(AddPeerResponse {
             status: "rejected: max peers reached".to_string(),
@@ -1458,6 +1559,15 @@ async fn receive_transaction(
 
 /// Relay a block to all known peers concurrently (futures::join_all).
 /// Previously sequential (O(N) × latency), now parallel (~1× latency).
+/// Global semaphore limiting concurrent HTTP relay connections.
+/// Prevents relay timeouts from saturating the tokio runtime and blocking the API.
+static RELAY_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(8));
+
+/// Maximum number of peers to relay a block to via HTTP.
+/// HTTP relay is best-effort backup — GossipSub P2P is the primary propagation.
+const MAX_RELAY_PEERS: usize = 8;
+
 async fn relay_block(block: &ShieldedBlock, peers: &[String], client: &reqwest::Client) {
     let block_hash_str = block.hash_hex()[..16].to_string();
 
@@ -1473,35 +1583,43 @@ async fn relay_block(block: &ShieldedBlock, peers: &[String], client: &reqwest::
         cache.put(block_hash_str.clone(), ());
     }
 
-    let mut handles = Vec::with_capacity(peers.len());
-    for peer in peers {
-        if !crate::network::is_contactable_peer(peer) { continue; }
+    // Filter contactable peers, cap at MAX_RELAY_PEERS.
+    // Prioritize seed nodes (known IPs) over random peers.
+    let contactable: Vec<&String> = peers.iter()
+        .filter(|p| crate::network::is_contactable_peer(p))
+        .take(MAX_RELAY_PEERS)
+        .collect();
+
+    // Fire-and-forget: spawn relay tasks but don't await them.
+    // Each task is guarded by a semaphore to prevent connection explosion.
+    // HTTP relay is best-effort — GossipSub P2P is the primary propagation path.
+    for peer in contactable {
         let url = format!("{}/blocks", peer);
         let client = client.clone();
         let block = block.clone();
         let peer_name = peer_id(peer);
         let bh = block_hash_str.clone();
-        handles.push(tokio::spawn(async move {
+        tokio::spawn(async move {
+            // Acquire semaphore permit (max 8 concurrent relays)
+            let _permit = match RELAY_SEMAPHORE.try_acquire() {
+                Ok(p) => p,
+                Err(_) => {
+                    debug!("Relay to {} skipped — semaphore full", peer_name);
+                    return;
+                }
+            };
             match client.post(&url)
                 .timeout(std::time::Duration::from_secs(3))
                 .json(&block).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    info!("Relayed block {} to {}", bh, peer_name);
+                    debug!("Relayed block {} to {}", bh, peer_name);
                 }
-                Ok(resp) => {
-                    let status = resp.status();
-                    if status != StatusCode::BAD_REQUEST {
-                        warn!("Relay to {} returned {}", peer_name, status);
-                    }
-                }
-                Err(_) => {
-                    warn!("Failed to relay block to {} (timeout or unreachable)", peer_name);
+                Ok(_) | Err(_) => {
+                    // Best-effort — don't spam logs for every failed relay
+                    debug!("Relay to {} failed (best-effort, P2P is primary)", peer_name);
                 }
             }
-        }));
-    }
-    for h in handles {
-        let _ = h.await;
+        });
     }
 }
 

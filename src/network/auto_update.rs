@@ -450,11 +450,11 @@ pub fn verify_signature(binary_sha256: &[u8; 32], signature_hex: &str) -> bool {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
     if signature_hex.is_empty() {
-        warn!(
-            "No Ed25519 signature provided — skipping verification \
-             (backwards compat, will be mandatory in v1.3.6)"
+        error!(
+            "No Ed25519 signature provided — REJECTING unsigned update. \
+             All releases must be signed with the release signing key."
         );
-        return true;
+        return false;
     }
 
     let sig_bytes = match hex::decode(signature_hex) {
@@ -899,10 +899,10 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_signature_empty() {
+    fn test_verify_signature_empty_rejected() {
         let hash = compute_sha256(b"test");
-        // Empty signature → Phase 1 passthrough
-        assert!(verify_signature(&hash, ""));
+        // v2.1.2: Empty signature MUST be rejected (mandatory signing)
+        assert!(!verify_signature(&hash, ""));
     }
 
     #[test]
@@ -937,12 +937,12 @@ mod tests {
         assert!(get_latest_peer_version().is_none());
 
         // Same version as LOCAL_VERSION is NOT stored (not strictly newer)
-        notify_peer_version("2.0.1");
+        notify_peer_version("2.1.2");
         assert_eq!(get_latest_peer_version(), None);
 
         // Only versions strictly newer than LOCAL_VERSION are stored
-        notify_peer_version("2.1.0");
-        assert_eq!(get_latest_peer_version(), Some("2.1.0".to_string()));
+        notify_peer_version("2.2.0");
+        assert_eq!(get_latest_peer_version(), Some("2.2.0".to_string()));
 
         // Higher version replaces
         notify_peer_version("3.0.0");
