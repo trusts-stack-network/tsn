@@ -1865,20 +1865,7 @@ impl ShieldedBlockchain {
                 prev_hash = block.header.prev_hash;
                 fork_blocks.push(block);
             } else {
-                // Can't trace back further — if we're post fast-sync, the reorg is too deep.
-                // v2.1.5b: If fast_sync_base > 0, we're in the blind zone where blocks
-                // don't exist in RAM/DB. Instead of returning an error (which causes an
-                // infinite sync loop), reset the chain for a fresh sync. This handles both
-                // broken snapshot restores AND nodes that mined on a fork after a bad restore.
-                if self.fast_sync_base_height > 0 {
-                    tracing::error!(
-                        "REORG_BLIND_ZONE: can't find block {} in RAM or DB. \
-                         fast_sync_base={}, local_height={}. Resetting for fresh sync.",
-                        hex::encode(prev_hash), self.fast_sync_base_height, self.canonical_height
-                    );
-                    self.reset_for_snapshot_resync();
-                    return Err(BlockchainError::InvalidPrevHash);
-                }
+                // Can't trace back further — reorg is too deep for available data
                 tracing::warn!(
                     "Reorg too deep: can't find block {} in RAM or DB (fast_sync_base={})",
                     hex::encode(prev_hash), self.fast_sync_base_height

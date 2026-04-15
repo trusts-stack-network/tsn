@@ -7,7 +7,7 @@
 /// This MUST be the same for all nodes on the network.
 /// Changing this creates an incompatible chain.
 /// Numeric difficulty: hash_prefix (u64 big-endian) must be < u64::MAX / difficulty.
-pub const GENESIS_DIFFICULTY: u64 = 1_000_000;
+pub const GENESIS_DIFFICULTY: u64 = 1_000_001;
 
 /// Minimum time between consecutive blocks (seconds).
 /// Blocks with timestamp < prev_block_timestamp + this value are rejected by ALL nodes.
@@ -59,7 +59,7 @@ pub fn is_ip_whitelisted(ip: &str) -> bool {
 }
 
 /// Network name for identification
-pub const NETWORK_NAME: &str = "tsn-testnet-v2";
+pub const NETWORK_NAME: &str = "tsn-testnet-v3";
 
 /// Hardcoded checkpoints for fast-sync verification.
 /// After downloading blocks in trusted mode, the node verifies that these
@@ -296,4 +296,6 @@ pub const HARDCODED_CHECKPOINTS: &[(u64, &str)] = &[];
 /// Genesis hash — all nodes MUST produce this exact genesis to join the network.
 /// v2.0.0: New genesis for testnet-v2 reset (Poseidon2 from height 0, open network).
 /// Previous values: "8b6f36..." (v0.7.1), "42b5af..." (dev)
-pub const EXPECTED_GENESIS_HASH: &str = "9055172503147d90a78684c5b69e7e888e13fe525612f5ad541f2d5cdb45bbd3";
+/// v2.1.6: New genesis for testnet-v3 reset (clean restart April 15, 2026).
+/// Previous value: "9055172503147d90..." (testnet-v2)
+pub const EXPECTED_GENESIS_HASH: &str = "";
