@@ -1,13 +1,13 @@
-//! Protection contre les eclipse attacks dans le réseau P2P TSN
+//! Protection contre the eclipse attacks in the network P2P TSN
 //!
-//! Un eclipse attack consiste à isoler un nœud en contrôlant tous ses pairs,
-//! permettant de lui présenter une vue falsifiée de la blockchain.
+//! Un eclipse attack consiste to isoler a node in controlling all ses peers,
+//! allowstant de lui presentr a vue forged de the blockchain.
 //! 
-//! Ce module implémente plusieurs mécanismes de défense :
-//! - Diversification géographique des connexions
-//! - Rotation périodique des peers
-//! - Détection de comportements suspects (consensus anormal)
-//! - Validation croisée avec des sources externes
+//! This module implements multiple mechanisms de defense :
+//! - Diversification geographic of connections
+//! - Rotation periodic of peers
+//! - Detection de comportements suspects (consensus anormal)
+//! - Validation cross with sources externes
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -18,26 +18,26 @@ use tokio::time::interval;
 use tracing::{debug, warn, info};
 use serde::{Deserialize, Serialize};
 
-/// Configuration pour la protection contre les eclipse attacks
+/// Configuration for the protection contre the eclipse attacks
 #[derive(Debug, Clone)]
 pub struct EclipseProtectionConfig {
-    /// Nombre minimum de pairs de différents ASN (Autonomous System Numbers)
+    /// Minimum number of peers from different ASNs (Autonomous System Numbers)
     pub min_diverse_asn_peers: usize,
-    /// Nombre minimum de pairs de différents pays/régions
+    /// Minimum number of peers from different countries/regions
     pub min_diverse_geo_peers: usize,
-    /// Pourcentage maximum de pairs d'une même région
+    /// Pourcentage maximum de peers d'une same region
     pub max_same_region_ratio: f32,
-    /// Intervalle de rotation des peers (en secondes)
+    /// Intervalle de rotation of peers (in seconds)
     pub peer_rotation_interval: Duration,
-    /// Pourcentage de peers à faire tourner à chaque cycle
+    /// Pourcentage de peers to faire tourner to each cycle
     pub peer_rotation_percentage: f32,
-    /// Seuil de détection d'anomalie de consensus (% de peers en désaccord)
+    /// Seuil de detection d'anomalie de consensus (% de peers in disagreement)
     pub consensus_anomaly_threshold: f32,
-    /// Durée de quarantaine pour les peers suspects
+    /// Duration de quarantaine for the peers suspects
     pub quarantine_duration: Duration,
-    /// Nombre maximum de tentatives de connexion par IP/24
+    /// Maximum connection attempts per IP/24
     pub max_connections_per_subnet: usize,
-    /// Intervalle de vérification des anomalies
+    /// Check interval of anomalies
     pub anomaly_check_interval: Duration,
 }
 
@@ -46,10 +46,10 @@ impl Default for EclipseProtectionConfig {
         Self {
             min_diverse_asn_peers: 8,
             min_diverse_geo_peers: 5,
-            max_same_region_ratio: 0.4, // Max 40% de peers d'une même région
+            max_same_region_ratio: 0.4, // Max 40% de peers d'une same region
             peer_rotation_interval: Duration::from_secs(3600), // 1 heure
             peer_rotation_percentage: 0.2, // 20% des peers
-            consensus_anomaly_threshold: 0.3, // 30% de désaccord = suspect
+            consensus_anomaly_threshold: 0.3, // 30% disagreement = suspect
             quarantine_duration: Duration::from_secs(7200), // 2 heures
             max_connections_per_subnet: 3,
             anomaly_check_interval: Duration::from_secs(300), // 5 minutes
@@ -57,7 +57,7 @@ impl Default for EclipseProtectionConfig {
     }
 }
 
-/// Informations géographiques d'un peer
+/// Informations geographic d'un peer
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerGeoInfo {
     pub ip: IpAddr,
@@ -68,7 +68,7 @@ pub struct PeerGeoInfo {
     pub last_updated: SystemTime,
 }
 
-/// État d'un peer dans le contexte de protection eclipse
+/// State d'un peer in the contexte de protection eclipse
 #[derive(Debug, Clone)]
 pub struct PeerEclipseState {
     pub addr: SocketAddr,
@@ -79,34 +79,34 @@ pub struct PeerEclipseState {
     pub consensus_disagreements: u32,
     pub is_quarantined: bool,
     pub quarantine_until: Option<Instant>,
-    pub rotation_priority: f32, // 0.0 = ne pas faire tourner, 1.0 = priorité max
+    pub rotation_priority: f32, // 0.0 = do not run, 1.0 = max priority
 }
 
-/// Anomalie détectée dans le réseau
+/// Anomalie detectede in the network
 #[derive(Debug, Clone)]
 pub struct NetworkAnomaly {
     pub anomaly_type: AnomalyType,
     pub detected_at: Instant,
     pub affected_peers: Vec<SocketAddr>,
-    pub severity: f32, // 0.0 à 1.0
+    pub severity: f32, // 0.0 to 1.0
     pub description: String,
 }
 
 #[derive(Debug, Clone)]
 pub enum AnomalyType {
-    /// Trop de peers d'une même région/ASN
+    /// Trop de peers d'une same region/ASN
     GeographicClustering,
-    /// Consensus anormal (trop de désaccords)
+    /// Consensus anormal (trop de disagreements)
     ConsensusAnomaly,
-    /// Rotation des peers bloquée
+    /// Rotation of peers blockede
     PeerRotationStuck,
-    /// Trop de connexions depuis le même subnet
+    /// Trop de connections from the same subnet
     SubnetFlooding,
-    /// Peers qui présentent toujours les mêmes blocs
+    /// Peers that presentnt toujours the same blocs
     SynchronizedBehavior,
 }
 
-/// Gestionnaire principal de protection contre les eclipse attacks
+/// Gestionnaire principal de protection contre the eclipse attacks
 #[derive(Debug)]
 pub struct EclipseProtection {
     config: EclipseProtectionConfig,
@@ -129,22 +129,22 @@ impl EclipseProtection {
         }
     }
 
-    /// Ajouter un nouveau peer et vérifier la diversité
+    /// Add a nouveau peer and verify the diversity
     pub async fn add_peer(&self, addr: SocketAddr) -> Result<(), String> {
-        // Vérifier les limites de subnet
+        // Verify the limits de subnet
         let subnet = self.get_subnet(&addr.ip());
         {
             let mut subnet_conns = self.subnet_connections.write().await;
             let current_count = subnet_conns.get(&subnet).copied().unwrap_or(0);
 
             if current_count >= self.config.max_connections_per_subnet {
-                return Err(format!("Trop de connexions depuis le subnet {}", subnet));
+                return Err(format!("Trop de connections depuis le subnet {}", subnet));
             }
 
             subnet_conns.insert(subnet, current_count + 1);
         }
 
-        // Obtenir les informations géographiques
+        // Get the informations geographic
         let geo_info = self.get_geo_info(&addr.ip()).await;
         
         let peer_state = PeerEclipseState {
@@ -156,7 +156,7 @@ impl EclipseProtection {
             consensus_disagreements: 0,
             is_quarantined: false,
             quarantine_until: None,
-            rotation_priority: 0.5, // Priorité moyenne par défaut
+            rotation_priority: 0.5, // Priority moyenne by default
         };
 
         {
@@ -164,16 +164,16 @@ impl EclipseProtection {
             peers.insert(addr, peer_state);
         }
 
-        // Vérifier la diversité après ajout
+        // Verify the diversity after addition
         self.check_diversity_violations().await;
 
-        info!("Peer {} ajouté avec protection eclipse", addr);
+        info!("Peer {} added avec protection eclipse", addr);
         Ok(())
     }
 
-    /// Supprimer un peer
+    /// Supprimer a peer
     pub async fn remove_peer(&self, addr: &SocketAddr) {
-        // Décrémenter le compteur de subnet
+        // Decrement the counter de subnet
         let subnet = self.get_subnet(&addr.ip());
         {
             let mut subnet_conns = self.subnet_connections.write().await;
@@ -185,16 +185,16 @@ impl EclipseProtection {
             }
         }
 
-        // Supprimer le peer
+        // Supprimer the peer
         {
             let mut peers = self.peers.write().await;
             peers.remove(addr);
         }
 
-        debug!("Peer {} supprimé de la protection eclipse", addr);
+        debug!("Peer {} removed de la protection eclipse", addr);
     }
 
-    /// Enregistrer un nouveau bloc reçu d'un peer
+    /// Register a nouveau bloc received d'un peer
     pub async fn record_block_from_peer(&self, peer: &SocketAddr, block_hash: [u8; 32]) {
         let mut peers = self.peers.write().await;
         if let Some(peer_state) = peers.get_mut(peer) {
@@ -202,7 +202,7 @@ impl EclipseProtection {
         }
     }
 
-    /// Enregistrer un accord/désaccord de consensus avec un peer
+    /// Register a accord/disagreement de consensus with a peer
     pub async fn record_consensus_result(&self, peer: &SocketAddr, agrees: bool) {
         let mut peers = self.peers.write().await;
         if let Some(peer_state) = peers.get_mut(peer) {
@@ -210,13 +210,13 @@ impl EclipseProtection {
                 peer_state.consensus_agreements += 1;
             } else {
                 peer_state.consensus_disagreements += 1;
-                // Augmenter la priorité de rotation pour les peers en désaccord
+                // Augmenter the priority de rotation for the peers in disagreement
                 peer_state.rotation_priority = (peer_state.rotation_priority + 0.1).min(1.0);
             }
         }
     }
 
-    /// Vérifier les violations de diversité géographique
+    /// Verify the violations de diversity geographic
     async fn check_diversity_violations(&self) {
         let peers = self.peers.read().await;
         let mut country_counts: HashMap<String, usize> = HashMap::new();
@@ -237,7 +237,7 @@ impl EclipseProtection {
             }
         }
 
-        // Vérifier la concentration géographique
+        // Verify the concentration geographic
         for (country, count) in country_counts {
             let ratio = count as f32 / total_peers as f32;
             if ratio > self.config.max_same_region_ratio {
@@ -258,7 +258,7 @@ impl EclipseProtection {
             }
         }
 
-        // Vérifier la diversité des ASN
+        // Verify the diversity of ASN
         let unique_asns = asn_counts.len();
         if unique_asns < self.config.min_diverse_asn_peers {
             let anomaly = NetworkAnomaly {
@@ -266,7 +266,7 @@ impl EclipseProtection {
                 detected_at: Instant::now(),
                 affected_peers: peers.keys().cloned().collect(),
                 severity: 1.0 - (unique_asns as f32 / self.config.min_diverse_asn_peers as f32),
-                description: format!("Seulement {} ASN différents (minimum: {})", 
+                description: format!("Seulement {} ASN different (minimum: {})", 
                                    unique_asns, self.config.min_diverse_asn_peers),
             };
             
@@ -274,11 +274,11 @@ impl EclipseProtection {
         }
     }
 
-    /// Effectuer la rotation périodique des peers
+    /// Perform the rotation periodic of peers
     pub async fn rotate_peers(&self) -> Vec<SocketAddr> {
         let now = Instant::now();
         
-        // Vérifier si c'est le moment de faire la rotation
+        // Verify if c'est the moment de faire the rotation
         {
             let last_rotation = self.last_rotation.read().await;
             if now.duration_since(*last_rotation) < self.config.peer_rotation_interval {
@@ -293,7 +293,7 @@ impl EclipseProtection {
                 .max(1)
                 .min(total_peers / 2); // Ne jamais faire tourner plus de 50%
 
-            // Sélectionner les peers avec la plus haute priorité de rotation
+            // Select the peers with the plus haute priority de rotation
             let mut peer_priorities: Vec<_> = peers.iter()
                 .filter(|(_, state)| !state.is_quarantined)
                 .map(|(addr, state)| (*addr, state.rotation_priority))
@@ -307,7 +307,7 @@ impl EclipseProtection {
                 .collect::<Vec<_>>()
         };
 
-        // Mettre à jour le timestamp de dernière rotation
+        // Update the timestamp de last rotation
         {
             let mut last_rotation = self.last_rotation.write().await;
             *last_rotation = now;
@@ -320,7 +320,7 @@ impl EclipseProtection {
         peers_to_rotate
     }
 
-    /// Détecter les anomalies de consensus
+    /// Detect the anomalies de consensus
     pub async fn check_consensus_anomalies(&self) {
         let peers = self.peers.read().await;
         let mut total_agreements = 0u32;
@@ -353,7 +353,7 @@ impl EclipseProtection {
                 detected_at: Instant::now(),
                 affected_peers: suspicious_peers,
                 severity: overall_disagreement_ratio,
-                description: format!("{}% de désaccords de consensus détectés", 
+                description: format!("{}% de disagreements de consensus detecteds", 
                                    (overall_disagreement_ratio * 100.0) as u32),
             };
             
@@ -361,7 +361,7 @@ impl EclipseProtection {
         }
     }
 
-    /// Mettre en quarantaine des peers suspects
+    /// Mettre in quarantaine of peers suspects
     pub async fn quarantine_peers(&self, peers: &[SocketAddr], reason: &str) {
         let quarantine_until = Instant::now() + self.config.quarantine_duration;
         
@@ -371,7 +371,7 @@ impl EclipseProtection {
                 if let Some(state) = peer_states.get_mut(peer_addr) {
                     state.is_quarantined = true;
                     state.quarantine_until = Some(quarantine_until);
-                    state.rotation_priority = 1.0; // Priorité max pour rotation
+                    state.rotation_priority = 1.0; // Max priority for rotation
                 }
             }
         }
@@ -379,7 +379,7 @@ impl EclipseProtection {
         warn!("Mise en quarantaine de {} peers: {}", peers.len(), reason);
     }
 
-    /// Libérer les peers de quarantaine expirée
+    /// Release the peers de quarantaine expired
     pub async fn release_expired_quarantine(&self) {
         let now = Instant::now();
         let mut released_count = 0;
@@ -392,7 +392,7 @@ impl EclipseProtection {
                         if now >= quarantine_until {
                             state.is_quarantined = false;
                             state.quarantine_until = None;
-                            state.rotation_priority = 0.3; // Priorité réduite après quarantaine
+                            state.rotation_priority = 0.3; // Priority reduced after quarantaine
                             released_count += 1;
                         }
                     }
@@ -401,16 +401,16 @@ impl EclipseProtection {
         }
 
         if released_count > 0 {
-            debug!("Libération de {} peers de quarantaine", released_count);
+            debug!("Release de {} peers de quarantaine", released_count);
         }
     }
 
-    /// Enregistrer une anomalie détectée
+    /// Register a anomalie detectede
     async fn record_anomaly(&self, anomaly: NetworkAnomaly) {
-        warn!("Anomalie eclipse détectée: {} (sévérité: {:.2})", 
+        warn!("Anomalie eclipse detectede: {} (severity: {:.2})", 
               anomaly.description, anomaly.severity);
         
-        // Mettre en quarantaine les peers affectés si la sévérité est élevée
+        // Mettre in quarantaine the peers affected if the severity is high
         if anomaly.severity > 0.7 {
             self.quarantine_peers(&anomaly.affected_peers, &anomaly.description).await;
         }
@@ -419,20 +419,20 @@ impl EclipseProtection {
             let mut anomalies = self.detected_anomalies.write().await;
             anomalies.push(anomaly);
             
-            // Garder seulement les 100 dernières anomalies
+            // Garder onlyment the 100 lasts anomalies
             if anomalies.len() > 100 {
                 anomalies.remove(0);
             }
         }
     }
 
-    /// Obtenir les informations géographiques d'une IP
+    /// Get the informations geographic d'une IP
     async fn get_geo_info(&self, ip: &IpAddr) -> Option<PeerGeoInfo> {
-        // Vérifier le cache d'abord
+        // Verify the cache d'abord
         {
             let cache = self.geo_cache.read().await;
             if let Some(cached) = cache.get(ip) {
-                // Vérifier si les données ne sont pas trop anciennes (24h)
+                // Verify if the data not are pas trop anciennes (24h)
                 if let Ok(elapsed) = cached.last_updated.elapsed() {
                     if elapsed < Duration::from_secs(86400) {
                         return Some(cached.clone());
@@ -441,8 +441,8 @@ impl EclipseProtection {
             }
         }
 
-        // Pour cette implémentation, on simule une lookup géographique
-        // En production, on utiliserait une API comme MaxMind GeoIP2
+        // For this implementation, we simulate a geographic lookup
+        // En production, on utiliserait a API like MaxMind GeoIP2
         let geo_info = self.simulate_geo_lookup(ip).await;
         
         if let Some(ref info) = geo_info {
@@ -453,9 +453,9 @@ impl EclipseProtection {
         geo_info
     }
 
-    /// Simulation d'une lookup géographique (à remplacer par une vraie API)
+    /// Simulation d'une lookup geographic (to remplacer par a vraie API)
     async fn simulate_geo_lookup(&self, ip: &IpAddr) -> Option<PeerGeoInfo> {
-        // Simulation basique basée sur les ranges d'IP
+        // Simulation basique based on the ranges d'IP
         let (country_code, region, asn, is_datacenter) = match ip {
             IpAddr::V4(ipv4) => {
                 let octets = ipv4.octets();
@@ -480,7 +480,7 @@ impl EclipseProtection {
         })
     }
 
-    /// Obtenir le subnet /24 d'une IP
+    /// Obtenir the subnet /24 d'une IP
     fn get_subnet(&self, ip: &IpAddr) -> String {
         match ip {
             IpAddr::V4(ipv4) => {
@@ -495,11 +495,11 @@ impl EclipseProtection {
         }
     }
 
-    /// Démarrer les tâches de surveillance en arrière-plan
+    /// Start the tasks de surveillance in background
     pub async fn start_background_tasks(self: Arc<Self>) {
         let protection = Arc::clone(&self);
         
-        // Tâche de vérification des anomalies
+        // Task de verification of anomalies
         tokio::spawn(async move {
             let mut interval = interval(protection.config.anomaly_check_interval);
             loop {
@@ -509,19 +509,19 @@ impl EclipseProtection {
             }
         });
 
-        // Tâche de rotation des peers
+        // Task de rotation of peers
         let protection = Arc::clone(&self);
         tokio::spawn(async move {
             let mut interval = interval(protection.config.peer_rotation_interval);
             loop {
                 interval.tick().await;
                 let _rotated = protection.rotate_peers().await;
-                // Les peers à faire tourner seraient traités par le gestionnaire de connexions
+                // Les peers to faire tourner seraient processeds par the manager de connections
             }
         });
     }
 
-    /// Obtenir les statistiques de protection
+    /// Obtenir the statistics de protection
     pub async fn get_stats(&self) -> EclipseProtectionStats {
         let peers = self.peers.read().await;
         let anomalies = self.detected_anomalies.read().await;
@@ -553,7 +553,7 @@ impl EclipseProtection {
         }
     }
 
-    /// Obtenir la liste des peers en quarantaine
+    /// Obtenir the liste of peers in quarantaine
     pub async fn get_quarantined_peers(&self) -> Vec<(SocketAddr, Option<Instant>)> {
         let peers = self.peers.read().await;
         peers.values()
@@ -562,14 +562,14 @@ impl EclipseProtection {
             .collect()
     }
 
-    /// Obtenir les anomalies récentes
+    /// Get the anomalies recents
     pub async fn get_recent_anomalies(&self) -> Vec<NetworkAnomaly> {
         let anomalies = self.detected_anomalies.read().await;
         anomalies.clone()
     }
 }
 
-/// Statistiques de la protection eclipse
+/// Statistiques de the protection eclipse
 #[derive(Debug, Clone)]
 pub struct EclipseProtectionStats {
     pub total_peers: usize,
@@ -608,11 +608,11 @@ mod tests {
         let addr2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)), 8080);
         let addr3 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 3)), 8080);
 
-        // Premiers deux peers du même subnet devraient passer
+        // Firsts deux peers of the same subnet devraient passer
         assert!(protection.add_peer(addr1).await.is_ok());
         assert!(protection.add_peer(addr2).await.is_ok());
         
-        // Troisième peer du même subnet devrait être rejeté
+        // Third peer of the same subnet should be rejected
         assert!(protection.add_peer(addr3).await.is_err());
     }
 
@@ -624,12 +624,12 @@ mod tests {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 8080);
         protection.add_peer(addr).await.unwrap();
 
-        // Simuler beaucoup de désaccords
+        // Simuler beaucoup de disagreements
         for _ in 0..15 {
             protection.record_consensus_result(&addr, false).await;
         }
         
-        // Quelques accords pour avoir un échantillon significatif
+        // Quelques accords for avoir a sample significatif
         for _ in 0..5 {
             protection.record_consensus_result(&addr, true).await;
         }
@@ -661,13 +661,13 @@ mod tests {
     async fn test_peer_rotation() {
         let protection = EclipseProtection::new(test_config());
         
-        // Ajouter plusieurs peers
+        // Ajouter multiple peers
         for i in 1..=5 {
             let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, i)), 8080);
             protection.add_peer(addr).await.unwrap();
         }
 
-        // Forcer la rotation en modifiant le timestamp
+        // Forcer the rotation in modifiant the timestamp
         {
             let mut last_rotation = protection.last_rotation.write().await;
             *last_rotation = Instant::now() - Duration::from_secs(3600);
@@ -675,6 +675,6 @@ mod tests {
 
         let rotated = protection.rotate_peers().await;
         assert!(!rotated.is_empty());
-        assert!(rotated.len() <= 2); // 30% de 5 peers = 1.5, arrondi à 2 max
+        assert!(rotated.len() <= 2); // 30% of 5 peers = 1.5, rounded to 2 max
     }
 }

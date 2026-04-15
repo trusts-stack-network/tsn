@@ -1,7 +1,7 @@
-//! Tests d'intégration pour TSN
+//! Tests d'integration for TSN
 //!
-//! Ces tests vérifient les interactions entre modules et les scénarios
-//! complexes qui impliquent plusieurs composants du système.
+//! Ces tests verifiesnt the interactions entre modules and the scenarios
+//! complexes that impliquent multiple composants of the system.
 
 use crate::core::{ShieldedBlock, BlockHeader, ShieldedTransaction, CoinbaseTransaction};
 use crate::consensus::{ForkChoice, ChainInfo, ChainError};
@@ -16,17 +16,17 @@ use crate::crypto::{
 };
 use std::collections::HashMap;
 
-/// Tests d'intégration pour la synchronisation de chaîne
+/// Tests d'integration for the synchronization de chain
 #[cfg(test)]
 mod chain_sync_integration {
     use super::*;
 
-    /// Test d'intégration : synchronisation d'une chaîne de blocs
+    /// Test d'integration : synchronization d'une chain de blocs
     #[test]
     fn test_chain_synchronization() {
         let mut state = State::new();
         
-        // Créer une chaîne de 5 blocs
+        // Create a chain de 5 blocs
         let mut blocks = Vec::new();
         let mut prev_hash = [0u8; 32];
         
@@ -54,7 +54,7 @@ mod chain_sync_integration {
             blocks.push(block);
         }
         
-        // Appliquer tous les blocs à l'état
+        // Apply all blocs to l'state
         for block in &blocks {
             let result = state.apply_block(block);
             assert!(result.is_ok(), "Block application should succeed for block {}", 
@@ -63,7 +63,7 @@ mod chain_sync_integration {
         
         assert_eq!(state.get_height(), 5, "Final state height should be 5");
         
-        // Créer le fork choice et ajouter tous les blocs
+        // Create the fork choice and ajouter all blocs
         let mut fork_choice = ForkChoice::new(blocks[0].clone());
         
         for block in blocks.iter().skip(1) {
@@ -77,10 +77,10 @@ mod chain_sync_integration {
         assert_eq!(tip_info.cumulative_work, 50, "Cumulative work should be 5 * 10");
     }
 
-    /// Test d'intégration : gestion des forks
+    /// Test d'integration : gestion of forks
     #[test]
     fn test_fork_resolution() {
-        // Créer un bloc genesis
+        // Create a bloc genesis
         let genesis = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
@@ -103,7 +103,7 @@ mod chain_sync_integration {
         let genesis_hash = genesis.hash();
         let mut fork_choice = ForkChoice::new(genesis);
         
-        // Créer deux branches concurrentes
+        // Create deux branches concurrent
         let branch_a = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
@@ -142,7 +142,7 @@ mod chain_sync_integration {
             },
         };
         
-        // Ajouter la branche B d'abord
+        // Ajouter the branche B d'abord
         let result_b = fork_choice.add_block(branch_b.clone());
         assert!(result_b.is_ok() && result_b.unwrap(), "Branch B should become tip");
         
@@ -150,7 +150,7 @@ mod chain_sync_integration {
         assert_eq!(tip_after_b.tip_hash, branch_b.hash(), "Branch B should be canonical");
         assert_eq!(tip_after_b.cumulative_work, 22, "Cumulative work should be 10 + 12");
         
-        // Ajouter la branche A (plus de travail)
+        // Ajouter the branche A (plus de travail)
         let result_a = fork_choice.add_block(branch_a.clone());
         assert!(result_a.is_ok() && result_a.unwrap(), "Branch A should become new tip");
         
@@ -158,17 +158,17 @@ mod chain_sync_integration {
         assert_eq!(tip_after_a.tip_hash, branch_a.hash(), "Branch A should be canonical");
         assert_eq!(tip_after_a.cumulative_work, 25, "Cumulative work should be 10 + 15");
         
-        // La branche B doit maintenant être un fork alternatif
+        // La branche B must now be a fork alternatif
         assert_eq!(fork_choice.alternative_tips().len(), 1, "Should have one alternative tip");
     }
 
-    /// Test d'intégration : réorganisation de chaîne
+    /// Test d'integration : reorganization de chain
     #[test]
     fn test_chain_reorganization() {
         let mut state_main = State::new();
         let mut state_alt = State::new();
         
-        // Créer un genesis commun
+        // Create a genesis commun
         let genesis = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
@@ -188,13 +188,13 @@ mod chain_sync_integration {
             },
         };
         
-        // Appliquer genesis aux deux états
+        // Apply genesis aux deux states
         state_main.apply_block(&genesis).unwrap();
         state_alt.apply_block(&genesis).unwrap();
         
         let genesis_hash = genesis.hash();
         
-        // Créer une chaîne principale courte mais avec moins de travail
+        // Create a chain principale courte but with moins de travail
         let main_block = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
@@ -216,7 +216,7 @@ mod chain_sync_integration {
         
         state_main.apply_block(&main_block).unwrap();
         
-        // Créer une chaîne alternative plus longue avec plus de travail
+        // Create a chain alternative plus long with plus de travail
         let alt_block1 = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
@@ -258,12 +258,12 @@ mod chain_sync_integration {
         state_alt.apply_block(&alt_block1).unwrap();
         state_alt.apply_block(&alt_block2).unwrap();
         
-        // Vérifier que les états sont différents avant réorganisation
+        // Verify que the states are different before reorganization
         assert_eq!(state_main.get_height(), 2, "Main state should have height 2");
         assert_eq!(state_alt.get_height(), 3, "Alt state should have height 3");
         
-        // Simuler une réorganisation : l'état principal adopte la chaîne alternative
-        // (Dans une vraie implémentation, ceci serait géré par le consensus)
+        // Simuler a reorganization : l'state principal adopte the chain alternative
+        // (Dans a vraie implementation, ceci serait managed par the consensus)
         let mut reorg_state = State::new();
         reorg_state.apply_block(&genesis).unwrap();
         reorg_state.apply_block(&alt_block1).unwrap();
@@ -271,28 +271,28 @@ mod chain_sync_integration {
         
         assert_eq!(reorg_state.get_height(), 3, "Reorganized state should have height 3");
         
-        // Vérifier que la chaîne alternative a plus de travail cumulé
+        // Verify que the chain alternative a plus de travail cumulative
         let main_work = 10 + 8; // genesis + main_block
         let alt_work = 10 + 6 + 6; // genesis + alt_block1 + alt_block2
         assert!(alt_work > main_work, "Alternative chain should have more cumulative work");
     }
 }
 
-/// Tests d'intégration pour les transactions shielded
+/// Tests d'integration for the transactions shielded
 #[cfg(test)]
 mod shielded_transaction_integration {
     use super::*;
 
-    /// Test d'intégration : cycle de vie complet d'une transaction shielded
+    /// Test d'integration : cycle de vie complete d'une transaction shielded
     #[test]
     fn test_shielded_transaction_lifecycle() {
         let mut state = State::new();
         
-        // Créer des clés pour l'expéditeur et le destinataire
+        // Create of keys for the sender and the destinataire
         let sender_key = SpendingKey::generate();
         let receiver_key = SpendingKey::generate();
         
-        // Créer un bloc genesis avec une sortie pour l'expéditeur
+        // Create a bloc genesis with a sortie for the sender
         let genesis = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
@@ -308,7 +308,7 @@ mod shielded_transaction_integration {
             shielded_txs: vec![],
             coinbase: CoinbaseTransaction {
                 outputs: vec![
-                    // Note: dans une vraie implémentation, ceci serait un NoteOutput
+                    // Note: in a vraie implementation, ceci serait a NoteOutput
                 ],
                 memo: "Genesis with initial funds".to_string(),
             },
@@ -316,29 +316,29 @@ mod shielded_transaction_integration {
         
         state.apply_block(&genesis).unwrap();
         
-        // Simuler la création d'une transaction shielded
-        // Note: ceci nécessiterait une implémentation complète des preuves ZK
+        // Simuler the creation d'une transaction shielded
+        // Note: ceci requiresrait a implementation completee of preuves ZK
         
-        // Pour l'instant, on teste juste la structure
+        // Pour l'instant, on teste juste the structure
         let shielded_tx = ShieldedTransaction {
             nullifiers: vec![
-                // Nullifiers des notes dépensées
+                // Nullifiers of notes spentes
             ],
             commitments: vec![
-                // Commitments des nouvelles notes
+                // Commitments of news notes
             ],
             proof: ZKProof::from_bytes(&vec![0u8; 192]),
             binding_signature: Signature::from_bytes(&vec![0u8; 64]),
         };
         
-        // Créer un bloc avec cette transaction
+        // Create a bloc with this transaction
         let block_with_tx = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
                 prev_hash: genesis.hash(),
                 merkle_root: [1u8; 32],
-                commitment_root: [1u8; 32], // Mis à jour avec les nouveaux commitments
-                nullifier_root: [1u8; 32],  // Mis à jour avec les nouveaux nullifiers
+                commitment_root: [1u8; 32], // Updated with new commitments
+                nullifier_root: [1u8; 32],  // Updated with new nullifiers
             state_root: [0u8; 32],
                 timestamp: 1,
                 difficulty: 10,
@@ -351,17 +351,17 @@ mod shielded_transaction_integration {
             },
         };
         
-        // Appliquer le bloc (ceci devrait valider la transaction)
+        // Appliquer the bloc (ceci should validr the transaction)
         let result = state.apply_block(&block_with_tx);
         
-        // Note: dans l'implémentation actuelle, ceci pourrait échouer
-        // car la validation complète des preuves ZK n'est pas implémentée
+        // Note: in the current implementation, ceci pourrait failsr
+        // car the validation completee of preuves ZK n'est pas implementede
         match result {
             Ok(_) => {
                 assert_eq!(state.get_height(), 2, "State height should be 2 after tx block");
             }
             Err(StateError::InvalidZKProof) => {
-                // Attendu si la validation ZK n'est pas encore implémentée
+                // Attendu if the validation ZK n'est pas encore implementede
                 println!("ZK proof validation not yet implemented - this is expected");
             }
             Err(other) => {
@@ -370,17 +370,17 @@ mod shielded_transaction_integration {
         }
     }
 
-    /// Test d'intégration : détection de double-spend
+    /// Test d'integration : detection de double-spend
     #[test]
     fn test_double_spend_detection() {
         let mut state = State::new();
         
-        // Créer un nullifier pour simuler une note dépensée
+        // Create a nullifier for simuler a note spente
         let spending_key = SpendingKey::generate();
         let note_commitment = NoteCommitment::from_bytes([1u8; 32]);
         let nullifier = spending_key.compute_nullifier(&note_commitment, 0);
         
-        // Première transaction qui dépense la note
+        // First transaction that spending the note
         let tx1 = ShieldedTransaction {
             nullifiers: vec![nullifier.clone()],
             commitments: vec![],
@@ -407,13 +407,13 @@ mod shielded_transaction_integration {
             },
         };
         
-        // Appliquer le premier bloc
+        // Appliquer the premier bloc
         let result1 = state.apply_block(&block1);
-        // Note: peut échouer si la validation ZK n'est pas implémentée
+        // Note: can failsr if the validation ZK n'est pas implementede
         
-        // Deuxième transaction qui tente de dépenser la même note (double-spend)
+        // Second transaction that tente de spendingr the same note (double-spend)
         let tx2 = ShieldedTransaction {
-            nullifiers: vec![nullifier], // Même nullifier !
+            nullifiers: vec![nullifier], // Same nullifier !
             commitments: vec![],
             proof: ZKProof::from_bytes(&vec![0u8; 192]),
             binding_signature: Signature::from_bytes(&vec![0u8; 64]),
@@ -438,7 +438,7 @@ mod shielded_transaction_integration {
             },
         };
         
-        // Appliquer le deuxième bloc - doit échouer
+        // Apply the second bloc - must failsr
         let result2 = state.apply_block(&block2);
         
         match result2 {
@@ -447,7 +447,7 @@ mod shielded_transaction_integration {
                 println!("Double-spend correctly detected");
             }
             Err(StateError::InvalidZKProof) => {
-                // Peut arriver si la validation ZK échoue avant la vérification des nullifiers
+                // Peut arriver if the validation ZK fails before the verification of nullifiers
                 println!("ZK validation failed before nullifier check - acceptable for now");
             }
             Ok(_) => {
@@ -460,36 +460,36 @@ mod shielded_transaction_integration {
     }
 }
 
-/// Tests d'intégration pour la cryptographie
+/// Tests d'integration for the cryptographie
 #[cfg(test)]
 mod crypto_integration {
     use super::*;
 
-    /// Test d'intégration : cohérence des arbres de Merkle avec l'état
+    /// Test d'integration : consistency of arbres de Merkle with l'state
     #[test]
     fn test_merkle_tree_state_consistency() {
         let mut state = State::new();
         let mut external_tree = MerkleTree::new();
         
-        // Créer des commitments
+        // Create of commitments
         let commitments = vec![
             NoteCommitment::from_bytes([1u8; 32]),
             NoteCommitment::from_bytes([2u8; 32]),
             NoteCommitment::from_bytes([3u8; 32]),
         ];
         
-        // Ajouter les commitments à l'arbre externe
+        // Add commitments to the external tree
         for commitment in &commitments {
             external_tree.append(*commitment);
         }
         
-        // Créer un bloc avec ces commitments
+        // Create a bloc with ces commitments
         let block = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
                 prev_hash: [0u8; 32],
                 merkle_root: [0u8; 32],
-                commitment_root: external_tree.root(), // Utiliser la racine calculée
+                commitment_root: external_tree.root(), // Utiliser la racine calculationatede
                 nullifier_root: [0u8; 32],
             state_root: [0u8; 32],
                 timestamp: 0,
@@ -497,7 +497,7 @@ mod crypto_integration {
                 nonce: 0,
             },
             shielded_txs: vec![
-                // Simuler des transactions avec ces commitments
+                // Simuler of transactions with ces commitments
                 ShieldedTransaction {
                     nullifiers: vec![],
                     commitments: commitments.clone(),
@@ -511,12 +511,12 @@ mod crypto_integration {
             },
         };
         
-        // Appliquer le bloc
+        // Appliquer the bloc
         let result = state.apply_block(&block);
         
         match result {
             Ok(_) => {
-                // Vérifier que l'arbre de l'état correspond à notre arbre externe
+                // Verify que l'arbre de l'state matches to our arbre externe
                 let state_tree = state.get_commitment_tree();
                 assert_eq!(state_tree.root(), external_tree.root(), 
                           "State tree root must match external tree root");
@@ -524,7 +524,7 @@ mod crypto_integration {
                           "State tree size must match external tree size");
             }
             Err(StateError::InvalidCommitmentRoot) => {
-                // Attendu si la validation des racines est stricte
+                // Attendu if the validation of racines is stricte
                 println!("Commitment root validation is working correctly");
             }
             Err(other) => {
@@ -533,12 +533,12 @@ mod crypto_integration {
         }
     }
 
-    /// Test d'intégration : génération et vérification de preuves de chemin Merkle
+    /// Test d'integration : generation and verification de preuves de path Merkle
     #[test]
     fn test_merkle_path_proof_integration() {
         let mut tree = MerkleTree::new();
         
-        // Ajouter plusieurs commitments
+        // Ajouter multiple commitments
         let commitments = vec![
             NoteCommitment::from_bytes([1u8; 32]),
             NoteCommitment::from_bytes([2u8; 32]),
@@ -552,45 +552,45 @@ mod crypto_integration {
         
         let root = tree.root();
         
-        // Générer des preuves de chemin pour chaque commitment
+        // Generate of preuves de path for each commitment
         for (index, commitment) in commitments.iter().enumerate() {
             let path = tree.path(index);
             assert!(path.is_some(), "Should be able to generate path for index {}", index);
             
             let path = path.unwrap();
             
-            // Vérifier que la preuve est valide
+            // Verify que the preuve is valid
             let is_valid = path.verify(*commitment, &root);
             assert!(is_valid, "Path proof should be valid for commitment at index {}", index);
             
-            // Vérifier qu'une preuve avec un mauvais commitment échoue
+            // Verify qu'une preuve with a mauvais commitment fails
             let wrong_commitment = NoteCommitment::from_bytes([99u8; 32]);
             let is_invalid = path.verify(wrong_commitment, &root);
             assert!(!is_invalid, "Path proof should be invalid for wrong commitment");
         }
     }
 
-    /// Test d'intégration : signatures et authentification
+    /// Test d'integration : signatures and authentication
     #[test]
     fn test_signature_authentication_integration() {
-        // Créer plusieurs clés
+        // Create multiple keys
         let keys: Vec<SpendingKey> = (0..5).map(|_| SpendingKey::generate()).collect();
         
         let message = b"Transaction data to sign";
         
-        // Chaque clé signe le message
+        // Chaque key signe the message
         let signatures: Vec<(SpendingKey, Signature)> = keys.iter()
             .map(|key| (key.clone(), key.sign(message)))
             .collect();
         
-        // Vérifier que chaque signature est valide avec la bonne clé
+        // Verify que each signature is valid with the bonne key
         for (key, signature) in &signatures {
             let verification_key = key.verification_key();
             assert!(verification_key.verify(message, signature), 
                    "Signature should verify with correct key");
         }
         
-        // Vérifier qu'aucune signature ne fonctionne avec une mauvaise clé
+        // Verify qu'no signature not fonctionne with a mauvaise key
         for (i, (_, signature)) in signatures.iter().enumerate() {
             for (j, (other_key, _)) in signatures.iter().enumerate() {
                 if i != j {
@@ -603,25 +603,25 @@ mod crypto_integration {
     }
 }
 
-/// Tests de performance et de charge
+/// Tests de performance and de charge
 #[cfg(test)]
 mod performance_integration {
     use super::*;
     use std::time::Instant;
 
-    /// Test d'intégration : performance de validation de blocs
+    /// Test d'integration : performance de validation de blocs
     #[test]
     fn test_block_validation_performance() {
         let mut state = State::new();
         
-        // Créer un bloc avec plusieurs transactions
+        // Create a bloc with multiple transactions
         let num_txs = 10;
         let mut shielded_txs = Vec::new();
         
         for i in 0..num_txs {
             let tx = ShieldedTransaction {
                 nullifiers: vec![
-                    // Simuler des nullifiers uniques
+                    // Simuler of nullifiers uniques
                     Nullifier::from_bytes([i as u8; 32]),
                 ],
                 commitments: vec![
@@ -652,7 +652,7 @@ mod performance_integration {
             },
         };
         
-        // Mesurer le temps de validation
+        // Mesurer the temps de validation
         let start = Instant::now();
         let result = state.validate_block(&block);
         let validation_time = start.elapsed();
@@ -660,18 +660,18 @@ mod performance_integration {
         println!("Block validation with {} transactions took: {:?}", 
                 num_txs, validation_time);
         
-        // La validation ne doit pas prendre plus de 100ms pour 10 transactions
+        // La validation not must pas prendre plus de 100ms for 10 transactions
         assert!(validation_time.as_millis() < 100, 
                "Block validation should be fast (< 100ms for 10 txs)");
         
-        // Note: le résultat peut être une erreur si la validation ZK n'est pas implémentée
+        // Note: the result can be a error if the validation ZK n'est pas implementede
         match result {
             Ok(_) => println!("Block validation succeeded"),
             Err(e) => println!("Block validation failed (expected): {:?}", e),
         }
     }
 
-    /// Test d'intégration : performance de l'arbre de Merkle
+    /// Test d'integration : performance de l'arbre de Merkle
     #[test]
     fn test_merkle_tree_performance() {
         let mut tree = MerkleTree::new();
@@ -681,7 +681,7 @@ mod performance_integration {
             .map(|i| NoteCommitment::from_bytes([(i % 256) as u8; 32]))
             .collect();
         
-        // Mesurer le temps d'insertion
+        // Mesurer the temps d'insertion
         let start = Instant::now();
         for commitment in &commitments {
             tree.append(*commitment);
@@ -690,21 +690,21 @@ mod performance_integration {
         
         println!("Inserting {} commitments took: {:?}", num_commitments, insertion_time);
         
-        // Mesurer le temps de génération de preuves
+        // Mesurer the temps de generation de preuves
         let start = Instant::now();
         let _path = tree.path(num_commitments / 2);
         let proof_time = start.elapsed();
         
         println!("Generating Merkle path proof took: {:?}", proof_time);
         
-        // Les opérations doivent être raisonnablement rapides
+        // Les operations doivent be raisonnablement rapides
         assert!(insertion_time.as_millis() < 1000, 
                "Inserting 1000 commitments should take < 1s");
         assert!(proof_time.as_millis() < 10, 
                "Generating Merkle proof should take < 10ms");
     }
 
-    /// Test d'intégration : performance de la synchronisation de chaîne
+    /// Test d'integration : performance de the synchronization de chain
     #[test]
     fn test_chain_sync_performance() {
         let mut state = State::new();
@@ -737,10 +737,10 @@ mod performance_integration {
             
             prev_hash = block.hash();
             
-            // Appliquer à l'état
+            // Apply to l'state
             state.apply_block(&block).unwrap();
             
-            // Ajouter au fork choice
+            // Ajouter at the fork choice
             if i == 0 {
                 fork_choice = Some(ForkChoice::new(block));
             } else {
@@ -752,13 +752,13 @@ mod performance_integration {
         
         println!("Synchronizing {} blocks took: {:?}", num_blocks, sync_time);
         
-        // Vérifier l'état final
+        // Verify l'state final
         assert_eq!(state.get_height(), num_blocks, "State height should match number of blocks");
         
         let tip_info = fork_choice.unwrap().canonical_tip().unwrap();
         assert_eq!(tip_info.height, num_blocks - 1, "Tip height should be correct");
         
-        // La synchronisation doit être raisonnablement rapide
+        // La synchronization must be raisonnablement rapide
         assert!(sync_time.as_millis() < 5000, 
                "Synchronizing 100 blocks should take < 5s");
     }

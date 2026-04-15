@@ -1,7 +1,7 @@
-//! Métriques Prometheus pour Trust Stack Network
+//! Prometheus metrics for Trust Stack Network
 //!
-//! Ce module fournit des métriques détaillées pour surveiller les performances
-//! du consensus, la validation des blocs, et diagnostiquer des problèmes comme
+//! This module provides detailed metrics for monitoring the performance
+//! of consensus, block validation, and diagnosing problems like
 //! "Invalid commitment root".
 
 pub mod http_endpoint;
@@ -16,197 +16,197 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use once_cell::sync::Lazy;
 
-/// Métriques globales du consensus TSN
+/// Global TSN consensus metrics
 pub struct ConsensusMetrics {
-    // === VALIDATION DE BLOCS ===
-    /// Nombre total de blocs validés avec succès
+    // === BLOCK VALIDATION ===
+    /// Total number of successfully validated blocks
     pub blocks_validated_total: IntCounter,
     
-    /// Nombre total de blocs rejetés
+    /// Total number of rejected blocks
     pub blocks_rejected_total: IntCounter,
     
-    /// Temps de validation d'un bloc (en secondes)
+    /// Block validation time (in seconds)
     pub block_validation_duration: Histogram,
     
-    /// Nombre de blocs en cours de validation
+    /// Number of blocks currently being validated
     pub blocks_validating_current: IntGauge,
     
-    // === CONSENSUS ET FORK CHOICE ===
-    /// Hauteur actuelle de la chaîne canonique
+    // === CONSENSUS AND FORK CHOICE ===
+    /// Current canonical chain height
     pub chain_height: IntGauge,
     
-    /// Travail cumulatif de la chaîne canonique
+    /// Cumulative work of the canonical chain
     pub cumulative_work: Gauge,
     
-    /// Nombre de réorganisations de chaîne
+    /// Number of chain reorganizations
     pub chain_reorgs_total: IntCounter,
     
-    /// Profondeur de la dernière réorganisation
+    /// Depth of the last reorganization
     pub last_reorg_depth: IntGauge,
     
-    /// Nombre de forks détectés
+    /// Number of detected forks
     pub forks_detected_total: IntCounter,
     
-    /// Nombre de blocs orphelins
+    /// Number of orphan blocks
     pub orphan_blocks_count: IntGauge,
     
     // === PROOF OF WORK ===
-    /// Difficulté actuelle du réseau
+    /// Current network difficulty
     pub network_difficulty: Gauge,
     
-    /// Temps de validation PoW (en secondes)
+    /// PoW validation time (in seconds)
     pub pow_validation_duration: Histogram,
     
-    /// Nombre de validations PoW échouées
+    /// Number of failed PoW validations
     pub pow_validation_failures: IntCounter,
     
-    // === COMMITMENT ET ZK PROOFS ===
-    /// Temps de validation des commitments (en secondes)
+    // === COMMITMENT AND ZK PROOFS ===
+    /// Commitment validation time (in seconds)
     pub commitment_validation_duration: Histogram,
     
-    /// Nombre d'erreurs "Invalid commitment root"
+    /// Count of "Invalid commitment root" errors
     pub invalid_commitment_root_errors: IntCounter,
     
-    /// Nombre de preuves ZK validées
+    /// Number of validated ZK proofs
     pub zk_proofs_validated_total: IntCounter,
     
-    /// Temps de validation des preuves ZK (en secondes)
+    /// ZK proof validation time (in seconds)
     pub zk_proof_validation_duration: Histogram,
     
-    // === MÉMOIRE ET PERFORMANCE ===
-    /// Taille du mempool (nombre de transactions)
+    // === MEMORY AND PERFORMANCE ===
+    /// Mempool size (number of transactions)
     pub mempool_size: IntGauge,
     
-    /// Latence moyenne entre blocs (en secondes)
+    /// Average inter-block latency (in seconds)
     pub block_interval: Histogram,
     
-    /// Utilisation mémoire du consensus (en bytes)
+    /// Consensus memory usage (in bytes)
     pub consensus_memory_usage: Gauge,
 }
 
 impl ConsensusMetrics {
-    /// Crée une nouvelle instance des métriques consensus
+    /// Creates a new consensus metrics instance
     pub fn new() -> Result<Self, prometheus::Error> {
         Ok(Self {
-            // Validation de blocs
+            // Block validation
             blocks_validated_total: register_int_counter!(opts!(
                 "tsn_blocks_validated_total",
-                "Nombre total de blocs validés avec succès"
+                "Total number of successfully validated blocks"
             ))?,
             
             blocks_rejected_total: register_int_counter!(opts!(
                 "tsn_blocks_rejected_total", 
-                "Nombre total de blocs rejetés"
+                "Total number of rejected blocks"
             ))?,
             
             block_validation_duration: register_histogram!(histogram_opts!(
                 "tsn_block_validation_duration_seconds",
-                "Temps de validation d'un bloc en secondes",
+                "Block validation time in seconds",
                 vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0]
             ))?,
             
             blocks_validating_current: register_int_gauge!(opts!(
                 "tsn_blocks_validating_current",
-                "Nombre de blocs en cours de validation"
+                "Number of blocks currently being validated"
             ))?,
             
-            // Consensus et fork choice
+            // Consensus and fork choice
             chain_height: register_int_gauge!(opts!(
                 "tsn_chain_height",
-                "Hauteur actuelle de la chaîne canonique"
+                "Current canonical chain height"
             ))?,
             
             cumulative_work: register_gauge!(opts!(
                 "tsn_cumulative_work",
-                "Travail cumulatif de la chaîne canonique"
+                "Cumulative work of the canonical chain"
             ))?,
             
             chain_reorgs_total: register_int_counter!(opts!(
                 "tsn_chain_reorgs_total",
-                "Nombre total de réorganisations de chaîne"
+                "Total number of chain reorganizations"
             ))?,
             
             last_reorg_depth: register_int_gauge!(opts!(
                 "tsn_last_reorg_depth",
-                "Profondeur de la dernière réorganisation"
+                "Depth of the last reorganization"
             ))?,
             
             forks_detected_total: register_int_counter!(opts!(
                 "tsn_forks_detected_total",
-                "Nombre total de forks détectés"
+                "Total number of detected forks"
             ))?,
             
             orphan_blocks_count: register_int_gauge!(opts!(
                 "tsn_orphan_blocks_count",
-                "Nombre actuel de blocs orphelins"
+                "Current number of orphan blocks"
             ))?,
             
             // Proof of Work
             network_difficulty: register_gauge!(opts!(
                 "tsn_network_difficulty",
-                "Difficulté actuelle du réseau"
+                "Current network difficulty"
             ))?,
             
             pow_validation_duration: register_histogram!(histogram_opts!(
                 "tsn_pow_validation_duration_seconds",
-                "Temps de validation PoW en secondes",
+                "PoW validation time in seconds",
                 vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1]
             ))?,
             
             pow_validation_failures: register_int_counter!(opts!(
                 "tsn_pow_validation_failures_total",
-                "Nombre de validations PoW échouées"
+                "Number of failed PoW validations"
             ))?,
             
-            // Commitment et ZK proofs
+            // Commitment and ZK proofs
             commitment_validation_duration: register_histogram!(histogram_opts!(
                 "tsn_commitment_validation_duration_seconds",
-                "Temps de validation des commitments en secondes",
+                "Commitment validation time in seconds",
                 vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
             ))?,
             
             invalid_commitment_root_errors: register_int_counter!(opts!(
                 "tsn_invalid_commitment_root_errors_total",
-                "Nombre d'erreurs 'Invalid commitment root'"
+                "Total invalid commitment root errors"
             ))?,
             
             zk_proofs_validated_total: register_int_counter!(opts!(
                 "tsn_zk_proofs_validated_total",
-                "Nombre de preuves ZK validées"
+                "Number of validated ZK proofs"
             ))?,
             
             zk_proof_validation_duration: register_histogram!(histogram_opts!(
                 "tsn_zk_proof_validation_duration_seconds",
-                "Temps de validation des preuves ZK en secondes",
+                "ZK proof validation time in seconds",
                 vec![0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
             ))?,
             
-            // Mémoire et performance
+            // Memory and performance
             mempool_size: register_int_gauge!(opts!(
                 "tsn_mempool_size",
-                "Taille actuelle du mempool"
+                "Current mempool size"
             ))?,
             
             block_interval: register_histogram!(histogram_opts!(
                 "tsn_block_interval_seconds",
-                "Latence entre blocs en secondes",
+                "Inter-block latency in seconds",
                 vec![1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0]
             ))?,
             
             consensus_memory_usage: register_gauge!(opts!(
                 "tsn_consensus_memory_usage_bytes",
-                "Utilisation mémoire du consensus en bytes"
+                "Consensus memory usage in bytes"
             ))?,
         })
     }
 }
 
-/// Instance globale des métriques consensus
+/// Global consensus metrics instance
 pub static CONSENSUS_METRICS: Lazy<ConsensusMetrics> = Lazy::new(|| {
-    ConsensusMetrics::new().expect("INIT: échec création métriques consensus Prometheus — noms dupliqués?")
+    ConsensusMetrics::new().expect("INIT: failure creation metrics consensus Prometheus — noms duplicated?")
 });
 
-/// Collecte toutes les métriques au format Prometheus
+/// Collects all metrics in Prometheus format
 pub fn collect_metrics() -> Result<String, prometheus::Error> {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
@@ -217,7 +217,7 @@ pub fn collect_metrics() -> Result<String, prometheus::Error> {
         .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
 }
 
-/// Macro pour mesurer la durée d'exécution d'un bloc de code
+/// Macro for measuring the execution duration of a code block
 #[macro_export]
 macro_rules! measure_duration {
     ($histogram:expr, $block:expr) => {{
@@ -228,7 +228,7 @@ macro_rules! measure_duration {
     }};
 }
 
-/// Macro pour incrémenter un compteur avec gestion d'erreur
+/// Macro for incrementing a counter with error handling
 #[macro_export]
 macro_rules! inc_counter {
     ($counter:expr) => {
@@ -239,7 +239,7 @@ macro_rules! inc_counter {
     };
 }
 
-/// Macro pour définir une gauge avec gestion d'erreur
+/// Macro for defining a gauge with error handling
 #[macro_export]
 macro_rules! set_gauge {
     ($gauge:expr, $value:expr) => {

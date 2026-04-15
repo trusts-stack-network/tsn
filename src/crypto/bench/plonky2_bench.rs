@@ -1,15 +1,15 @@
-//! Benchmarks pour Plonky2 (STARKs post-quantiques)
+//! Benchmarks for Plonky2 (STARKs post-quantiques)
 //! 
-//! Compare les performances de:
-//! - Génération de preuve Plonky2 (FRI-based, post-quantique)
-//! - Vérification de preuve Plonky2
+//! Compare the performances de:
+//! - Generation de preuve Plonky2 (FRI-based, post-quantique)
+//! - Verification de preuve Plonky2
 //! 
-//! Contexte de sécurité:
+//! Contexte de security:
 //! - Plonky2: 128-bit post-quantum security via FRI + Poseidon2
 //! - Pas de trusted setup requis (transparence)
-//! - Sécurité basée uniquement sur des hypothèses de hachage
+//! - Security based only sur of hypotheses de hachage
 //! 
-//! Références:
+//! References:
 //! - Plonky2: https://github.com/mir-protocol/plonky2
 //! - FRI: https://eccc.weizmann.ac.il/report/2017/134/
 //! - Poseidon2: https://eprint.iacr.org/2023/323
@@ -23,12 +23,12 @@ use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use plonky2::plonk::proof::ProofWithPublicInputs;
 use std::time::{Duration, Instant};
 
-/// Type aliases pour Plonky2
+/// Type aliases for Plonky2
 type F = GoldilocksField;
 const D: usize = 2;
 type C = PoseidonGoldilocksConfig;
 
-/// Configuration des benchmarks
+/// Configuration of benchmarks
 const SAMPLE_SIZE: usize = 10;
 const WARMUP_ITERATIONS: usize = 3;
 
@@ -37,7 +37,7 @@ fn build_commitment_circuit() -> (CircuitData<F, C, D>, VerifierCircuitData<F, C
     let config = CircuitConfig::standard_recursion_config();
     let mut builder = CircuitBuilder::<F, D>::new(config);
     
-    // Inputs privés
+    // Inputs privates
     let value = builder.add_virtual_target();
     let blinder = builder.add_virtual_target();
     
@@ -54,19 +54,19 @@ fn build_commitment_circuit() -> (CircuitData<F, C, D>, VerifierCircuitData<F, C
     (circuit_data, verifier_data)
 }
 
-/// Circuit de transaction: vérifie que sum(inputs) = sum(outputs) + fee
+/// Circuit de transaction: verifies que sum(inputs) = sum(outputs) + fee
 fn build_transaction_circuit(num_inputs: usize, num_outputs: usize) -> (CircuitData<F, C, D>, VerifierCircuitData<F, C, D>) {
     let config = CircuitConfig::standard_recursion_config();
     let mut builder = CircuitBuilder::<F, D>::new(config);
     
-    // Inputs (privés)
+    // Inputs (privates)
     let mut input_sum = builder.zero();
     for _ in 0..num_inputs {
         let input = builder.add_virtual_target();
         input_sum = builder.add(input_sum, input);
     }
     
-    // Outputs (privés)
+    // Outputs (privates)
     let mut output_sum = builder.zero();
     for _ in 0..num_outputs {
         let output = builder.add_virtual_target();
@@ -86,7 +86,7 @@ fn build_transaction_circuit(num_inputs: usize, num_outputs: usize) -> (CircuitD
     (circuit_data, verifier_data)
 }
 
-/// Génère une preuve pour le circuit de commitment
+/// Generates a preuve for the circuit de commitment
 fn prove_commitment(
     circuit_data: &CircuitData<F, C, D>,
     value: u64,
@@ -94,7 +94,7 @@ fn prove_commitment(
 ) -> (ProofWithPublicInputs<F, C, D>, Duration) {
     let mut pw = PartialWitness::new();
     
-    // Récupère les targets (simplifié - en pratique on stockerait les targets)
+    // Retrieves the targets (simplified - in pratique on stockerait the targets)
     let targets: Vec<_> = circuit_data.prover_only.public_inputs.iter().cloned().collect();
     
     // Setup witnesses
@@ -102,8 +102,8 @@ fn prove_commitment(
     let blinder_f = F::from_canonical_u64(blinder);
     let commitment_f = value_f + blinder_f;
     
-    // Assigne les valeurs (simplifié)
-    // En pratique, on utiliserait des targets spécifiques stockés lors du build
+    // Assigne the valeurs (simplified)
+    // En pratique, on utiliserait of targets specific stored during the build
     
     let start = Instant::now();
     let proof = circuit_data.prove(pw).expect("proof generation failed");
@@ -112,7 +112,7 @@ fn prove_commitment(
     (proof, elapsed)
 }
 
-/// Génère une preuve pour le circuit de transaction
+/// Generates a preuve for the circuit de transaction
 fn prove_transaction(
     circuit_data: &CircuitData<F, C, D>,
     inputs: Vec<u64>,
@@ -121,8 +121,8 @@ fn prove_transaction(
 ) -> (ProofWithPublicInputs<F, C, D>, Duration) {
     let mut pw = PartialWitness::new();
     
-    // Assigne les witnesses
-    // Note: Simplifié - en pratique on utiliserait les targets spécifiques
+    // Assigne the witnesses
+    // Note: Simplified - in pratique on utiliserait the targets specific
     
     let start = Instant::now();
     let proof = circuit_data.prove(pw).expect("proof generation failed");
@@ -131,7 +131,7 @@ fn prove_transaction(
     (proof, elapsed)
 }
 
-/// Vérifie une preuve
+/// Verifies a preuve
 fn verify_proof(
     verifier_data: &VerifierCircuitData<F, C, D>,
     proof: &ProofWithPublicInputs<F, C, D>,
@@ -143,7 +143,7 @@ fn verify_proof(
     (result, elapsed)
 }
 
-/// Benchmark: Génération de preuve de commitment
+/// Benchmark: Generation de preuve de commitment
 pub fn bench_commitment_generation() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -159,7 +159,7 @@ pub fn bench_commitment_generation() -> crate::crypto::bench::halo2_commitment_b
     })
 }
 
-/// Benchmark: Vérification de preuve de commitment
+/// Benchmark: Verification de preuve de commitment
 pub fn bench_commitment_verification() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -176,7 +176,7 @@ pub fn bench_commitment_verification() -> crate::crypto::bench::halo2_commitment
     })
 }
 
-/// Benchmark: Génération de preuve de transaction (1 input, 1 output)
+/// Benchmark: Generation de preuve de transaction (1 input, 1 output)
 pub fn bench_transaction_generation_1_1() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -194,7 +194,7 @@ pub fn bench_transaction_generation_1_1() -> crate::crypto::bench::halo2_commitm
     })
 }
 
-/// Benchmark: Génération de preuve de transaction (2 inputs, 2 outputs)
+/// Benchmark: Generation de preuve de transaction (2 inputs, 2 outputs)
 pub fn bench_transaction_generation_2_2() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -212,7 +212,7 @@ pub fn bench_transaction_generation_2_2() -> crate::crypto::bench::halo2_commitm
     })
 }
 
-/// Benchmark: Scaling avec différentes tailles de circuit
+/// Benchmark: Scaling with different tailles de circuit
 pub fn bench_scaling() -> Vec<crate::crypto::bench::halo2_commitment_bench::BenchmarkResult> {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -222,7 +222,7 @@ pub fn bench_scaling() -> Vec<crate::crypto::bench::halo2_commitment_bench::Benc
         let config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(config);
         
-        // Crée un circuit avec num_gates gates
+        // Creates a circuit with num_gates gates
         let mut prev = builder.add_virtual_target();
         builder.register_public_input(prev);
         
@@ -253,7 +253,7 @@ pub fn bench_scaling() -> Vec<crate::crypto::bench::halo2_commitment_bench::Benc
     results
 }
 
-/// Exécute tous les benchmarks Plonky2
+/// Executes all benchmarks Plonky2
 pub fn run_plonky2_benchmarks() -> Vec<crate::crypto::bench::halo2_commitment_bench::BenchmarkResult> {
     println!("╔═══════════════════════════════════════════════════════════════╗");
     println!("║           PLONKY2 BENCHMARKS (Post-Quantum STARKs)               ║");
@@ -274,7 +274,7 @@ pub fn run_plonky2_benchmarks() -> Vec<crate::crypto::bench::halo2_commitment_be
     results.push(bench_transaction_generation_2_2());
     results.extend(bench_scaling());
     
-    // Affiche les résultats
+    // Display results
     for result in &results {
         result.print();
     }
@@ -290,11 +290,11 @@ mod tests {
     fn test_commitment_circuit() {
         let (circuit_data, verifier_data) = build_commitment_circuit();
         
-        // Génère une preuve
+        // Generates a preuve
         let mut pw = PartialWitness::new();
         let proof = circuit_data.prove(pw).expect("proof failed");
         
-        // Vérifie
+        // Verifies
         assert!(verifier_data.verify(proof).is_ok());
     }
     

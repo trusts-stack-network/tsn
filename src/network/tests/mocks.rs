@@ -1,7 +1,7 @@
-//! Mocks pour les tests réseau TSN
+//! Mocks for the tests network TSN
 //! 
-//! Ce module fournit des implémentations mock des interfaces réseau pour permettre
-//! des tests unitaires isolés sans dépendances externes.
+//! This module provides implementations mock of interfaces network for allowstre
+//! of tests unitaires isolated without dependencies externes.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use async_trait::async_trait;
 
-/// Mock d'un socket réseau pour les tests
+/// Mock d'un socket network for the tests
 #[derive(Debug, Clone)]
 pub struct MockSocket {
     pub local_addr: SocketAddr,
@@ -113,7 +113,7 @@ impl MockHandshake {
     }
 }
 
-/// Mock rate limiter pour les tests
+/// Mock rate limiter for the tests
 #[derive(Debug, Clone)]
 pub struct MockRateLimiter {
     pub allowed_count: Arc<Mutex<u32>>,

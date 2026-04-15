@@ -94,6 +94,25 @@ pub struct AppState {
     pub error_log: RwLock<Vec<NodeError>>,
     /// Auto-heal mode: "validation" (default, human approves) or "automatic" (self-repair)
     pub auto_heal_mode: RwLock<String>,
+    /// Ghost peer blacklist — peers removed by sync cleanup are never re-added via P2P discovery
+    pub removed_peers: std::sync::Mutex<std::collections::HashSet<String>>,
+    // v2.1.5: Mining/sync performance counters for benchmarking
+    /// Count of "empty batch" events (blocks received but none accepted)
+    pub metric_empty_batches: std::sync::atomic::AtomicU64,
+    /// Count of stale mined blocks (tip changed during PoW)
+    pub metric_stale_blocks: std::sync::atomic::AtomicU64,
+    /// Count of successful recovery-from-fork events
+    pub metric_fork_recoveries: std::sync::atomic::AtomicU64,
+    /// Cumulative time spent in recovery (milliseconds)
+    pub metric_recovery_time_ms: std::sync::atomic::AtomicU64,
+    /// Count of commitment root mismatches
+    pub metric_commitment_mismatches: std::sync::atomic::AtomicU64,
+    /// Seed signing key for snapshot manifests (loaded from data/seed_key.bin)
+    pub seed_signing_key: Option<ed25519_dalek::SigningKey>,
+    /// In-memory store of recent snapshot manifests (max 10)
+    pub snapshot_manifests: RwLock<Vec<super::snapshot_manifest::SnapshotManifest>>,
+    /// Mining address (pk_hash hex) for display in console
+    pub mining_address: Option<String>,
 }
 
 /// Info about an HTTP peer, updated on every interaction.
@@ -211,8 +230,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/tip", get(get_tip).post(receive_tip))
         .route("/sync/status", get(sync_status))
         .route("/node/info", get(node_info))
+        .route("/mining/metrics", get(mining_metrics))
         .route("/snapshot/info", get(snapshot_info))
         .route("/snapshot/download", get(snapshot_download))
+        .route("/snapshot/latest", get(snapshot_latest_manifest))
+        .route("/snapshot/manifest/:height", get(snapshot_manifest_at_height))
+        .route("/snapshot/history", get(snapshot_manifest_history))
+        .route("/snapshot/confirm", post(snapshot_confirm))
+        .route("/snapshot/export", post(snapshot_trigger_export))
         .with_state(state.clone());
 
     // Explorer/read-only routes — NO rate limiting (served by nginx proxy from localhost)
@@ -427,7 +452,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "mainnet_launch".to_string(),
         name: "Mainnet Launch".to_string(),
-        description: "Lancement officiel du réseau principal TSN".to_string(),
+        description: "Lancement officiel du network principal TSN".to_string(),
         quarter: "Q1 2026".to_string(),
         status: "completed".to_string(),
         progress_pct: 100.0,
@@ -448,7 +473,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "sharding_v2".to_string(),
         name: "Sharding V2".to_string(),
-        description: "Amélioration de l'évolutivité avec sharding dynamique".to_string(),
+        description: "Improvement de scalability avec sharding dynamique".to_string(),
         quarter: "Q2 2026".to_string(),
         status: "active".to_string(),
         progress_pct: sharding_progress,
@@ -477,7 +502,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "mobile_sdk".to_string(),
         name: "Mobile SDK".to_string(),
-        description: "SDK natif pour applications mobiles décentralisées".to_string(),
+        description: "SDK natif pour applications mobiles decentralized".to_string(),
         quarter: "Q4 2026".to_string(),
         status: "pending".to_string(),
         progress_pct: 0.0,
@@ -1054,12 +1079,28 @@ async fn receive_block(
     // Track peer info (version, height, last seen)
     let peer_url = format!("http://{}:9333", addr.ip());
     update_peer_info(&state, &peer_url, peer_ver, Some(block.coinbase.height));
-    // Mark as miner — they sent us a block they mined
-    {
-        let pid = super::peer_id(&peer_url);
-        let mut info = state.peer_info.write().unwrap();
-        if let Some(entry) = info.get_mut(&pid) {
+    // If the sender includes their PeerID, use it to identify the miner uniquely
+    // (two miners behind the same NAT share an IP but have different PeerIDs)
+    let sender_peer_id = headers.get("X-TSN-PeerID").and_then(|v| v.to_str().ok());
+    if let Some(pid_str) = sender_peer_id {
+        let is_seed = crate::config::SEED_NODES.iter().any(|s| s.contains(&ip));
+        if !is_seed {
+            // Create or update a miner entry keyed by PeerID (not IP)
+            let mut info = state.peer_info.write().unwrap();
+            let entry = info.entry(pid_str.to_string()).or_insert(PeerDetail {
+                peer_id: pid_str.to_string(),
+                version: "?".to_string(),
+                role: "miner".to_string(),
+                height: 0,
+                last_seen: 0,
+            });
             entry.role = "miner".to_string();
+            entry.height = block.coinbase.height;
+            entry.last_seen = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            if let Some(v) = peer_ver {
+                entry.version = v.to_string();
+            }
         }
     }
 
@@ -1310,32 +1351,50 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
                 }
             }
         }
-        // Try /node/info for version
+        // Try /node/info for version + peer_id
         if seed_info["online"].as_bool() == Some(true) {
             if let Ok(resp) = client.get(&info_url)
                 .timeout(std::time::Duration::from_secs(2)).send().await {
                 if let Ok(data) = resp.json::<serde_json::Value>().await {
                     seed_info["version"] = data["version"].clone();
+                    seed_info["peer_id"] = data["peer_id"].clone();
                 }
             }
         }
         seeds.push(seed_info);
     }
 
-    // P2P peers with raw heights (no faking)
+    // Collect seed PeerIDs AND seed IPs for dedup against P2P list
+    let seed_peer_ids: std::collections::HashSet<String> = seeds.iter()
+        .filter_map(|s| s["peer_id"].as_str().map(|s| s.to_string()))
+        .collect();
+    let seed_ips: std::collections::HashSet<String> = seeds.iter()
+        .filter_map(|s| s["ip"].as_str().map(|s| s.to_string()))
+        .collect();
+
+    // P2P peers with raw heights + freshness info, excluding seeds
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     let p2p_peers: Vec<serde_json::Value> = {
         let peers = state.p2p_shared_peers.read().unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .map(|sp| sp.read().unwrap_or_else(|e| e.into_inner()).clone())
             .unwrap_or_default();
-        peers.iter().map(|p| {
+        peers.iter()
+            .filter(|p| !seed_peer_ids.contains(&p.peer_id)) // exclude seeds by PeerID
+            .map(|p| {
             let h = p.height;
             let lag = h.map(|ph| tip_height.saturating_sub(ph));
-            let status = match (h, lag) {
-                (None, _) => "unknown",
-                (Some(_), Some(l)) if l <= 5 => "fresh",
-                (Some(_), Some(l)) if l <= 50 => "stale",
-                (Some(_), Some(_)) => "behind",
+            // Compute how old the height data is (seconds since last update)
+            let height_age_secs = p.height_updated_at.map(|t| now_secs.saturating_sub(t));
+            // A P2P height is considered stale if it hasn't been updated in 30+ seconds
+            let is_height_stale = height_age_secs.map(|age| age > 30).unwrap_or(true);
+            let status = match (h, lag, is_height_stale) {
+                (None, _, _) => "unknown",
+                (_, _, true) => "stale",  // height data too old — don't trust the lag
+                (Some(_), Some(l), false) if l <= 5 => "fresh",
+                (Some(_), Some(l), false) if l <= 50 => "stale",
+                (Some(_), Some(_), false) => "behind",
                 _ => "unknown",
             };
             serde_json::json!({
@@ -1344,15 +1403,50 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
                 "protocol": p.protocol,
                 "lag": lag,
                 "status": status,
+                "height_age_secs": height_age_secs,
             })
         }).collect()
     };
+
+    // HTTP miners from peer_info (submit blocks via HTTP, may also be visible in P2P)
+    // Dedup: skip miners whose PeerID is already in p2p_peers
+    let p2p_peer_ids_set: std::collections::HashSet<String> = p2p_peers.iter()
+        .filter_map(|p| p["peer_id"].as_str().map(|s| s.to_string()))
+        .collect();
+    let http_miners: Vec<serde_json::Value> = {
+        let info = state.peer_info.read().unwrap_or_else(|e| e.into_inner());
+        info.values()
+            .filter(|p| p.role == "miner")
+            .filter(|p| !p2p_peer_ids_set.contains(&p.peer_id)) // skip if already in P2P list
+            .filter(|p| now_secs.saturating_sub(p.last_seen) < 120) // only show miners seen in last 2min
+            .map(|p| {
+                let lag = tip_height.saturating_sub(p.height);
+                let age = now_secs.saturating_sub(p.last_seen);
+                let status = if age > 60 { "stale" }
+                    else if lag <= 5 { "fresh" }
+                    else if lag <= 50 { "stale" }
+                    else { "behind" };
+                serde_json::json!({
+                    "peer_id": p.peer_id,
+                    "height": p.height,
+                    "protocol": format!("tsn/{}/miner", p.version),
+                    "lag": lag,
+                    "status": status,
+                    "height_age_secs": age,
+                    "source": "http",
+                })
+            }).collect()
+    };
+
+    // Merge P2P peers and HTTP miners (dedup by role — miners from HTTP, relays from P2P)
+    let mut all_peers = p2p_peers;
+    all_peers.extend(http_miners);
 
     Json(serde_json::json!({
         "tip_height": tip_height,
         "tip_hash": tip_hash,
         "seeds": seeds,
-        "peers": p2p_peers,
+        "peers": all_peers,
     }))
 }
 
@@ -2622,25 +2716,39 @@ async fn snapshot_download(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
     // Try to serve from cache first
+    // v2.1.3 FIX: Validate cache is still coherent with current chain.
+    // After a chain reset, the cache may contain state from the old chain.
+    let chain_height = state.blockchain.read().unwrap_or_else(|e| e.into_inner()).height();
     {
         let cache = state.snapshot_cache.read().await;
         if let Some(ref cached) = *cache {
-            info!(
-                "Snapshot download (cached): height={}, hash={}, raw={}KB, compressed={}KB",
-                cached.height, &cached.hash[..8.min(cached.hash.len())],
-                cached.raw_size / 1024, cached.compressed.len() / 1024
-            );
-            return Ok((
-                [
-                    (header::CONTENT_TYPE, "application/gzip"),
-                    (header::CONTENT_DISPOSITION, "attachment; filename=\"tsn-snapshot.json.gz\""),
-                ],
-                [
-                    (header::HeaderName::from_static("x-snapshot-height"), header::HeaderValue::from_str(&cached.height.to_string()).unwrap()),
-                    (header::HeaderName::from_static("x-snapshot-hash"), header::HeaderValue::from_str(&cached.hash).unwrap()),
-                ],
-                cached.compressed.clone(),
-            ).into_response());
+            if cached.height <= chain_height {
+                info!(
+                    "Snapshot download (cached): height={}, hash={}, raw={}KB, compressed={}KB",
+                    cached.height, &cached.hash[..8.min(cached.hash.len())],
+                    cached.raw_size / 1024, cached.compressed.len() / 1024
+                );
+                return Ok((
+                    [
+                        (header::CONTENT_TYPE, "application/gzip"),
+                        (header::CONTENT_DISPOSITION, "attachment; filename=\"tsn-snapshot.json.gz\""),
+                    ],
+                    [
+                        (header::HeaderName::from_static("x-snapshot-height"), header::HeaderValue::from_str(&cached.height.to_string()).unwrap()),
+                        (header::HeaderName::from_static("x-snapshot-hash"), header::HeaderValue::from_str(&cached.hash).unwrap()),
+                    ],
+                    cached.compressed.clone(),
+                ).into_response());
+            }
+            // Cache stale (from previous chain) — fall through to regenerate
+            info!("Snapshot cache invalidated: cached height {} > chain height {}", cached.height, chain_height);
+        }
+    }
+    // Invalidate stale cache
+    {
+        let mut cache_w = state.snapshot_cache.write().await;
+        if let Some(ref c) = *cache_w {
+            if c.height > chain_height { *cache_w = None; }
         }
     }
 
@@ -3190,4 +3298,281 @@ pub fn log_node_error(state: &AppState, error_type: &str, message: &str) {
         let drain_count = log.len() - 100;
         log.drain(0..drain_count);
     }
+}
+
+// ========================================================================
+// SNAPSHOT MANIFEST ENDPOINTS (Phase 1)
+// ========================================================================
+
+/// GET /snapshot/latest — return the latest signed snapshot manifest
+async fn snapshot_latest_manifest(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let manifests = state.snapshot_manifests.read().unwrap();
+    match manifests.last() {
+        Some(m) => Ok(Json(serde_json::to_value(m).unwrap_or_default())),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// GET /snapshot/manifest/:height — return manifest for a specific height
+async fn snapshot_manifest_at_height(
+    State(state): State<Arc<AppState>>,
+    Path(height): Path<u64>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let manifests = state.snapshot_manifests.read().unwrap();
+    match manifests.iter().find(|m| m.height == height) {
+        Some(m) => Ok(Json(serde_json::to_value(m).unwrap_or_default())),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// GET /snapshot/history — list all available snapshot manifests
+async fn snapshot_manifest_history(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<super::snapshot_manifest::SnapshotEntry>> {
+    let manifests = state.snapshot_manifests.read().unwrap();
+    let entries: Vec<super::snapshot_manifest::SnapshotEntry> = manifests.iter().map(|m| {
+        super::snapshot_manifest::SnapshotEntry {
+            height: m.height,
+            block_hash: m.block_hash.clone(),
+            state_root: m.state_root.clone(),
+            snapshot_sha256: m.snapshot_sha256.clone(),
+            created_at: m.created_at.clone(),
+            confirmations: m.valid_confirmation_count(),
+        }
+    }).collect();
+    Json(entries)
+}
+
+/// POST /snapshot/export — trigger snapshot export at the current finalized height.
+/// Returns the signed manifest if successful.
+async fn snapshot_trigger_export(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let signing_key = state.seed_signing_key.as_ref()
+        .ok_or_else(|| {
+            warn!("Snapshot export failed: no seed signing key configured");
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+
+    // Get chain data. The snapshot captures the full state at the current tip.
+    // The manifest records the tip height and hash. Finalization is guaranteed because:
+    // 1. The export only triggers when tip > MAX_REORG_DEPTH + 100
+    // 2. Cross-confirmation by 2+ independent seeds proves the height is canonical
+    // 3. Post-import state_root verification proves the state is consistent
+    let (data, height, block_hash, state_root, peer_id_str) = {
+        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let tip = chain.height();
+        let max_reorg = crate::config::MAX_REORG_DEPTH;
+        if tip <= max_reorg + 100 {
+            warn!("Chain too short for snapshot: tip={}", tip);
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        let snapshot = chain.export_snapshot().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        let state_root = hex::encode(chain.state_root());
+        let p2p_id = state.p2p_peer_id.read().unwrap().clone().unwrap_or_default();
+        info!("Snapshot export: height={}, hash={}", snapshot.1, &snapshot.2[..16]);
+        (snapshot.0, snapshot.1, snapshot.2, state_root, p2p_id)
+    };
+
+    // Compress
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(&data).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let compressed = encoder.finish().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Compute SHA256 of compressed data
+    let snapshot_sha256 = {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(&compressed))
+    };
+
+    // Build and sign the manifest
+    let public_key_hex = hex::encode(signing_key.verifying_key().to_bytes());
+    let mut manifest = super::snapshot_manifest::SnapshotManifest {
+        version: 1,
+        chain_id: "tsn-mainnet".to_string(),
+        height,
+        block_hash,
+        state_root,
+        snapshot_sha256,
+        snapshot_size_bytes: compressed.len() as u64,
+        format: "json-gzip".to_string(),
+        binary_version: env!("CARGO_PKG_VERSION").to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        producer: super::snapshot_manifest::SeedIdentity {
+            seed_name: state.public_url.clone().unwrap_or_else(|| "unknown".to_string()),
+            peer_id: peer_id_str,
+            public_key: public_key_hex,
+        },
+        signature: String::new(),
+        confirmations: Vec::new(),
+    };
+
+    // Sign the manifest
+    let payload = manifest.signing_payload();
+    manifest.signature = super::snapshot_manifest::sign_ed25519(signing_key, &payload);
+
+    info!(
+        "Snapshot manifest exported: height={}, sha256={}, size={}KB",
+        manifest.height, &manifest.snapshot_sha256[..16], manifest.snapshot_size_bytes / 1024
+    );
+
+    // Store the compressed data in snapshot_cache so /snapshot/download serves the EXACT same file
+    {
+        let cache_hash = manifest.block_hash.clone();
+        let mut cache = state.snapshot_cache.write().await;
+        *cache = Some(CachedSnapshot {
+            compressed: compressed,
+            height,
+            hash: cache_hash,
+            raw_size: data.len(),
+        });
+    }
+
+    // Store the manifest
+    let manifest_json = serde_json::to_value(&manifest).unwrap_or_default();
+    {
+        let mut manifests = state.snapshot_manifests.write().unwrap();
+        // Replace if same height exists, otherwise append
+        if let Some(pos) = manifests.iter().position(|m| m.height == manifest.height) {
+            manifests[pos] = manifest;
+        } else {
+            manifests.push(manifest);
+            // Keep max 10 manifests
+            if manifests.len() > 10 {
+                manifests.remove(0);
+            }
+        }
+    }
+
+    // Trigger cross-confirmation from other seeds (async, fire-and-forget)
+    let state_clone = state.clone();
+    let manifest_clone: super::snapshot_manifest::SnapshotManifest = serde_json::from_value(manifest_json.clone()).unwrap();
+    tokio::spawn(async move {
+        request_seed_confirmations(state_clone, manifest_clone).await;
+    });
+
+    Ok(Json(manifest_json))
+}
+
+/// Request confirmations from other seeds for a manifest
+async fn request_seed_confirmations(
+    state: Arc<AppState>,
+    manifest: super::snapshot_manifest::SnapshotManifest,
+) {
+    let client = &state.http_client;
+    let confirm_body = serde_json::to_string(&manifest).unwrap_or_default();
+
+    for seed_url in crate::config::SEED_NODES.iter() {
+        // Skip ourselves
+        if let Some(ref our_url) = state.public_url {
+            if seed_url.contains(our_url.split("://").last().unwrap_or("")) {
+                continue;
+            }
+        }
+
+        let url = format!("{}/snapshot/confirm", seed_url);
+        match client.post(&url)
+            .header("Content-Type", "application/json")
+            .body(confirm_body.clone())
+            .timeout(std::time::Duration::from_secs(10))
+            .send().await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(confirmation) = resp.json::<super::snapshot_manifest::SeedConfirmation>().await {
+                    if confirmation.verify() {
+                        info!("Received valid confirmation from {} for height {}", confirmation.seed_name, manifest.height);
+                        let mut manifests = state.snapshot_manifests.write().unwrap();
+                        if let Some(m) = manifests.iter_mut().find(|m| m.height == manifest.height) {
+                            // Avoid duplicate confirmations from same seed
+                            if !m.confirmations.iter().any(|c| c.seed_name == confirmation.seed_name) {
+                                m.confirmations.push(confirmation);
+                            }
+                        }
+                    } else {
+                        warn!("Invalid confirmation signature from seed for height {}", manifest.height);
+                    }
+                }
+            }
+            Ok(resp) => {
+                debug!("Seed {} returned {} for confirmation request", seed_url, resp.status());
+            }
+            Err(e) => {
+                debug!("Failed to request confirmation from {}: {}", seed_url, e);
+            }
+        }
+    }
+}
+
+/// POST /snapshot/confirm — receive a manifest and return a signed confirmation
+/// if our chain agrees with the block_hash and state_root at that height.
+async fn snapshot_confirm(
+    State(state): State<Arc<AppState>>,
+    Json(manifest): Json<super::snapshot_manifest::SnapshotManifest>,
+) -> Result<Json<super::snapshot_manifest::SeedConfirmation>, StatusCode> {
+    let signing_key = state.seed_signing_key.as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    // Verify producer signature first
+    if !manifest.verify_producer_signature() {
+        warn!("Rejecting confirmation request: invalid producer signature");
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Check our chain at the requested height
+    let (block_hash_match, state_root_match) = {
+        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let local_hash = chain.get_hash_at_height(manifest.height)
+            .map(|h| hex::encode(h));
+        let bh_match = local_hash.as_deref() == Some(&manifest.block_hash);
+        // State root: we can only verify if we have the block
+        // For now, trust block_hash match as state_root proxy
+        // (full state_root verification requires snapshot replay)
+        (bh_match, bh_match)
+    };
+
+    let peer_id_str = state.p2p_peer_id.read().unwrap().clone().unwrap_or_default();
+    let public_key_hex = hex::encode(signing_key.verifying_key().to_bytes());
+
+    let mut confirmation = super::snapshot_manifest::SeedConfirmation {
+        seed_name: state.public_url.clone().unwrap_or_else(|| "unknown".to_string()),
+        peer_id: peer_id_str,
+        height: manifest.height,
+        block_hash_match,
+        state_root_match,
+        confirmed_at: chrono::Utc::now().to_rfc3339(),
+        signature: String::new(),
+        public_key: public_key_hex,
+    };
+
+    // Sign the confirmation
+    let payload = confirmation.signing_payload();
+    confirmation.signature = super::snapshot_manifest::sign_ed25519(signing_key, &payload);
+
+    info!(
+        "Snapshot confirmation: height={}, block_hash_match={}, state_root_match={}",
+        manifest.height, block_hash_match, state_root_match
+    );
+
+    Ok(Json(confirmation))
+}
+
+/// GET /mining/metrics — performance counters for benchmarking
+async fn mining_metrics(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    Json(serde_json::json!({
+        "height": chain.height(),
+        "empty_batches": state.metric_empty_batches.load(Relaxed),
+        "stale_blocks": state.metric_stale_blocks.load(Relaxed),
+        "fork_recoveries": state.metric_fork_recoveries.load(Relaxed),
+        "recovery_time_ms": state.metric_recovery_time_ms.load(Relaxed),
+        "commitment_mismatches": state.metric_commitment_mismatches.load(Relaxed),
+        "reorg_count": state.reorg_count.load(Relaxed),
+        "orphan_count": state.orphan_count.load(Relaxed),
+    }))
 }

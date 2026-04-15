@@ -1,6 +1,6 @@
-//! Tests unitaires pour le protocole Gossip TSN
+//! Tests unitaires for the protocole Gossip TSN
 //!
-//! Tests de propagation, rate limiting, peer scoring et gestion des messages.
+//! Tests de propagation, rate limiting, peer scoring and gestion of messages.
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -15,12 +15,12 @@ use crate::network::gossip::{GossipConfig, GossipEngine};
 use crate::network::gossip_protocol::{InventoryId, InventoryType, NetworkMessage};
 use crate::network::PeerId;
 
-/// Crée un PeerId de test
+/// Creates a PeerId de test
 fn test_peer_id(port: u16) -> PeerId {
     PeerId(SocketAddr::new("127.0.0.1".parse().unwrap(), port))
 }
 
-/// Crée un bloc de test
+/// Creates a bloc de test
 fn create_test_block(height: u64, nonce: u64) -> Block {
     Block::new(
         height,
@@ -35,7 +35,7 @@ fn create_test_block(height: u64, nonce: u64) -> Block {
     )
 }
 
-/// Crée une transaction de test
+/// Creates a test transaction
 fn create_test_transaction(nonce: u64) -> Transaction {
     Transaction::new(
         [0u8; 32],
@@ -52,7 +52,7 @@ async fn test_gossip_engine_creation() {
     let config = GossipConfig::default();
     let engine = GossipEngine::new(config);
     
-    // L'engine doit être créé sans erreur
+    // L'engine must be created without error
     assert!(true);
 }
 
@@ -64,14 +64,14 @@ async fn test_peer_connection_handling() {
     let peer1 = test_peer_id(9001);
     let peer2 = test_peer_id(9002);
     
-    // Connecte les peers
+    // Connecte the peers
     engine.on_peer_connected(peer1).await.unwrap();
     engine.on_peer_connected(peer2).await.unwrap();
     
-    // Déconnecte un peer
+    // Disconnects a peer
     engine.on_peer_disconnected(peer1).await.unwrap();
     
-    // Test réussi si pas de panic
+    // Test successful if pas de panic
     assert!(true);
 }
 
@@ -104,11 +104,11 @@ async fn test_duplicate_block_ignored() {
     
     let block = create_test_block(1, 1);
     
-    // Première annonce
+    // First annonce
     let result1 = engine.announce_block(Arc::new(block.clone()));
     assert!(result1.is_ok());
     
-    // Deuxième annonce du même bloc (devrait être ignorée)
+    // Second annonce of the same bloc (should be ignored)
     let result2 = engine.announce_block(Arc::new(block));
     assert!(result2.is_ok());
 }
@@ -121,7 +121,7 @@ async fn test_inventory_message_handling() {
     let peer = test_peer_id(9001);
     engine.on_peer_connected(peer).await.unwrap();
     
-    // Crée un message Inv
+    // Creates a message Inv
     let inv = NetworkMessage::Inv(vec![
         InventoryId::block([1u8; 32]),
         InventoryId::transaction([2u8; 32]),
@@ -136,7 +136,7 @@ async fn test_inventory_message_handling() {
 #[tokio::test]
 async fn test_rate_limiting() {
     let config = GossipConfig {
-        rate_limit_per_sec: 2, // Très bas pour le test
+        rate_limit_per_sec: 2, // Very low for testing
         ..Default::default()
     };
     let engine = GossipEngine::new(config);
@@ -152,8 +152,8 @@ async fn test_rate_limiting() {
         let _ = engine.on_message(peer, bytes::Bytes::from(data.clone())).await;
     }
     
-    // Le 3ème message devrait être rate limité
-    // (on ne peut pas facilement vérifier ça sans accès à l'état interne)
+    // Le 3rd message should be rate limited
+    // (on not can pas facilement verify it without access to l'state interne)
     assert!(true);
 }
 
@@ -165,11 +165,11 @@ async fn test_invalid_message_penalty() {
     let peer = test_peer_id(9001);
     engine.on_peer_connected(peer).await.unwrap();
     
-    // Envoie des données invalides
+    // Envoie of data invalids
     let invalid_data = bytes::Bytes::from(vec![0xff; 100]);
     let result = engine.on_message(peer, invalid_data).await;
     
-    // Devrait être OK mais le peer devrait être pénalisé
+    // Devrait be OK but the peer should be penalized
     assert!(result.is_ok());
 }
 
@@ -186,7 +186,7 @@ async fn test_unknown_peer_message() {
     // Message d'un peer inconnu
     let result = engine.on_message(unknown_peer, bytes::Bytes::from(data)).await;
     
-    // Devrait être OK mais ignoré
+    // Devrait be OK but ignored
     assert!(result.is_ok());
 }
 
@@ -201,7 +201,7 @@ async fn test_config_customization() {
     
     let engine = GossipEngine::new(config);
     
-    // Test que la config personnalisée est acceptée
+    // Test que the config custom is acceptsde
     assert!(true);
 }
 
@@ -212,7 +212,7 @@ async fn test_concurrent_announcements() {
     
     let mut handles = vec![];
     
-    // Lance plusieurs annonces concurrentes
+    // Lance multiple annonces concurrent
     for i in 0..10 {
         let engine_clone = engine.clone();
         let handle = tokio::spawn(async move {
@@ -222,7 +222,7 @@ async fn test_concurrent_announcements() {
         handles.push(handle);
     }
     
-    // Attend toutes les tâches
+    // Attend all tasks
     for handle in handles {
         let result = handle.await.unwrap();
         assert!(result.is_ok());
@@ -237,7 +237,7 @@ async fn test_peer_scoring() {
     let peer = test_peer_id(9001);
     engine.on_peer_connected(peer).await.unwrap();
     
-    // Envoie des messages valides
+    // Envoie of messages valids
     let inv = NetworkMessage::Inv(vec![InventoryId::block([1u8; 32])]);
     let data = bincode::serialize(&inv).unwrap();
     
@@ -245,7 +245,7 @@ async fn test_peer_scoring() {
         let _ = engine.on_message(peer, bytes::Bytes::from(data.clone())).await;
     }
     
-    // Le peer devrait avoir un score positif
+    // Le peer should avoir a score positif
     assert!(true);
 }
 
@@ -258,10 +258,10 @@ async fn test_cleanup_interval() {
     };
     let engine = GossipEngine::new(config);
     
-    // Attend que le cleanup s'exécute
+    // Attend que the cleanup runs
     sleep(Duration::from_millis(200)).await;
     
-    // Le cleanup devrait s'être exécuté
+    // Le cleanup should having been executed
     assert!(true);
 }
 
@@ -270,10 +270,10 @@ async fn test_gossip_shutdown() {
     let config = GossipConfig::default();
     let engine = GossipEngine::new(config);
     
-    // Drop l'engine pour déclencher le shutdown
+    // Drop l'engine for trigger the shutdown
     drop(engine);
     
-    // Attend que le worker s'arrête
+    // Attend que the worker s'shutdowne
     sleep(Duration::from_millis(50)).await;
     
     assert!(true);
@@ -290,7 +290,7 @@ async fn test_many_peers_connection() {
         engine.on_peer_connected(peer).await.unwrap();
     }
     
-    // Déconnecte tous les peers
+    // Disconnects all peers
     for i in 0..100 {
         let peer = test_peer_id(9000 + i as u16);
         engine.on_peer_disconnected(peer).await.unwrap();
@@ -307,7 +307,7 @@ async fn test_getdata_message_handling() {
     let peer = test_peer_id(9001);
     engine.on_peer_connected(peer).await.unwrap();
     
-    // Crée un message GetData
+    // Creates a message GetData
     let getdata = NetworkMessage::GetData(vec![
         InventoryId::block([1u8; 32]),
     ]);
@@ -326,7 +326,7 @@ async fn test_notfound_message_handling() {
     let peer = test_peer_id(9001);
     engine.on_peer_connected(peer).await.unwrap();
     
-    // Crée un message NotFound
+    // Creates a message NotFound
     let notfound = NetworkMessage::NotFound(vec![
         InventoryId::block([1u8; 32]),
     ]);

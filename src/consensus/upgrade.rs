@@ -41,7 +41,7 @@ pub enum UpgradeState {
     Active { activation_height: u64 },
 }
 
-/// Manages the upgrade signaling process
+/// Handles the upgrade signaling process
 pub struct UpgradeManager {
     proposals: Vec<UpgradeProposal>,
     states: Vec<UpgradeState>,

@@ -1,5 +1,5 @@
-//! Implémentation sécurisée de référence
-//! Utilise subtle pour constant-time operations et zeroize pour la mémoire
+//! Implementation secure de reference
+//! Utilise subtle for constant-time operations and zeroize for the memory
 
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -9,7 +9,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce, Key,
 };
 
-/// Clé secrète qui s'auto-efface à la destruction
+/// Key secret that s'auto-efface to the destruction
 #[derive(Clone)]
 pub struct SecretKey {
     material: Vec<u8>,
@@ -27,7 +27,7 @@ impl SecretKey {
     }
     
     pub fn compare_mac(&self, other: &[u8]) -> bool {
-        // Constant-time comparison pour prévenir timing attacks
+        // Constant-time comparison for prevent timing attacks
         self.material.as_slice().ct_eq(other).into()
     }
 }
@@ -46,7 +46,7 @@ impl Drop for SecretKey {
     }
 }
 
-/// Générateur de nonce sécurisé avec compteur et randomisation
+/// Generator de nonce secure with counter and randomisation
 pub struct SecureNonceGenerator {
     rng: rand::rngs::OsRng,
 }
@@ -63,4 +63,4 @@ impl SecureNonceGenerator {
     }
 }
 
-/// Chiffrement AEAD avec gestion sûre des nonces
+/// Chiffrement AEAD with gestion safee of nonces

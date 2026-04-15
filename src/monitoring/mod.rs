@@ -1,11 +1,11 @@
-//! Dashboard de monitoring en temps réel pour Trust Stack Network (TSN)
+//! Dashboard de monitoring in temps real for Trust Stack Network (TSN)
 //!
-//! Ce module fournit :
-//! - Surveillance des métriques blockchain en temps réel
-//! - Débit de transactions, validation de blocs, état des peers
-//! - Santé cryptographique post-quantique
-//! - Interface REST pour intégration externe
-//! - WebSocket pour mises à jour temps réel
+//! This module provides :
+//! - Surveillance of metrics blockchain in temps real
+//! - Transaction throughput, block validation, peer state
+//! - Health cryptographique post-quantique
+//! - Interface REST for integration externe
+//! - WebSocket for mises up to date temps real
 
 pub mod api;
 pub mod crypto_health;
@@ -22,38 +22,38 @@ pub use websocket::WebSocketManager;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Version du dashboard de monitoring
+/// Version of the dashboard de monitoring
 pub const DASHBOARD_VERSION: &str = "1.0.0";
 
-/// Port par défaut pour le dashboard
+/// Port by default for the dashboard
 pub const DEFAULT_DASHBOARD_PORT: u16 = 8080;
 
-/// Port par défaut pour les métriques Prometheus
+/// Port by default for the metrics Prometheus
 pub const DEFAULT_METRICS_PORT: u16 = 9090;
 
-/// Intervalle de rafraîchissement par défaut (secondes)
+/// Intervalle de refresh by default (secondes)
 pub const DEFAULT_REFRESH_INTERVAL: u64 = 5;
 
-/// Configuration du dashboard
+/// Configuration of the dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardConfig {
-    /// Port d'écoute du dashboard
+    /// Port d'listening of the dashboard
     pub port: u16,
-    /// Adresse de bind
+    /// Bind address
     pub bind_address: String,
-    /// Intervalle de rafraîchissement des métriques (secondes)
+    /// Intervalle de refresh of metrics (secondes)
     pub refresh_interval: u64,
-    /// Activer les mises à jour WebSocket
+    /// Enable WebSocket updates
     pub enable_websocket: bool,
     /// Activer l'API REST
     pub enable_rest_api: bool,
-    /// Activer les métriques Prometheus
+    /// Activer the metrics Prometheus
     pub enable_prometheus: bool,
-    /// Port pour les métriques Prometheus
+    /// Port for the metrics Prometheus
     pub prometheus_port: u16,
-    /// Durée de rétention des données historiques (heures)
+    /// Duration de retention of data historiques (heures)
     pub data_retention_hours: u64,
-    /// Nombre maximum de points de données par série
+    /// Maximum number of data points per series
     pub max_data_points: usize,
 }
 
@@ -73,24 +73,24 @@ impl Default for DashboardConfig {
     }
 }
 
-/// Statut global du système
+/// Statut global of the system
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemStatus {
-    /// Version du nœud
+    /// Version of the node
     pub node_version: String,
-    /// Version du dashboard
+    /// Version of the dashboard
     pub dashboard_version: String,
-    /// Uptime en secondes
+    /// Uptime in secondes
     pub uptime_seconds: u64,
-    /// Timestamp du dernier update
+    /// Timestamp of the dernier update
     pub last_update: u64,
-    /// Statut général (healthy, degraded, critical)
+    /// Statut general (healthy, degraded, critical)
     pub overall_status: HealthStatus,
-    /// Sous-systèmes
+    /// Sous-systems
     pub subsystems: SubsystemStatus,
 }
 
-/// Statut de santé
+/// Statut de health
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
@@ -100,12 +100,12 @@ pub enum HealthStatus {
     Unknown,
 }
 
-/// Statut des sous-systèmes
+/// Statut of sous-systems
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubsystemStatus {
     /// Blockchain
     pub blockchain: HealthStatus,
-    /// Réseau P2P
+    /// Network P2P
     pub network: HealthStatus,
     /// Consensus
     pub consensus: HealthStatus,
@@ -130,35 +130,35 @@ impl Default for SubsystemStatus {
     }
 }
 
-/// Métriques de performance critique
+/// Performance metrics critique
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CriticalMetrics {
-    /// Débit de transactions (TPS)
+    /// Throughput de transactions (TPS)
     pub transactions_per_second: f64,
-    /// Temps de validation de bloc moyen (ms)
+    /// Average block validation time (ms)
     pub avg_block_validation_time_ms: f64,
-    /// Latence réseau moyenne (ms)
+    /// Network latency moyenne (ms)
     pub avg_network_latency_ms: f64,
-    /// Nombre de pairs connectés
+    /// Number of connected peers
     pub connected_peers: usize,
-    /// Taille du mempool
+    /// Mempool size
     pub mempool_size: usize,
-    /// Hauteur de la blockchain
+    /// Height de the blockchain
     pub block_height: u64,
-    /// Hashrate du réseau (estimation)
+    /// Hashrate of the network (estimation)
     pub network_hashrate: f64,
     /// Taux d'orphan blocks (%)
     pub orphan_rate_percent: f64,
 }
 
-/// Point de données temporel
+/// Point of data temporel
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeSeriesPoint {
     pub timestamp: u64,
     pub value: f64,
 }
 
-/// Helper pour obtenir le timestamp actuel
+/// Helper for obtenir the timestamp actuel
 pub fn current_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -166,7 +166,7 @@ pub fn current_timestamp() -> u64 {
         .as_secs()
 }
 
-/// Helper pour formater une durée
+/// Helper for formater a duration
 pub fn format_duration(seconds: u64) -> String {
     let days = seconds / 86400;
     let hours = (seconds % 86400) / 3600;
@@ -184,7 +184,7 @@ pub fn format_duration(seconds: u64) -> String {
     }
 }
 
-/// Helper pour formater des bytes
+/// Helper for formater of bytes
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
@@ -198,7 +198,7 @@ pub fn format_bytes(bytes: u64) -> String {
     format!("{:.2} {}", size, UNITS[unit_idx])
 }
 
-/// Helper pour formater un hashrate
+/// Helper for formater a hashrate
 pub fn format_hashrate(hps: f64) -> String {
     const UNITS: &[&str] = &["H/s", "KH/s", "MH/s", "GH/s", "TH/s", "PH/s"];
     let mut rate = hps;

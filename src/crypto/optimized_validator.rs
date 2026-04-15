@@ -1,10 +1,10 @@
-//! Validateur cryptographique optimisé pour les performances
+//! Validateur cryptographique optimized for the performances
 //!
-//! Implémente des validations de signatures et preuves ZK optimisées
-//! avec réutilisation de mémoire et réduction des allocations.
+//! Implements of validations de signatures and preuves ZK optimized
+//! with reuse de memory and reduction of allocations.
 //!
-//! Utilise le memory pool pour éviter les allocations répétées
-//! et implémente des techniques d'optimisation spécifiques aux
+//! Utilise the memory pool for avoidr the allocations repeateds
+//! and implements of techniques d'optimisation specific aux
 //! algorithmes cryptographiques post-quantiques.
 
 use std::sync::Arc;
@@ -15,11 +15,11 @@ use crate::crypto::memory_pool::{global_pool_manager, PooledBuffer};
 use crate::crypto::signature_validation::{SLHDSAValidator, ValidationResult};
 use crate::crypto::halo2_proofs::{Halo2Verifier, ProofVerificationResult};
 
-/// Cache des clés publiques récemment validées
+/// Cache of keys publics recently validatedes
 const PUBLIC_KEY_CACHE_SIZE: usize = 1024;
 const CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 
-/// Entrée du cache de clés publiques
+/// Entry of the cache de keys publics
 #[derive(Debug, Clone)]
 struct CachedPublicKey {
     key_hash: [u8; 32],
@@ -46,7 +46,7 @@ impl CachedPublicKey {
     }
 }
 
-/// Validateur cryptographique optimisé avec cache et memory pooling
+/// Validateur cryptographique optimized with cache and memory pooling
 pub struct OptimizedCryptoValidator {
     slh_dsa_validator: SLHDSAValidator,
     halo2_verifier: Halo2Verifier,
@@ -67,7 +67,7 @@ pub struct ValidationStats {
 }
 
 impl OptimizedCryptoValidator {
-    /// Crée un nouveau validateur optimisé
+    /// Creates a new validateur optimized
     pub fn new() -> Result<Self, String> {
         Ok(Self {
             slh_dsa_validator: SLHDSAValidator::new()?,
@@ -77,7 +77,7 @@ impl OptimizedCryptoValidator {
         })
     }
 
-    /// Valide une signature SLH-DSA avec optimisations mémoire
+    /// Validates a signature SLH-DSA with optimisations memory
     pub fn validate_signature_optimized(
         &mut self,
         message: &[u8],
@@ -87,16 +87,16 @@ impl OptimizedCryptoValidator {
         let start_time = Instant::now();
         self.stats.total_signature_validations += 1;
 
-        // Calcule le hash de la clé publique pour le cache
+        // Calculate the hash de the key publique for the cache
         let key_hash = self.compute_key_hash(public_key)?;
 
-        // Vérifie le cache des clés publiques
+        // Verify the cache of keys publics
         if let Some(cached_key) = self.public_key_cache.get_mut(&key_hash) {
             if !cached_key.is_expired() {
                 cached_key.touch();
                 self.stats.cache_hits += 1;
                 
-                // Utilise un buffer poolé pour la validation
+                // Utilise a buffer pooled for the validation
                 let mut buffer = global_pool_manager()
                     .get_signature_buffer()
                     .map_err(|e| format!("Failed to get signature buffer: {}", e))?;
@@ -108,7 +108,7 @@ impl OptimizedCryptoValidator {
                     &mut buffer
                 )?;
 
-                // Retourne le buffer au pool
+                // Returns the buffer at the pool
                 global_pool_manager()
                     .return_signature_buffer(buffer)
                     .map_err(|e| format!("Failed to return signature buffer: {}", e))?;
@@ -116,12 +116,12 @@ impl OptimizedCryptoValidator {
                 self.update_signature_timing(start_time);
                 return Ok(result);
             } else {
-                // Supprime l'entrée expirée
+                // Removes l'entry expired
                 self.public_key_cache.remove(&key_hash);
             }
         }
 
-        // Cache miss - validation complète
+        // Cache miss - validation completee
         self.stats.cache_misses += 1;
         
         let mut buffer = global_pool_manager()
@@ -135,12 +135,12 @@ impl OptimizedCryptoValidator {
             &mut buffer
         )?;
 
-        // Met à jour le cache si la validation réussit
+        // Update the cache if the validation succeeds
         if matches!(result, ValidationResult::Valid) {
             self.update_public_key_cache(key_hash);
         }
 
-        // Retourne le buffer au pool
+        // Returns the buffer at the pool
         global_pool_manager()
             .return_signature_buffer(buffer)
             .map_err(|e| format!("Failed to return signature buffer: {}", e))?;
@@ -149,7 +149,7 @@ impl OptimizedCryptoValidator {
         Ok(result)
     }
 
-    /// Valide une preuve Halo2 avec optimisations mémoire
+    /// Validates a preuve Halo2 with optimisations memory
     pub fn validate_proof_optimized(
         &mut self,
         proof: &[u8],
@@ -159,7 +159,7 @@ impl OptimizedCryptoValidator {
         let start_time = Instant::now();
         self.stats.total_proof_validations += 1;
 
-        // Utilise un buffer poolé plus grand pour les preuves ZK
+        // Utilise a buffer pooled plus grand for the preuves ZK
         let mut buffer = global_pool_manager()
             .get_proof_buffer()
             .map_err(|e| format!("Failed to get proof buffer: {}", e))?;
@@ -171,7 +171,7 @@ impl OptimizedCryptoValidator {
             &mut buffer,
         )?;
 
-        // Retourne le buffer au pool
+        // Returns the buffer at the pool
         global_pool_manager()
             .return_proof_buffer(buffer)
             .map_err(|e| format!("Failed to return proof buffer: {}", e))?;
@@ -180,14 +180,14 @@ impl OptimizedCryptoValidator {
         Ok(result)
     }
 
-    /// Validation par batch pour améliorer les performances
+    /// Validation par batch for improve the performances
     pub fn validate_signatures_batch(
         &mut self,
         signatures: &[(Vec<u8>, Vec<u8>, Vec<u8>)], // (message, signature, public_key)
     ) -> Result<Vec<ValidationResult>, String> {
         let mut results = Vec::with_capacity(signatures.len());
         
-        // Pré-alloue plusieurs buffers pour le traitement par batch
+        // Pre-allocates multiple buffers for the processing par batch
         let mut buffers = Vec::new();
         for _ in 0..std::cmp::min(signatures.len(), 8) {
             buffers.push(global_pool_manager().get_signature_buffer()?);
@@ -204,7 +204,7 @@ impl OptimizedCryptoValidator {
             results.push(result);
         }
 
-        // Retourne tous les buffers au pool
+        // Returns all buffers at the pool
         for buffer in buffers {
             global_pool_manager().return_signature_buffer(buffer)?;
         }
@@ -212,7 +212,7 @@ impl OptimizedCryptoValidator {
         Ok(results)
     }
 
-    /// Validation avec buffer poolé réutilisable
+    /// Validation with buffer pooled reusable
     fn validate_with_pooled_buffer(
         &self,
         message: &[u8],
@@ -220,33 +220,33 @@ impl OptimizedCryptoValidator {
         public_key: &[u8],
         buffer: &mut PooledBuffer,
     ) -> Result<ValidationResult, String> {
-        // Utilise le buffer poolé pour les opérations intermédiaires
+        // Utilise the buffer pooled for the operations intermediates
         let work_slice = buffer.as_mut_slice();
         
-        // Copie les données dans le buffer de travail si nécessaire
+        // Copie the data in the buffer de travail if necessary
         if message.len() + signature.len() + public_key.len() <= work_slice.len() {
             let mut offset = 0;
             
-            // Copie le message
+            // Copie the message
             work_slice[offset..offset + message.len()].copy_from_slice(message);
             offset += message.len();
             
-            // Copie la signature
+            // Copie the signature
             work_slice[offset..offset + signature.len()].copy_from_slice(signature);
             offset += signature.len();
             
-            // Copie la clé publique
+            // Copie the key publique
             work_slice[offset..offset + public_key.len()].copy_from_slice(public_key);
             
-            // Utilise le validateur SLH-DSA avec les données du buffer
+            // Utilise the validateur SLH-DSA with the data of the buffer
             self.slh_dsa_validator.validate_from_buffer(work_slice, message.len(), signature.len())
         } else {
-            // Fallback si les données sont trop grandes pour le buffer
+            // Fallback if the data are trop large for the buffer
             self.slh_dsa_validator.validate(message, signature, public_key)
         }
     }
 
-    /// Vérification de preuve avec buffer poolé
+    /// Verification de preuve with buffer pooled
     fn verify_proof_with_pooled_buffer(
         &self,
         proof: &[u8],
@@ -254,10 +254,10 @@ impl OptimizedCryptoValidator {
         circuit_params: &[u8],
         buffer: &mut PooledBuffer,
     ) -> Result<ProofVerificationResult, String> {
-        // Utilise le buffer poolé pour les calculs intermédiaires
+        // Utilise the buffer pooled for the calculations intermediates
         let work_slice = buffer.as_mut_slice();
         
-        // Optimisation : utilise le buffer pour les opérations de vérification
+        // Optimisation : utilise the buffer for the operations de verification
         self.halo2_verifier.verify_with_buffer(
             proof,
             public_inputs,
@@ -266,7 +266,7 @@ impl OptimizedCryptoValidator {
         )
     }
 
-    /// Calcule le hash d'une clé publique pour le cache
+    /// Calculates the hash d'une key publique for the cache
     fn compute_key_hash(&self, public_key: &[u8]) -> Result<[u8; 32], String> {
         use sha2::{Sha256, Digest};
         
@@ -279,13 +279,13 @@ impl OptimizedCryptoValidator {
         Ok(hash)
     }
 
-    /// Met à jour le cache des clés publiques
+    /// Updates the cache of keys publics
     fn update_public_key_cache(&mut self, key_hash: [u8; 32]) {
-        // Nettoie le cache si il est plein
+        // Clean the cache if il is plein
         if self.public_key_cache.len() >= PUBLIC_KEY_CACHE_SIZE {
             self.cleanup_expired_cache_entries();
             
-            // Si toujours plein, supprime les entrées les plus anciennes
+            // Si toujours plein, removes the entries the plus anciennes
             if self.public_key_cache.len() >= PUBLIC_KEY_CACHE_SIZE {
                 let oldest_key = self.public_key_cache
                     .iter()
@@ -301,17 +301,17 @@ impl OptimizedCryptoValidator {
         self.public_key_cache.insert(key_hash, CachedPublicKey::new(key_hash));
     }
 
-    /// Nettoie les entrées expirées du cache
+    /// Cleans up the entries expireds of the cache
     fn cleanup_expired_cache_entries(&mut self) {
         self.public_key_cache.retain(|_, entry| !entry.is_expired());
     }
 
-    /// Met à jour les statistiques de timing pour les signatures
+    /// Updates the statistics de timing for the signatures
     fn update_signature_timing(&mut self, start_time: Instant) {
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
         self.stats.total_validation_time_ms += elapsed_ms;
         
-        // Calcule la moyenne mobile
+        // Calculate the moyenne mobile
         let total_sigs = self.stats.total_signature_validations;
         if total_sigs > 0 {
             self.stats.average_signature_time_ms = 
@@ -319,12 +319,12 @@ impl OptimizedCryptoValidator {
         }
     }
 
-    /// Met à jour les statistiques de timing pour les preuves
+    /// Updates the statistics de timing for the preuves
     fn update_proof_timing(&mut self, start_time: Instant) {
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
         self.stats.total_validation_time_ms += elapsed_ms;
         
-        // Calcule la moyenne mobile
+        // Calculate the moyenne mobile
         let total_proofs = self.stats.total_proof_validations;
         if total_proofs > 0 {
             self.stats.average_proof_time_ms = 
@@ -332,11 +332,11 @@ impl OptimizedCryptoValidator {
         }
     }
 
-    /// Retourne les statistiques de validation
+    /// Returns the statistics de validation
     pub fn stats(&self) -> ValidationStats {
         let mut stats = self.stats.clone();
         
-        // Met à jour les statistiques du memory pool
+        // Update the statistics of the memory pool
         if let Ok(pool_summary) = global_pool_manager().summary() {
             stats.memory_pool_usage_mb = pool_summary.estimated_memory_saved_mb;
         }
@@ -344,22 +344,22 @@ impl OptimizedCryptoValidator {
         stats
     }
 
-    /// Remet à zéro les statistiques
+    /// Remet to zero the statistics
     pub fn reset_stats(&mut self) {
         self.stats = ValidationStats::default();
     }
 
-    /// Nettoie le cache et optimise la mémoire
+    /// Cleans the cache and optimise the memory
     pub fn cleanup(&mut self) {
         self.cleanup_expired_cache_entries();
         
-        // Force le nettoyage du memory pool si nécessaire
+        // Force the cleanup of the memory pool if necessary
         if let Err(e) = global_pool_manager().cleanup() {
             eprintln!("Warning: Failed to cleanup memory pools: {}", e);
         }
     }
 
-    /// Retourne des métriques de performance détaillées
+    /// Returns of metrics de performance detailed
     pub fn performance_metrics(&self) -> PerformanceMetrics {
         let cache_hit_rate = if self.stats.cache_hits + self.stats.cache_misses > 0 {
             (self.stats.cache_hits as f64 / (self.stats.cache_hits + self.stats.cache_misses) as f64) * 100.0
@@ -385,7 +385,7 @@ impl Default for OptimizedCryptoValidator {
     }
 }
 
-/// Métriques de performance du validateur
+/// Performance metrics of the validateur
 #[derive(Debug, Clone)]
 pub struct PerformanceMetrics {
     pub total_validations: u64,
@@ -449,7 +449,7 @@ mod tests {
         // Premier appel - cache miss
         let _result1 = validator.validate_signature_optimized(message, &signature, &public_key);
         
-        // Deuxième appel - devrait être un cache hit
+        // Second appel - should be a cache hit
         let _result2 = validator.validate_signature_optimized(message, &signature, &public_key);
         
         let stats = validator.stats();
@@ -485,16 +485,16 @@ mod tests {
     fn test_cache_expiration() {
         let mut validator = OptimizedCryptoValidator::new().unwrap();
         
-        // Ajoute une entrée au cache
+        // Adds a entry at the cache
         let key_hash = [1u8; 32];
         validator.public_key_cache.insert(key_hash, CachedPublicKey::new(key_hash));
         
-        // Simule l'expiration en modifiant le timestamp
+        // Simulate l'expiration in modifiant the timestamp
         if let Some(entry) = validator.public_key_cache.get_mut(&key_hash) {
             entry.validated_at = Instant::now() - Duration::from_secs(400);
         }
         
-        // Force le nettoyage
+        // Force the cleanup
         validator.cleanup_expired_cache_entries();
         
         assert_eq!(validator.public_key_cache.len(), 0);

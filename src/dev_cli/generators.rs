@@ -8,7 +8,7 @@ use crate::crypto::keys::KeyPair;
 use crate::crypto::address::Address;
 use crate::wallet::Wallet;
 
-/// Générateur de données de test pour le développement
+/// Generator of data de test for the development
 pub struct TestDataGenerator {
     rng: rand::rngs::ThreadRng,
 }
@@ -20,7 +20,7 @@ impl TestDataGenerator {
         }
     }
 
-    /// Génère des transactions de test
+    /// Generates of transactions de test
     pub async fn generate_transactions(
         &mut self,
         count: u32,
@@ -29,12 +29,12 @@ impl TestDataGenerator {
         tx_type: String,
         amount_range: String,
     ) -> Result<()> {
-        println!("🏭 Génération de {} transactions de test...", count);
+        println!("🏭 Generation de {} transactions de test...", count);
 
-        // Charger le wallet
+        // Charger the wallet
         let wallet = self.load_or_create_wallet(&wallet_file).await?;
         
-        // Parser la plage de montants
+        // Parser the plage de montants
         let (min_amount, max_amount) = self.parse_amount_range(&amount_range)?;
 
         let mut transactions = Vec::new();
@@ -44,24 +44,24 @@ impl TestDataGenerator {
                 "transfer" => self.generate_transfer_transaction(&wallet, min_amount, max_amount).await?,
                 "mint" => self.generate_mint_transaction(&wallet, min_amount, max_amount).await?,
                 "burn" => self.generate_burn_transaction(&wallet, min_amount, max_amount).await?,
-                _ => return Err(anyhow::anyhow!("Type de transaction non supporté: {}", tx_type)),
+                _ => return Err(anyhow::anyhow!("Type de transaction non supported: {}", tx_type)),
             };
 
             transactions.push(transaction);
             
             if (i + 1) % 10 == 0 {
-                println!("  ✅ {} transactions générées", i + 1);
+                println!("  ✅ {} transactions generatedes", i + 1);
             }
         }
 
-        // Sauvegarder les transactions
+        // Save the transactions
         self.save_transactions_to_file(&transactions, &output_file).await?;
         
-        println!("💾 {} transactions sauvegardées dans {:?}", count, output_file);
+        println!("💾 {} transactions savedes dans {:?}", count, output_file);
         Ok(())
     }
 
-    /// Génère des blocs de test
+    /// Generates of blocs de test
     pub async fn generate_blocks(
         &mut self,
         count: u32,
@@ -69,25 +69,25 @@ impl TestDataGenerator {
         transactions_per_block: u32,
         starting_difficulty: u64,
     ) -> Result<()> {
-        println!("🏭 Génération de {} blocs de test...", count);
+        println!("🏭 Generation de {} blocs de test...", count);
 
-        // Créer le répertoire de sortie
+        // Create the directory de sortie
         fs::create_dir_all(&output_dir)
-            .context("Erreur lors de la création du répertoire de sortie")?;
+            .context("Error lors de la creation du directory de sortie")?;
 
         let mut previous_hash = [0u8; 32]; // Genesis block hash
         let mut current_height = 0u64;
         let mut current_difficulty = starting_difficulty;
 
         for i in 0..count {
-            // Générer les transactions pour ce bloc
+            // Generate the transactions for this bloc
             let mut transactions = Vec::new();
             for _ in 0..transactions_per_block {
                 let tx = self.generate_random_transaction().await?;
                 transactions.push(tx);
             }
 
-            // Générer le bloc
+            // Generate the bloc
             let block = self.generate_block(
                 current_height,
                 previous_hash,
@@ -95,29 +95,29 @@ impl TestDataGenerator {
                 current_difficulty,
             ).await?;
 
-            // Sauvegarder le bloc
+            // Save the bloc
             let block_file = output_dir.join(format!("block_{:06}.json", current_height));
             self.save_block_to_file(&block, &block_file).await?;
 
-            // Préparer pour le bloc suivant
+            // Prepare for the bloc suivant
             previous_hash = block.hash();
             current_height += 1;
             
-            // Ajuster la difficulté (simulation simple)
+            // Ajuster the difficulty (simulation simple)
             if i % 10 == 9 {
                 current_difficulty = current_difficulty.saturating_add(1);
             }
 
             if (i + 1) % 5 == 0 {
-                println!("  ✅ {} blocs générés", i + 1);
+                println!("  ✅ {} blocs generateds", i + 1);
             }
         }
 
-        println!("💾 {} blocs sauvegardés dans {:?}", count, output_dir);
+        println!("💾 {} blocs saveds dans {:?}", count, output_dir);
         Ok(())
     }
 
-    /// Génère des wallets de test
+    /// Generates of wallets de test
     pub async fn generate_wallets(
         &mut self,
         count: u32,
@@ -125,27 +125,27 @@ impl TestDataGenerator {
         prefund: bool,
         prefund_amount: u64,
     ) -> Result<()> {
-        println!("🏭 Génération de {} wallets de test...", count);
+        println!("🏭 Generation de {} wallets de test...", count);
 
-        // Créer le répertoire de sortie
+        // Create the directory de sortie
         fs::create_dir_all(&output_dir)
-            .context("Erreur lors de la création du répertoire de sortie")?;
+            .context("Error lors de la creation du directory de sortie")?;
 
         let mut wallet_info = Vec::new();
 
         for i in 0..count {
-            // Générer une nouvelle paire de clés
+            // Generate a new paire de keys
             let keypair = KeyPair::generate();
             let address = Address::from_public_key(&keypair.public_key());
 
-            // Créer le wallet
+            // Create the wallet
             let wallet = Wallet::new(keypair, address.clone());
 
-            // Sauvegarder le wallet
+            // Save the wallet
             let wallet_file = output_dir.join(format!("wallet_{:03}.json", i + 1));
             self.save_wallet_to_file(&wallet, &wallet_file).await?;
 
-            // Collecter les informations pour le résumé
+            // Collect the informations for the summary
             wallet_info.push(json!({
                 "id": i + 1,
                 "address": address.to_string(),
@@ -155,11 +155,11 @@ impl TestDataGenerator {
             }));
 
             if (i + 1) % 5 == 0 {
-                println!("  ✅ {} wallets générés", i + 1);
+                println!("  ✅ {} wallets generateds", i + 1);
             }
         }
 
-        // Sauvegarder le fichier de résumé
+        // Save the file de summary
         let summary_file = output_dir.join("wallets_summary.json");
         let summary = json!({
             "generated_at": chrono::Utc::now().to_rfc3339(),
@@ -170,40 +170,40 @@ impl TestDataGenerator {
         });
 
         fs::write(&summary_file, serde_json::to_string_pretty(&summary)?)
-            .context("Erreur lors de la sauvegarde du résumé")?;
+            .context("Error lors de la backup du summary")?;
 
-        println!("💾 {} wallets sauvegardés dans {:?}", count, output_dir);
-        println!("📋 Résumé disponible dans {:?}", summary_file);
+        println!("💾 {} wallets saveds dans {:?}", count, output_dir);
+        println!("📋 Summary available dans {:?}", summary_file);
 
         if prefund {
-            println!("💰 Note: Les wallets sont marqués comme pré-financés avec {} TSN", prefund_amount);
-            println!("    Vous devez manuellement transférer les fonds depuis un wallet existant.");
+            println!("💰 Note: Les wallets sont marked comme pre-funded avec {} TSN", prefund_amount);
+            println!("    Vous devez manuellement transfer les fonds depuis un wallet existant.");
         }
 
         Ok(())
     }
 
-    // === MÉTHODES PRIVÉES DE GÉNÉRATION ===
+    // === METHODS PRIVATE DE GENERATION ===
 
     async fn load_or_create_wallet(&mut self, wallet_file: &PathBuf) -> Result<Wallet> {
         if wallet_file.exists() {
-            // Charger le wallet existant
+            // Charger the wallet existant
             let wallet_data = fs::read_to_string(wallet_file)
-                .context("Erreur lors de la lecture du fichier wallet")?;
+                .context("Error during la lecture du file wallet")?;
             
             let wallet: Wallet = serde_json::from_str(&wallet_data)
-                .context("Erreur lors du parsing du wallet")?;
+                .context("Error lors du parsing du wallet")?;
             
             Ok(wallet)
         } else {
-            // Créer un nouveau wallet
-            println!("  📝 Création d'un nouveau wallet: {:?}", wallet_file);
+            // Create a nouveau wallet
+            println!("  📝 Creation d'un nouveau wallet: {:?}", wallet_file);
             
             let keypair = KeyPair::generate();
             let address = Address::from_public_key(&keypair.public_key());
             let wallet = Wallet::new(keypair, address);
             
-            // Sauvegarder le nouveau wallet
+            // Save the nouveau wallet
             self.save_wallet_to_file(&wallet, wallet_file).await?;
             
             Ok(wallet)
@@ -213,28 +213,28 @@ impl TestDataGenerator {
     fn parse_amount_range(&self, range_str: &str) -> Result<(u64, u64)> {
         let parts: Vec<&str> = range_str.split(',').collect();
         if parts.len() != 2 {
-            return Err(anyhow::anyhow!("Format de plage invalide. Utilisez 'min,max'"));
+            return Err(anyhow::anyhow!("Format de plage invalid. Utilisez 'min,max'"));
         }
 
         let min = parts[0].trim().parse::<u64>()
-            .context("Montant minimum invalide")?;
+            .context("Montant minimum invalid")?;
         let max = parts[1].trim().parse::<u64>()
-            .context("Montant maximum invalide")?;
+            .context("Montant maximum invalid")?;
 
         if min > max {
-            return Err(anyhow::anyhow!("Le montant minimum ne peut pas être supérieur au maximum"));
+            return Err(anyhow::anyhow!("Le montant minimum ne peut pas be higher au maximum"));
         }
 
         Ok((min, max))
     }
 
     async fn generate_transfer_transaction(&mut self, wallet: &Wallet, min_amount: u64, max_amount: u64) -> Result<Transaction> {
-        // Générer une adresse de destination aléatoire
+        // Generate a adresse de destination random
         let dest_keypair = KeyPair::generate();
         let dest_address = Address::from_public_key(&dest_keypair.public_key());
         
         let amount = self.rng.gen_range(min_amount..=max_amount);
-        let fee = self.rng.gen_range(1..=10); // Frais aléatoires entre 1 et 10
+        let fee = self.rng.gen_range(1..=10); // Frais random entre 1 et 10
         let nonce = self.rng.gen::<u64>();
 
         let transaction = Transaction::new_transfer(
@@ -245,7 +245,7 @@ impl TestDataGenerator {
             nonce,
         );
 
-        // Signer la transaction
+        // Signer the transaction
         let signed_transaction = wallet.sign_transaction(transaction)?;
         
         Ok(signed_transaction)
@@ -286,7 +286,7 @@ impl TestDataGenerator {
     }
 
     async fn generate_random_transaction(&mut self) -> Result<Transaction> {
-        // Générer des adresses aléatoires
+        // Generate of addresses random
         let from_keypair = KeyPair::generate();
         let from_address = Address::from_public_key(&from_keypair.public_key());
         
@@ -305,9 +305,9 @@ impl TestDataGenerator {
             nonce,
         );
 
-        // Pour les transactions aléatoires, on ne peut pas les signer
-        // car on n'a pas accès à la clé privée dans un vrai contexte
-        // On retourne la transaction non signée pour les tests
+        // For random transactions, we cannot sign them
+        // car on n'a pas access to the key private in a vrai contexte
+        // On returns the transaction non signed for the tests
         Ok(transaction)
     }
 
@@ -333,7 +333,7 @@ impl TestDataGenerator {
         Ok(block)
     }
 
-    // === MÉTHODES DE SAUVEGARDE ===
+    // === METHODS DE SAUVEGARDE ===
 
     async fn save_transactions_to_file(&self, transactions: &[Transaction], file_path: &PathBuf) -> Result<()> {
         let transactions_json: Vec<Value> = transactions
@@ -348,7 +348,7 @@ impl TestDataGenerator {
         });
 
         fs::write(file_path, serde_json::to_string_pretty(&output)?)
-            .context("Erreur lors de la sauvegarde des transactions")?;
+            .context("Error during la sauvegarde des transactions")?;
 
         Ok(())
     }
@@ -357,7 +357,7 @@ impl TestDataGenerator {
         let block_json = self.block_to_json(block);
 
         fs::write(file_path, serde_json::to_string_pretty(&block_json)?)
-            .context("Erreur lors de la sauvegarde du bloc")?;
+            .context("Error during la sauvegarde du bloc")?;
 
         Ok(())
     }
@@ -366,12 +366,12 @@ impl TestDataGenerator {
         let wallet_json = self.wallet_to_json(wallet);
 
         fs::write(file_path, serde_json::to_string_pretty(&wallet_json)?)
-            .context("Erreur lors de la sauvegarde du wallet")?;
+            .context("Error during la sauvegarde du wallet")?;
 
         Ok(())
     }
 
-    // === MÉTHODES DE SÉRIALISATION JSON ===
+    // === METHODS DE SERIALIZATION JSON ===
 
     fn transaction_to_json(&self, transaction: &Transaction) -> Value {
         json!({
@@ -410,8 +410,8 @@ impl TestDataGenerator {
         json!({
             "address": wallet.address().to_string(),
             "public_key": hex::encode(wallet.public_key().as_bytes()),
-            // Note: On ne sauvegarde jamais la clé privée en clair dans un vrai contexte
-            // Ici c'est pour les tests de développement uniquement
+            // Note: On not backup jamais the key private in clair in a vrai contexte
+            // Ici c'est for the tests de development only
             "private_key_encrypted": "ENCRYPTED_FOR_DEV_ONLY",
             "created_at": chrono::Utc::now().to_rfc3339(),
             "version": "1.0.0"
@@ -419,7 +419,7 @@ impl TestDataGenerator {
     }
 }
 
-/// Générateur de données de performance pour les benchmarks
+/// Generator of data de performance for the benchmarks
 pub struct PerformanceDataGenerator {
     rng: rand::rngs::ThreadRng,
 }
@@ -431,20 +431,20 @@ impl PerformanceDataGenerator {
         }
     }
 
-    /// Génère un dataset pour les tests de performance
+    /// Generates a dataset for the tests de performance
     pub async fn generate_performance_dataset(
         &mut self,
         transaction_count: u32,
         block_count: u32,
         output_dir: PathBuf,
     ) -> Result<()> {
-        println!("🚀 Génération d'un dataset de performance...");
+        println!("🚀 Generation d'un dataset de performance...");
         println!("   {} transactions, {} blocs", transaction_count, block_count);
 
         fs::create_dir_all(&output_dir)
-            .context("Erreur lors de la création du répertoire")?;
+            .context("Error lors de la creation du directory")?;
 
-        // Générer les transactions
+        // Generate the transactions
         let mut test_generator = TestDataGenerator::new();
         let tx_file = output_dir.join("performance_transactions.json");
         
@@ -456,7 +456,7 @@ impl PerformanceDataGenerator {
             "1,1000".to_string(),
         ).await?;
 
-        // Générer les blocs
+        // Generate the blocs
         let blocks_dir = output_dir.join("performance_blocks");
         test_generator.generate_blocks(
             block_count,
@@ -465,7 +465,7 @@ impl PerformanceDataGenerator {
             16,
         ).await?;
 
-        // Générer le fichier de configuration pour les benchmarks
+        // Generate the file de configuration for the benchmarks
         let config = json!({
             "dataset_type": "performance",
             "generated_at": chrono::Utc::now().to_rfc3339(),
@@ -493,10 +493,10 @@ impl PerformanceDataGenerator {
 
         let config_file = output_dir.join("benchmark_config.json");
         fs::write(&config_file, serde_json::to_string_pretty(&config)?)
-            .context("Erreur lors de la sauvegarde de la configuration")?;
+            .context("Error during la sauvegarde de la configuration")?;
 
-        println!("✅ Dataset de performance généré dans {:?}", output_dir);
-        println!("📋 Configuration disponible dans {:?}", config_file);
+        println!("✅ Dataset de performance generated dans {:?}", output_dir);
+        println!("📋 Configuration available dans {:?}", config_file);
 
         Ok(())
     }

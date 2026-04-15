@@ -1,4 +1,4 @@
-//! Erreurs cryptographiques
+//! Cryptographic errors
 
 #[derive(Debug)]
 pub enum CryptoError {

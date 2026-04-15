@@ -1,7 +1,7 @@
-//! Gestionnaire de rotation des fichiers de log
+//! Log file rotation manager
 //!
-//! Ce module fournit un gestionnaire asynchrone qui surveille
-//! et nettoie les anciens fichiers de log selon la politique configurée.
+//! This module provides an asynchronous manager that monitors
+//! and cleans up old log files according to the configured policy.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -10,41 +10,41 @@ use tracing::{debug, error, info, warn};
 
 use super::{LogConfig, LoggingError, Result};
 
-/// Gestionnaire de rotation des fichiers de log
+/// Log file rotation manager
 pub struct RotationManager {
-    /// Configuration du logging
+    /// Configuration of the logging
     config: LogConfig,
-    /// Intervalle de vérification
+    /// Check interval
     check_interval: Duration,
-    /// Pattern de fichiers à surveiller
+    /// File pattern to watch
     file_pattern: String,
 }
 
 impl RotationManager {
-    /// Crée un nouveau gestionnaire de rotation
+    /// Creates a new rotation manager
     pub fn new(config: LogConfig) -> Result<Self> {
         let file_pattern = config.file_pattern();
         
         Ok(RotationManager {
             config,
-            check_interval: Duration::from_secs(300), // 5 minutes par défaut
+            check_interval: Duration::from_secs(300), // 5 minutes by default
             file_pattern,
         })
     }
 
-    /// Définit l'intervalle de vérification
+    /// Sets the verification interval
     pub fn with_check_interval(mut self, interval: Duration) -> Self {
         self.check_interval = interval;
         self
     }
 
-    /// Démarre le gestionnaire de rotation avec support d'annulation
+    /// Starts the rotation manager with cancellation support
     /// 
-    /// Cette méthode doit être appelée dans un contexte tokio.
-/// Elle s'arrête proprement lorsque le token d'annulation est déclenché.
+    /// This method must be called in a tokio context.
+/// It shuts down cleanly when the cancellation token is triggered.
     pub async fn run(self, cancel_token: tokio_util::sync::CancellationToken) {
         info!(
-            "Démarrage du gestionnaire de rotation: intervalle={:?}, max_files={}",
+            "Starting rotation manager: interval={:?}, max_files={}",
             self.check_interval,
             self.config.max_files
         );
@@ -55,18 +55,18 @@ impl RotationManager {
             tokio::select! {
                 _ = ticker.tick() => {
                     if let Err(e) = self.cleanup_old_logs().await {
-                        error!("Erreur lors du nettoyage des anciens logs: {}", e);
+                        error!("Error cleaning old log files: {}", e);
                     }
                 }
                 _ = cancel_token.cancelled() => {
-                    info!("Arrêt du gestionnaire de rotation");
+                    info!("Stopping rotation manager");
                     break;
                 }
             }
         }
     }
 
-    /// Nettoie les anciens fichiers de log
+    /// Cleans up old log files
     async fn cleanup_old_logs(&self) -> Result<()> {
         if self.config.max_files == 0 {
             return Ok(());
@@ -78,7 +78,7 @@ impl RotationManager {
             return Ok(());
         }
 
-        // Lister tous les fichiers de log avec gestion d'erreur explicite
+        // List all log files with explicit error handling
         let mut log_files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
         
         let entries = std::fs::read_dir(log_dir).map_err(|e| {
@@ -92,45 +92,45 @@ impl RotationManager {
 
             let path = entry.path();
             
-            // Vérifier si c'est un fichier de log
+            // Check if it's a log file
             if let Some(file_name) = path.file_name() {
                 let file_name_str = file_name.to_string_lossy();
                 
-                // Vérifier le pattern
+                // Verify the pattern
                 if file_name_str.starts_with(&self.config.file_name)
                     && file_name_str.ends_with(".log")
                 {
                     match entry.metadata() {
                         Ok(metadata) => {
                             if metadata.is_file() {
-                                // Gestion explicite de modified() - si erreur, utiliser UNIX_EPOCH
+                                // Explicit handling of modified() - if error, use UNIX_EPOCH
                                 let modified_time = metadata.modified()
                                     .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
                                 log_files.push((modified_time, path));
                             }
                         }
                         Err(e) => {
-                            warn!("Impossible de lire les métadonnées de {:?}: {}", path, e);
-                            // Continuer avec les autres fichiers
+                            warn!("Unable to read metadata of {:?}: {}", path, e);
+                            // Continue with other files
                         }
                     }
                 }
             }
         }
 
-        // Trier par date de modification (du plus récent au plus ancien)
+        // Sort by modification date (newest to oldest)
         log_files.sort_by(|a, b| b.0.cmp(&a.0));
 
-        // Supprimer les fichiers excédentaires
+        // Delete excess files
         if log_files.len() > self.config.max_files {
             let files_to_remove = &log_files[self.config.max_files..];
             
             for (_, file_path) in files_to_remove {
-                debug!("Suppression du fichier de log ancien: {:?}", file_path);
+                debug!("Suppression du file de log ancien: {:?}", file_path);
                 
                 match tokio::fs::remove_file(file_path).await {
                     Ok(_) => {
-                        info!("Fichier de log supprimé: {:?}", file_path);
+                        info!("File de log removed: {:?}", file_path);
                     }
                     Err(e) => {
                         warn!("Impossible de supprimer {:?}: {}", file_path, e);
@@ -142,7 +142,7 @@ impl RotationManager {
         Ok(())
     }
 
-    /// Obtient la liste des fichiers de log actuels
+    /// Gets the list of current log files
     pub fn list_log_files(&self) -> Result<Vec<PathBuf>> {
         let log_dir = &self.config.log_dir;
         
@@ -178,20 +178,20 @@ impl RotationManager {
                             }
                         }
                         Err(e) => {
-                            warn!("Impossible de lire les métadonnées de {:?}: {}", path, e);
+                            warn!("Unable to read metadata of {:?}: {}", path, e);
                         }
                     }
                 }
             }
         }
 
-        // Trier par date de modification (du plus récent au plus ancien)
+        // Sort by modification date (newest to oldest)
         log_files.sort_by(|a, b| b.0.cmp(&a.0));
         
         Ok(log_files.into_iter().map(|(_, path)| path).collect())
     }
 
-    /// Calcule l'espace disque utilisé par les logs
+    /// Calculates disk space used by logs
     pub fn calculate_log_size(&self) -> Result<u64> {
         let files = self.list_log_files()?;
         let mut total_size: u64 = 0;
@@ -205,30 +205,30 @@ impl RotationManager {
         Ok(total_size)
     }
 
-    /// Force la rotation immédiate
+    /// Forces immediate rotation
     pub async fn force_rotation(&self) -> Result<()> {
-        info!("Rotation forcée des fichiers de log");
+        info!("Forced log file rotation");
         self.cleanup_old_logs().await
     }
 }
 
-/// Statistiques sur les fichiers de log
+/// Log file statistics
 #[derive(Debug, Clone)]
 pub struct LogStats {
-    /// Nombre de fichiers
+    /// Number of files
     pub file_count: usize,
-    /// Taille totale en octets
+    /// Total size in bytes
     pub total_size: u64,
-    /// Taille moyenne par fichier
+    /// Average size per file
     pub average_size: u64,
-    /// Fichier le plus récent
+    /// Most recent file
     pub newest_file: Option<PathBuf>,
-    /// Fichier le plus ancien
+    /// Oldest file
     pub oldest_file: Option<PathBuf>,
 }
 
 impl LogStats {
-    /// Calcule les statistiques pour un répertoire de logs
+    /// Calculationates statistics for a log directory
     pub fn calculate(log_dir: &Path, file_prefix: &str) -> Result<Self> {
         let mut files: Vec<(std::time::SystemTime, PathBuf, u64)> = Vec::new();
         
@@ -269,7 +269,7 @@ impl LogStats {
                             }
                         }
                         Err(e) => {
-                            warn!("Impossible de lire les métadonnées de {:?}: {}", path, e);
+                            warn!("Unable to read metadata of {:?}: {}", path, e);
                         }
                     }
                 }
@@ -284,7 +284,7 @@ impl LogStats {
             0
         };
 
-        // Trier par date (du plus récent au plus ancien)
+        // Sort by date (newest to oldest)
         files.sort_by(|a, b| b.0.cmp(&a.0));
 
         let newest_file = files.first().map(|(_, p, _)| p.clone());
@@ -299,18 +299,18 @@ impl LogStats {
         })
     }
 
-    /// Formate la taille totale en unités lisibles
+    /// Formats total size in human-readable units
     pub fn format_total_size(&self) -> String {
         format_bytes(self.total_size)
     }
 
-    /// Formate la taille moyenne en unités lisibles
+    /// Formats average size in human-readable units
     pub fn format_average_size(&self) -> String {
         format_bytes(self.average_size)
     }
 }
 
-/// Formate une taille en octets en unités lisibles
+/// Formats a size in bytes to human-readable units
 fn format_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
@@ -350,23 +350,23 @@ mod tests {
 
         let manager = RotationManager::new(config.clone()).unwrap();
 
-        // Créer quelques fichiers de log
+        // Create some log files
         for i in 0..5 {
             let file_path = temp_dir.path().join(format!("test_{}.log", i));
             let mut file = std::fs::File::create(&file_path).unwrap();
             writeln!(file, "Log content {}").unwrap();
-            // Petite pause pour différencier les timestamps
+            // Small pause to differentiate timestamps
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        // Vérifier qu'on a 5 fichiers
+        // Verify qu'on a 5 files
         let files = manager.list_log_files().unwrap();
         assert_eq!(files.len(), 5);
 
         // Nettoyer
         manager.cleanup_old_logs().await.unwrap();
 
-        // Vérifier qu'il ne reste que 2 fichiers
+        // Verify qu'il not reste que 2 files
         let files = manager.list_log_files().unwrap();
         assert_eq!(files.len(), 2);
     }
@@ -375,7 +375,7 @@ mod tests {
     fn test_log_stats() {
         let temp_dir = TempDir::new().unwrap();
         
-        // Créer quelques fichiers
+        // Create quelques files
         for i in 0..3 {
             let file_path = temp_dir.path().join(format!("test_{}.log", i));
             let mut file = std::fs::File::create(&file_path).unwrap();

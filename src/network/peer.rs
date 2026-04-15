@@ -1,5 +1,5 @@
 //! Peer management for TSN P2P network
-//! TODO: à implémenter proprement par le bot NETWORK
+//! TODO: to be properly implemented by the NETWORK bot
 
 use std::net::SocketAddr;
 use std::collections::HashMap;
@@ -13,7 +13,7 @@ pub struct PeerHandle {
     pub connected: bool,
 }
 
-/// Manages active peers
+/// Handles active peers
 #[derive(Debug, Clone)]
 pub struct PeerManager {
     peers: Arc<RwLock<HashMap<SocketAddr, PeerHandle>>>,

@@ -1,8 +1,8 @@
-//! Moteur DHT Kademlia pour TSN
+//! Kademlia DHT engine for TSN
 //! 
-//! Implémente le cœur du système DHT avec lookup itératif, bootstrap,
-//! stockage local et maintenance des pairs. Conçu pour la robustesse
-//! dans des réseaux adversariaux avec partitions et nœuds malveillants.
+//! Implements the core DHT system with iterative lookup, bootstrap,
+//! local storage and peer maintenance. Designed for robustness
+//! in adversarial networks with partitions and malicious nodes.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -21,22 +21,22 @@ use super::kademlia_messages::{
     RequestId, generate_request_id, DhtError, builders
 };
 
-/// Configuration du moteur DHT
+/// DHT engine configuration
 #[derive(Debug, Clone)]
 pub struct KademliaConfig {
     /// Notre NodeId local  
     pub local_id: NodeId,
-    /// Adresse d'écoute
+    /// Listening address
     pub listen_addr: SocketAddr,
-    /// Seed nodes pour le bootstrap
+    /// Seed nodes for bootstrap
     pub seed_nodes: Vec<SocketAddr>,
-    /// TTL par défaut pour les valeurs stockées (secondes)
+    /// Default TTL for stored values (secondes)
     pub default_value_ttl: u64,
-    /// Intervalle de maintenance de la table de routage
+    /// Routing table maintenance interval
     pub maintenance_interval: Duration,
-    /// Timeout pour les requêtes réseau
+    /// Timeout for network requests
     pub request_timeout: Duration,
-    /// Nombre max de requêtes parallèles pendant un lookup
+    /// Maximum parallel requests during a lookup
     pub max_concurrent_requests: usize,
 }
 
@@ -54,7 +54,7 @@ impl Default for KademliaConfig {
     }
 }
 
-/// État d'un lookup itératif en cours
+/// State d'un lookup iterative in progress
 #[derive(Debug)]
 struct LookupState {
     target: NodeId,
@@ -71,7 +71,7 @@ enum LookupType {
     FindValue(DhtKey),
 }
 
-/// Requête en attente de réponse
+/// Request in pending de response
 #[derive(Debug)]
 struct PendingRequest {
     sender: oneshot::Sender<KademliaMessage>,
@@ -79,7 +79,7 @@ struct PendingRequest {
     sent_at: Instant,
 }
 
-/// Moteur principal de la DHT Kademlia
+/// Main Kademlia DHT engine
 #[derive(Clone)]
 pub struct KademliaEngine {
     config: KademliaConfig,
@@ -87,17 +87,17 @@ pub struct KademliaEngine {
     local_storage: Arc<RwLock<HashMap<DhtKey, DhtValue>>>,
     pending_requests: Arc<RwLock<HashMap<RequestId, PendingRequest>>>,
     
-    // Channels pour communication interne
+    // Channels for internal communication
     message_tx: mpsc::UnboundedSender<(SocketAddr, KademliaMessage)>,
     message_rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<(SocketAddr, KademliaMessage)>>>>,
     
-    // État du moteur
+    // Engine state
     is_bootstrapped: Arc<RwLock<bool>>,
     last_maintenance: Arc<RwLock<Instant>>,
 }
 
 impl KademliaEngine {
-    /// Crée un nouveau moteur DHT
+    /// Creates a new moteur DHT
     pub fn new(config: KademliaConfig) -> Self {
         let (message_tx, message_rx) = mpsc::unbounded_channel();
         
@@ -113,36 +113,36 @@ impl KademliaEngine {
         }
     }
     
-    /// Démarre le moteur DHT avec bootstrap
+    /// Starts the DHT engine with bootstrap
     pub async fn start(&self) -> Result<(), DhtError> {
-        info!("Démarrage du moteur DHT Kademlia [{}]", self.config.local_id);
+        info!("Starting du moteur DHT Kademlia [{}]", self.config.local_id);
         
-        // Démarre la boucle de traitement des messages
+        // Start the message processing loop
         let message_rx = self.message_rx.write().await.take()
-            .ok_or_else(|| DhtError::SerializationError("Engine déjà démarré".to_string()))?;
+            .ok_or_else(|| DhtError::SerializationError("Engine already started".to_string()))?;
         
         let engine = self.clone();
         tokio::spawn(async move {
             engine.message_processing_loop(message_rx).await;
         });
         
-        // Démarre la maintenance périodique
+        // Start periodic maintenance
         let engine = self.clone();
         tokio::spawn(async move {
             engine.maintenance_loop().await;
         });
         
-        // Bootstrap depuis les seed nodes
+        // Bootstrap from seed nodes
         self.bootstrap().await?;
         
-        info!("Moteur DHT démarré avec succès");
+        info!("Moteur DHT started avec success");
         Ok(())
     }
     
-    /// Bootstrap depuis les seed nodes
+    /// Bootstrap from seed nodes
     async fn bootstrap(&self) -> Result<(), DhtError> {
         if self.config.seed_nodes.is_empty() {
-            warn!("Aucun seed node configuré - bootstrap manuel requis");
+            warn!("No seed node configured - bootstrap manuel requis");
             return Ok(());
         }
         
@@ -154,10 +154,10 @@ impl KademliaEngine {
             match self.ping_node(*seed_addr).await {
                 Ok(node) => {
                     bootstrap_nodes.push(node);
-                    info!("Seed node connecté: {} @ {}", node.id, seed_addr);
+                    info!("Seed node connected: {} @ {}", node.id, seed_addr);
                 }
                 Err(e) => {
-                    warn!("Échec connexion seed node {}: {}", seed_addr, e);
+                    warn!("Failure connection seed node {}: {}", seed_addr, e);
                 }
             }
         }
@@ -166,7 +166,7 @@ impl KademliaEngine {
             return Err(DhtError::NodeUnreachable(NodeId::new([0; 20])));
         }
         
-        // Ajoute les seed nodes à la table de routage
+        // Add seed nodes to routing table
         {
             let mut table = self.routing_table.write().await;
             for node in &bootstrap_nodes {
@@ -174,7 +174,7 @@ impl KademliaEngine {
             }
         }
         
-        // Effectue un lookup de notre propre ID pour peupler la table
+        // Perform a lookup of our own ID to populate the table
         if let Ok(nodes) = self.iterative_find_node(self.config.local_id).await {
             let mut table = self.routing_table.write().await;
             for node in nodes {
@@ -183,51 +183,51 @@ impl KademliaEngine {
         }
         
         *self.is_bootstrapped.write().await = true;
-        info!("Bootstrap DHT terminé - {} nœuds dans la table", 
+        info!("Bootstrap DHT completed - {} nodes dans la table", 
               self.routing_table.read().await.stats().total_nodes);
         
         Ok(())
     }
     
-    /// Ping un nœud et retourne ses informations
+    /// Ping a node and returns ses informations
     async fn ping_node(&self, addr: SocketAddr) -> Result<KademliaNode, DhtError> {
         let request_id = generate_request_id();
         let ping_msg = builders::ping(self.config.local_id);
         
         let (response_tx, response_rx) = oneshot::channel();
         
-        // Enregistre la requête pendante
+        // Register the pending request
         {
             let mut pending = self.pending_requests.write().await;
             pending.insert(request_id, PendingRequest {
                 sender: response_tx,
-                target_node: NodeId::new([0; 20]), // Inconnu pour l'instant
+                target_node: NodeId::new([0; 20]), // Unknown for now
                 sent_at: Instant::now(),
             });
         }
         
-        // Envoie le ping (simulation - dans la vraie impl il faudrait UDP/TCP)
+        // Send ping (simulation - real impl would use UDP/TCP)
         if let Err(_) = self.send_message(addr, ping_msg).await {
             self.pending_requests.write().await.remove(&request_id);
             return Err(DhtError::NodeUnreachable(NodeId::new([0; 20])));
         }
         
-        // Attend la réponse avec timeout
+        // Wait for response with timeout
         match timeout(self.config.request_timeout, response_rx).await {
             Ok(Ok(response)) => {
                 if let KademliaMessage::Pong { sender_id, .. } = response {
                     Ok(KademliaNode::new(sender_id, addr))
                 } else {
-                    Err(DhtError::SerializationError("Réponse ping invalide".to_string()))
+                    Err(DhtError::SerializationError("Response ping invalid".to_string()))
                 }
             },
             _ => Err(DhtError::RequestTimeout)
         }
     }
     
-    /// Lookup itératif pour FIND_NODE
+    /// Iterative lookup for FIND_NODE
     pub async fn iterative_find_node(&self, target: NodeId) -> Result<Vec<KademliaNode>, DhtError> {
-        debug!("Début lookup itératif pour nœud {}", target);
+        debug!("Start lookup iterative pour node {}", target);
         
         let mut lookup_state = LookupState {
             target,
@@ -238,7 +238,7 @@ impl KademliaEngine {
             lookup_type: LookupType::FindNode,
         };
         
-        // Trouve les nœuds de départ depuis la table de routage
+        // Find starting nodes from the routing table
         let initial_nodes = {
             let table = self.routing_table.read().await;
             table.closest_nodes(&target, KADEMLIA_K)
@@ -250,16 +250,16 @@ impl KademliaEngine {
         
         lookup_state.closest_nodes = initial_nodes;
         
-        // Boucle principale du lookup
+        // Main lookup loop
         loop {
-            // Sélectionne les prochains nœuds à interroger
+            // Select next nodes to query
             let candidates = self.select_lookup_candidates(&mut lookup_state);
             
             if candidates.is_empty() {
-                break; // Plus de nœuds à interroger
+                break; // Plus de nodes to interroger
             }
             
-            // Envoie les requêtes en parallèle (limité par ALPHA)
+            // Send requests in parallel (limited by ALPHA)
             let mut tasks = Vec::new();
             for node in candidates.into_iter().take(self.config.max_concurrent_requests) {
                 lookup_state.queried.insert(node.id);
@@ -272,27 +272,27 @@ impl KademliaEngine {
                 }));
             }
             
-            // Attend les réponses
+            // Wait for responses
             for task in tasks {
                 if let Ok(Ok(new_nodes)) = task.await {
-                    // Intègre les nouveaux nœuds
+                    // Integrate new nodes
                     self.integrate_lookup_response(&mut lookup_state, new_nodes).await;
                 }
             }
             
-            // Vérifie timeout global
+            // Verifies timeout global
             if lookup_state.started_at.elapsed() > LOOKUP_TIMEOUT {
                 warn!("Lookup timeout pour {}", target);
                 break;
             }
         }
         
-        // Trie et retourne les K nœuds les plus proches
+        // Sort and return the K closest nodes
         lookup_state.closest_nodes.sort_by_key(|n| n.id.distance(&target));
         Ok(lookup_state.closest_nodes.into_iter().take(KADEMLIA_K).collect())
     }
     
-    /// Sélectionne les candidats pour la prochaine itération du lookup
+    /// Selects candidates for the next lookup iteration
     fn select_lookup_candidates(&self, state: &mut LookupState) -> Vec<KademliaNode> {
         state.closest_nodes
             .iter()
@@ -302,7 +302,7 @@ impl KademliaEngine {
             .collect()
     }
     
-    /// Interroge un nœud spécifique pour une cible
+    /// Queries a specific node for a target
     async fn query_node_for_target(&self, node: KademliaNode, target: NodeId) 
         -> Result<Vec<KademliaNode>, DhtError> 
     {
@@ -311,7 +311,7 @@ impl KademliaEngine {
         
         let (response_tx, response_rx) = oneshot::channel();
         
-        // Enregistre la requête
+        // Register the request
         {
             let mut pending = self.pending_requests.write().await;
             pending.insert(request_id, PendingRequest {
@@ -327,34 +327,34 @@ impl KademliaEngine {
             return Err(DhtError::NodeUnreachable(node.id));
         }
         
-        // Attend la réponse
+        // Wait for response
         match timeout(self.config.request_timeout, response_rx).await {
             Ok(Ok(response)) => {
                 if let KademliaMessage::FoundNodes { nodes, .. } = response {
                     Ok(nodes.into_iter().map(KademliaNode::from).collect())
                 } else {
-                    Err(DhtError::SerializationError("Réponse FIND_NODE invalide".to_string()))
+                    Err(DhtError::SerializationError("Response FIND_NODE invalid".to_string()))
                 }
             },
             _ => Err(DhtError::RequestTimeout)
         }
     }
     
-    /// Intègre la réponse d'un nœud dans l'état du lookup
+    /// Integrates a node's response into the lookup state
     async fn integrate_lookup_response(&self, state: &mut LookupState, new_nodes: Vec<KademliaNode>) {
         for node in new_nodes {
-            // Évite les boucles et notre propre ID
+            // Avoid loops and our own ID
             if node.id == self.config.local_id || state.queried.contains(&node.id) {
                 continue;
             }
             
-            // Ajoute à la table de routage si assez proche
+            // Add to routing table if close enough
             {
                 let mut table = self.routing_table.write().await;
                 table.add_node(node.clone());
             }
             
-            // Ajoute aux candidats du lookup s'il est plus proche
+            // Add to lookup candidates if closer
             let distance = node.id.distance(&state.target);
             if let Some(furthest_distance) = state.closest_nodes
                 .last()
@@ -370,28 +370,28 @@ impl KademliaEngine {
             }
         }
         
-        // Nettoie les nœuds pending
+        // Clean up pending nodes
         state.pending.retain(|id| {
             !state.queried.contains(id)
         });
     }
     
-    /// Stocke une valeur dans la DHT
+    /// Stores a value in the DHT
     pub async fn store_value(&self, key: DhtKey, value: Vec<u8>) -> Result<(), DhtError> {
         let dht_value = DhtValue::new(value, self.config.default_value_ttl, self.config.local_id);
         
-        // Stocke localement
+        // Stores localement
         {
             let mut storage = self.local_storage.write().await;
             storage.insert(key, dht_value.clone());
         }
         
-        // Trouve les K nœuds les plus proches de la clé
+        // Find the K closest nodes to the key
         let key_node_id = NodeId::new(key);
         let closest_nodes = self.iterative_find_node(key_node_id).await
             .unwrap_or_else(|_| Vec::new());
         
-        // Réplique sur les K nœuds les plus proches
+        // Replicate to the K closest nodes
         let mut store_tasks = Vec::new();
         for node in closest_nodes.into_iter().take(KADEMLIA_K) {
             let engine = self.clone();
@@ -401,7 +401,7 @@ impl KademliaEngine {
             }));
         }
         
-        // Attend que au moins la majorité réussisse
+        // Wait for at least majority success
         let mut success_count = 0;
         for task in store_tasks {
             if task.await.is_ok() {
@@ -416,14 +416,14 @@ impl KademliaEngine {
         }
     }
     
-    /// Stocke une valeur sur un nœud spécifique
+    /// Stores a value on a specific node
     async fn store_at_node(&self, node: KademliaNode, key: DhtKey, value: DhtValue) -> Result<(), DhtError> {
         let request_id = generate_request_id();
         let store_msg = builders::store(self.config.local_id, key, value, self.config.default_value_ttl);
         
         let (response_tx, response_rx) = oneshot::channel();
         
-        // Enregistre la requête
+        // Register the request
         {
             let mut pending = self.pending_requests.write().await;
             pending.insert(request_id, PendingRequest {
@@ -439,7 +439,7 @@ impl KademliaEngine {
             return Err(DhtError::NodeUnreachable(node.id));
         }
         
-        // Attend la réponse
+        // Wait for response
         match timeout(self.config.request_timeout, response_rx).await {
             Ok(Ok(KademliaMessage::StoreAck { success: true, .. })) => Ok(()),
             Ok(Ok(KademliaMessage::StoreAck { success: false, error, .. })) => {
@@ -449,9 +449,9 @@ impl KademliaEngine {
         }
     }
     
-    /// Recherche une valeur dans la DHT
+    /// Searches for a value in the DHT
     pub async fn find_value(&self, key: DhtKey) -> Result<Option<DhtValue>, DhtError> {
-        // Vérifie d'abord le stockage local
+        // Check local storage first
         {
             let storage = self.local_storage.read().await;
             if let Some(value) = storage.get(&key) {
@@ -461,11 +461,11 @@ impl KademliaEngine {
             }
         }
         
-        // Lookup itératif pour FIND_VALUE
+        // Iterative lookup for FIND_VALUE
         let key_node_id = NodeId::new(key);
         let closest_nodes = self.iterative_find_node(key_node_id).await?;
         
-        // Interroge les nœuds les plus proches
+        // Query the closest nodes
         for node in closest_nodes.into_iter().take(KADEMLIA_K) {
             if let Ok(Some(value)) = self.find_value_at_node(node, key).await {
                 return Ok(Some(value));
@@ -475,14 +475,14 @@ impl KademliaEngine {
         Ok(None)
     }
     
-    /// Recherche une valeur sur un nœud spécifique
+    /// Searches for a value on a specific node
     async fn find_value_at_node(&self, node: KademliaNode, key: DhtKey) -> Result<Option<DhtValue>, DhtError> {
         let request_id = generate_request_id();
         let find_value_msg = builders::find_value(self.config.local_id, key);
         
         let (response_tx, response_rx) = oneshot::channel();
         
-        // Enregistre la requête
+        // Register the request
         {
             let mut pending = self.pending_requests.write().await;
             pending.insert(request_id, PendingRequest {
@@ -498,7 +498,7 @@ impl KademliaEngine {
             return Err(DhtError::NodeUnreachable(node.id));
         }
         
-        // Attend la réponse
+        // Wait for response
         match timeout(self.config.request_timeout, response_rx).await {
             Ok(Ok(KademliaMessage::FoundValue { result, .. })) => {
                 match result {
@@ -510,29 +510,29 @@ impl KademliaEngine {
         }
     }
     
-    /// Envoie un message à un nœud (simulation)
+    /// Sendinge a message to a node (simulation)
     async fn send_message(&self, _addr: SocketAddr, _message: KademliaMessage) -> Result<(), DhtError> {
-        // Dans une vraie implémentation, ceci enverrait le message via UDP/TCP
-        // Pour l'instant, on simule juste un succès
-        trace!("Envoi message DHT simulé vers {}", _addr);
+        // In a real implementation, this would send the message via UDP/TCP
+        // For now, we just simulate a success
+        trace!("Sending simulated DHT message to {}", _addr);
         Ok(())
     }
     
-    /// Boucle de traitement des messages entrants
+    /// Incoming message processing loop
     async fn message_processing_loop(&self, mut message_rx: mpsc::UnboundedReceiver<(SocketAddr, KademliaMessage)>) {
         while let Some((sender_addr, message)) = message_rx.recv().await {
             self.handle_incoming_message(sender_addr, message).await;
         }
     }
     
-    /// Traite un message entrant
+    /// Processes a message entrant
     async fn handle_incoming_message(&self, sender_addr: SocketAddr, message: KademliaMessage) {
         match message {
             KademliaMessage::Ping { request_id, sender_id, .. } => {
                 let pong = builders::pong(request_id, self.config.local_id, 3600);
                 let _ = self.send_message(sender_addr, pong).await;
                 
-                // Ajoute le nœud à la table de routage
+                // Add node to routing table
                 let node = KademliaNode::new(sender_id, sender_addr);
                 let mut table = self.routing_table.write().await;
                 table.add_node(node);
@@ -555,7 +555,7 @@ impl KademliaEngine {
                 let _ = self.send_message(sender_addr, ack).await;
             },
             
-            // Traite les réponses
+            // Process responses
             _ if !message.is_request() => {
                 let request_id = message.request_id();
                 if let Some(pending) = self.pending_requests.write().await.remove(&request_id) {
@@ -564,35 +564,35 @@ impl KademliaEngine {
             },
             
             _ => {
-                debug!("Message DHT non géré: {:?}", message);
+                debug!("Message DHT non managed: {:?}", message);
             }
         }
     }
     
-    /// Boucle de maintenance périodique
+    /// Boucle de maintenance periodic
     async fn maintenance_loop(&self) {
         let mut interval = interval(self.config.maintenance_interval);
         
         loop {
             interval.tick().await;
             
-            // Nettoie les nœuds stale
+            // Clean up stale nodes
             let removed = {
                 let mut table = self.routing_table.write().await;
                 table.maintenance()
             };
             
             if removed > 0 {
-                debug!("Maintenance DHT: {} nœuds stale supprimés", removed);
+                debug!("Maintenance DHT: {} nodes stale removeds", removed);
             }
             
-            // Nettoie les valeurs expirées
+            // Clean up expired values
             {
                 let mut storage = self.local_storage.write().await;
                 storage.retain(|_, value| !value.is_expired());
             }
             
-            // Nettoie les requêtes timeout
+            // Clean up timed-out requests
             {
                 let mut pending = self.pending_requests.write().await;
                 let timeout_threshold = Instant::now() - self.config.request_timeout;
@@ -603,7 +603,7 @@ impl KademliaEngine {
         }
     }
     
-    /// Retourne des statistiques du moteur DHT
+    /// Returns DHT engine statistics
     pub async fn stats(&self) -> KademliaStats {
         let table_stats = self.routing_table.read().await.stats();
         let storage_count = self.local_storage.read().await.len();
@@ -619,7 +619,7 @@ impl KademliaEngine {
     }
 }
 
-/// Statistiques du moteur Kademlia
+/// Kademlia engine statistics
 #[derive(Debug, Clone)]
 pub struct KademliaStats {
     pub table_stats: super::kademlia::RoutingTableStats,
@@ -631,7 +631,7 @@ pub struct KademliaStats {
 impl std::fmt::Display for KademliaStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, 
-            "DHT Kademlia: {}, {} valeurs stockées, {} requêtes pendantes, bootstrap: {}",
+            "DHT Kademlia: {}, {} valeurs stored, {} requests pendantes, bootstrap: {}",
             self.table_stats, self.storage_count, self.pending_requests, self.is_bootstrapped
         )
     }

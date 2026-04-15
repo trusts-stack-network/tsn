@@ -1,9 +1,9 @@
-// Il semble qu'il y ait un problème avec un délimiteur non fermé
-// Vérifions les délimiteurs dans le fichier
+// Il semble qu'il y ait a problem with a delimiter non closed
+// Let's verify the delimiters in the file
 
-// Supposons que nous ayons un commentaire multiligne qui n'est pas fermé
+// Supposons que nous ayons a commentaire multiligne that n'est pas closed
 // /*
-// Nous devons fermer ce commentaire
+// Nous devons close this commentaire
 // */
 
-// Corrigeons le code en fermant le commentaire ou en supprimant les lignes inutiles
+// Corrigeons the code in fermant the commentaire or in supprimant the lignes inutiles

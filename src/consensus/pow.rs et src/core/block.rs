@@ -1,16 +1,16 @@
-// Assurez-vous que tous les fichiers Rust sont correctement écrits et compilés.
-// Si l'erreur ne se trouve pas dans transaction.rs, il est possible qu'elle se trouve
-// dans un autre fichier, comme pow.rs ou block.rs. Vérifiez ces fichiers pour
-// vous assurer qu'il n'y a pas d'erreurs de syntaxe ou de délimiteurs non fermés.
+// Assurez-vous que all files Rust are correctly writtens and compiled.
+// If the error is not in transaction.rs, it may be found
+// in another file, like pow.rs or block.rs. Check those files for
+// vous assurer qu'il n'y a pas d'errors de syntaxe or de delimiters non closeds.
 
-// Exemple de vérification dans pow.rs :
+// Example verification in pow.rs:
 fn proof_of_work() {
-    // Code de la preuve de travail
-    // Assurez-vous que toutes les fonctions et les blocs de code soient correctement fermés.
+    // Code de the preuve de travail
+    // Assurez-vous que all fonctions and the blocs de code soient correctly closeds.
 }
 
-// Exemple de vérification dans block.rs :
+// Example verification in block.rs:
 fn block_validation() {
-    // Code de validation du bloc
-    // Vérifiez que tous les champs du bloc soient correctement définis et initialisés.
+    // Code de validation of the bloc
+    // Verify que all fields of the bloc soient correctly defineds and initializeds.
 }

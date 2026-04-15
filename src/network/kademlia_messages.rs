@@ -1,19 +1,19 @@
-//! Messages du protocole DHT Kademlia pour TSN
+//! Kademlia DHT protocol messages for TSN
 //! 
-//! Implémente les 4 opérations principales de Kademlia :
-//! - PING : vérifier si un nœud est vivant
-//! - FIND_NODE : trouver les K nœuds les plus proches d'une cible
-//! - FIND_VALUE : chercher une valeur stockée dans la DHT
-//! - STORE : stocker une paire clé-valeur
+//! Implements the 4 main Kademlia operations:
+//! - PING: verify if a node is alive
+//! - FIND_NODE: find the K closest nodes to a target
+//! - FIND_VALUE: search for a value stored in the DHT
+//! - STORE: store a key-value pair
 
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use super::kademlia::{NodeId, KademliaNode};
 
-/// Identifiant unique pour les requêtes/réponses
+/// Unique identifier for requests/responses
 pub type RequestId = [u8; 8];
 
-/// Génère un ID de requête aléatoire
+/// Generates a ID de request random
 pub fn generate_request_id() -> RequestId {
     use rand::RngCore;
     let mut id = [0u8; 8];
@@ -24,14 +24,14 @@ pub fn generate_request_id() -> RequestId {
 /// Types de messages DHT Kademlia
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum KademliaMessage {
-    /// Ping : test de connectivité
+    /// Ping : test de connectivity
     Ping {
         request_id: RequestId,
         sender_id: NodeId,
         timestamp: u64,
     },
     
-    /// Pong : réponse au ping
+    /// Pong: response to ping
     Pong {
         request_id: RequestId,
         sender_id: NodeId,
@@ -39,7 +39,7 @@ pub enum KademliaMessage {
         uptime_secs: u64,
     },
     
-    /// FIND_NODE : chercher les K nœuds les plus proches d'une cible
+    /// FIND_NODE: find the K closest nodes to a target
     FindNode {
         request_id: RequestId,
         sender_id: NodeId,
@@ -47,7 +47,7 @@ pub enum KademliaMessage {
         timestamp: u64,
     },
     
-    /// Réponse à FIND_NODE avec liste de nœuds
+    /// Response to FIND_NODE with node list
     FoundNodes {
         request_id: RequestId,
         sender_id: NodeId,
@@ -55,7 +55,7 @@ pub enum KademliaMessage {
         timestamp: u64,
     },
     
-    /// FIND_VALUE : chercher une valeur dans la DHT
+    /// FIND_VALUE: search for a value in the DHT
     FindValue {
         request_id: RequestId,
         sender_id: NodeId,
@@ -63,7 +63,7 @@ pub enum KademliaMessage {
         timestamp: u64,
     },
     
-    /// Réponse à FIND_VALUE : soit la valeur, soit des nœuds plus proches
+    /// Response to FIND_VALUE: either the value or closer nodes
     FoundValue {
         request_id: RequestId,
         sender_id: NodeId,
@@ -71,7 +71,7 @@ pub enum KademliaMessage {
         timestamp: u64,
     },
     
-    /// STORE : stocker une paire clé-valeur
+    /// STORE: store a key-value pair
     Store {
         request_id: RequestId,
         sender_id: NodeId,
@@ -81,7 +81,7 @@ pub enum KademliaMessage {
         timestamp: u64,
     },
     
-    /// Réponse au STORE
+    /// Response to STORE
     StoreAck {
         request_id: RequestId,
         sender_id: NodeId,
@@ -92,7 +92,7 @@ pub enum KademliaMessage {
 }
 
 impl KademliaMessage {
-    /// Retourne l'ID de la requête pour matching requête/réponse
+    /// Returns the request ID for request/response matching
     pub fn request_id(&self) -> RequestId {
         match self {
             KademliaMessage::Ping { request_id, .. } => *request_id,
@@ -106,7 +106,7 @@ impl KademliaMessage {
         }
     }
     
-    /// Retourne l'ID du nœud expéditeur
+    /// Returns the sender node ID
     pub fn sender_id(&self) -> NodeId {
         match self {
             KademliaMessage::Ping { sender_id, .. } => *sender_id,
@@ -120,7 +120,7 @@ impl KademliaMessage {
         }
     }
     
-    /// Vérifie si c'est une requête (nécessite une réponse)
+    /// Checks if this is a request (requires a response)
     pub fn is_request(&self) -> bool {
         matches!(self,
             KademliaMessage::Ping { .. } |
@@ -130,7 +130,7 @@ impl KademliaMessage {
         )
     }
     
-    /// Génère un timestamp actuel
+    /// Generates a timestamp actuel
     pub fn current_timestamp() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -139,7 +139,7 @@ impl KademliaMessage {
     }
 }
 
-/// Contact compact pour les réponses FIND_NODE
+/// Compact contact for FIND_NODE responses
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KademliaContact {
     pub id: NodeId,
@@ -166,16 +166,16 @@ impl From<KademliaContact> for KademliaNode {
     }
 }
 
-/// Clé DHT : hash SHA-1 de 160 bits (compatible avec NodeId)
+/// DHT key: 160-bit SHA-1 hash (compatible with NodeId)
 pub type DhtKey = [u8; 20];
 
-/// Valeur DHT : données arbitraires avec métadonnées
+/// DHT value: arbitrary data with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DhtValue {
     pub data: Vec<u8>,
-    pub stored_at: u64,    // timestamp du stockage
-    pub ttl_secs: u64,     // durée de vie
-    pub publisher_id: NodeId, // qui a publié cette valeur
+    pub stored_at: u64,    // storage timestamp
+    pub ttl_secs: u64,     // duration de vie
+    pub publisher_id: NodeId, // who published this value
 }
 
 impl DhtValue {
@@ -188,13 +188,13 @@ impl DhtValue {
         }
     }
     
-    /// Vérifie si la valeur a expiré
+    /// Checks if the value has expired
     pub fn is_expired(&self) -> bool {
         let now = KademliaMessage::current_timestamp();
         now > self.stored_at + self.ttl_secs
     }
     
-    /// Temps restant avant expiration
+    /// Time remaining before expiration
     pub fn time_to_expiry(&self) -> Option<u64> {
         let now = KademliaMessage::current_timestamp();
         let expiry = self.stored_at + self.ttl_secs;
@@ -206,25 +206,25 @@ impl DhtValue {
     }
 }
 
-/// Résultat d'une requête FIND_VALUE
+/// Result of a FIND_VALUE request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FindValueResult {
-    /// Valeur trouvée
+    /// Valeur founde
     Value(DhtValue),
-    /// Valeur non trouvée, mais voici des nœuds plus proches
+    /// Value not found, but here are closer nodes
     CloserNodes(Vec<KademliaContact>),
 }
 
-/// Configuration pour les messages DHT
+/// Configuration for DHT messages
 #[derive(Debug, Clone)]
 pub struct DhtConfig {
-    /// Taille maximale d'un message DHT (en bytes)
+    /// Size maximale d'un message DHT (in bytes)
     pub max_message_size: usize,
-    /// TTL par défaut pour les valeurs stockées
+    /// Default TTL for stored values
     pub default_value_ttl: u64,
-    /// Nombre max de contacts dans une réponse FIND_NODE
+    /// Maximum contacts in a FIND_NODE response
     pub max_contacts_per_response: usize,
-    /// Timeout pour les requêtes DHT
+    /// Timeout for DHT requests
     pub request_timeout: std::time::Duration,
 }
 
@@ -239,7 +239,7 @@ impl Default for DhtConfig {
     }
 }
 
-/// Helpers pour créer les messages Kademlia
+/// Helpers for creating Kademlia messages
 pub mod builders {
     use super::*;
     
@@ -318,28 +318,28 @@ pub mod builders {
     }
 }
 
-/// Erreurs spécifiques à la DHT
+/// Errors specific to the DHT
 #[derive(Debug, thiserror::Error)]
 pub enum DhtError {
-    #[error("Timeout de requête DHT")]
+    #[error("Timeout de request DHT")]
     RequestTimeout,
     
     #[error("Message DHT trop large: {size} > {max}")]
     MessageTooLarge { size: usize, max: usize },
     
-    #[error("Clé DHT invalide: {0}")]
+    #[error("Key DHT invalid: {0}")]
     InvalidKey(String),
     
-    #[error("Valeur DHT expirée")]
+    #[error("Valeur DHT expired")]
     ValueExpired,
     
     #[error("Stockage DHT plein")]
     StorageFull,
     
-    #[error("Nœud inaccessible: {0}")]
+    #[error("Node inaccessible: {0}")]
     NodeUnreachable(NodeId),
     
-    #[error("Sérialisation échouée: {0}")]
+    #[error("Serialization failed: {0}")]
     SerializationError(String),
 }
 

@@ -1,5 +1,5 @@
-//! Consensus post-quantique avec support SLH-DSA et ML-DSA-65
-//! Gère la validation des signatures et la transition entre algorithmes
+//! Post-quantum consensus with SLH-DSA and ML-DSA-65 support
+//! Handles the validation of signatures and the transition entre algorithmes
 
 use crate::crypto::pq::{slh_dsa, ml_dsa};
 use crate::core::{Block, Transaction, ValidationError};
@@ -14,14 +14,14 @@ pub enum SignatureAlgorithm {
     SlhDsaSha2_128s,
     /// SLH-DSA-SHA2-128F - variante plus rapide
     SlhDsaSha2_128f,
-    /// SLH-DSA-SHA2-192S - niveau de sécurité NIST 3
+    /// SLH-DSA-SHA2-192S - niveau de security NIST 3
     SlhDsaSha2_192s,
-    /// SLH-DSA-SHA2-256S - niveau de sécurité maximal
+    /// SLH-DSA-SHA2-256S - niveau de security maximal
     SlhDsaSha2_256s,
 }
 
 impl SignatureAlgorithm {
-    /// Renvoie true si l'algorithme est considéré comme "moderne" (SLH-DSA)
+    /// Rsendinge true if l'algorithme is considered like "moderne" (SLH-DSA)
     pub fn is_modern(&self) -> bool {
         matches!(self, 
             SignatureAlgorithm::SlhDsaSha2_128s |
@@ -31,7 +31,7 @@ impl SignatureAlgorithm {
         )
     }
 
-    /// Renvoie la taille de signature en octets
+    /// Renvoie the size de signature in octets
     pub fn signature_size(&self) -> usize {
         match self {
             SignatureAlgorithm::MlDsa65 => ml_dsa::SIGNATURE_SIZE,
@@ -42,7 +42,7 @@ impl SignatureAlgorithm {
         }
     }
 
-    /// Renvoie la taille de clé publique en octets
+    /// Renvoie the size de key publique in octets
     pub fn public_key_size(&self) -> usize {
         match self {
             SignatureAlgorithm::MlDsa65 => ml_dsa::PUBLIC_KEY_SIZE,
@@ -56,31 +56,31 @@ impl SignatureAlgorithm {
 
 #[derive(Debug, Error)]
 pub enum ConsensusError {
-    #[error("Signature invalide: {0}")]
+    #[error("Invalid signature: {0}")]
     InvalidSignature(String),
-    #[error("Algorithme de signature non supporté: {0:?}")]
+    #[error("Algorithme de signature non supported: {0:?}")]
     UnsupportedAlgorithm(SignatureAlgorithm),
-    #[error("Transition d'algorithme invalide")]
+    #[error("Transition d'algorithme invalid")]
     InvalidAlgorithmTransition,
-    #[error("Bloc mal formé: {0}")]
+    #[error("Malformed block: {0}")]
     MalformedBlock(String),
 }
 
-/// Configuration du consensus pour la gestion des transitions d'algorithmes
+/// Configuration of the consensus for the gestion of transitions d'algorithmes
 #[derive(Debug, Clone)]
 pub struct PqConsensusConfig {
-    /// Hauteur de bloc à partir de laquelle SLH-DSA devient obligatoire
+    /// Block height from which SLH-DSA becomes mandatory
     pub slh_dsa_activation_height: u64,
-    /// Algorithme par défaut pour les nouveaux blocs
+    /// Algorithme by default for the nouveaux blocs
     pub default_algorithm: SignatureAlgorithm,
-    /// Période de grâce pour la transition (en blocs)
+    /// Period de thanks to for the transition (en blocs)
     pub transition_period: u64,
 }
 
 impl Default for PqConsensusConfig {
     fn default() -> Self {
         Self {
-            slh_dsa_activation_height: u64::MAX, // Pas encore activé par défaut
+            slh_dsa_activation_height: u64::MAX, // Pas encore enabled by default
             default_algorithm: SignatureAlgorithm::MlDsa65,
             transition_period: 10080, // ~1 semaine de blocs
         }
@@ -97,7 +97,7 @@ impl PqConsensusValidator {
         Self { config }
     }
 
-    /// Valide une signature selon l'algorithme spécifié
+    /// Validates a signature selon l'algorithme specified
     pub fn validate_signature(
         &self,
         message: &[u8],
@@ -129,21 +129,21 @@ impl PqConsensusValidator {
         }
     }
 
-    /// Détermine l'algorithme de signature attendu pour un bloc donné
+    /// Determines l'algorithme de signature attendu for a bloc given
     pub fn expected_algorithm(&self, block_height: u64) -> SignatureAlgorithm {
         if block_height >= self.config.slh_dsa_activation_height {
-            // Après l'activation, SLH-DSA devient obligatoire
+            // After l'activation, SLH-DSA devient obligatoire
             SignatureAlgorithm::SlhDsaSha2_128s
         } else if block_height >= self.config.slh_dsa_activation_height.saturating_sub(self.config.transition_period) {
-            // Pendant la période de transition, ML-DSA est toujours accepté
+            // Pendant the period de transition, ML-DSA is toujours acceptsd
             SignatureAlgorithm::MlDsa65
         } else {
-            // Avant la transition, ML-DSA par défaut
+            // Before the transition, ML-DSA by default
             self.config.default_algorithm
         }
     }
 
-    /// Valide la signature d'un bloc
+    /// Validates the signature d'un bloc
     pub fn validate_block_signature(
         &self,
         block: &Block,
@@ -153,16 +153,16 @@ impl PqConsensusValidator {
     ) -> Result<(), ConsensusError> {
         let expected = self.expected_algorithm(block.height);
         
-        // Vérifie la compatibilité de l'algorithme
+        // Verify the compatibility de l'algorithme
         if !self.is_algorithm_allowed(block.height, algorithm) {
             return Err(ConsensusError::InvalidAlgorithmTransition);
         }
 
-        // Sérialise le bloc pour la vérification
+        // Serializes the bloc for the verification
         let block_hash = block.hash()
             .map_err(|e| ConsensusError::MalformedBlock(e.to_string()))?;
 
-        // Valide la signature
+        // Validates the signature
         let is_valid = self.validate_signature(
             &block_hash,
             signature,
@@ -172,30 +172,30 @@ impl PqConsensusValidator {
 
         if !is_valid {
             return Err(ConsensusError::InvalidSignature(
-                format!("Signature invalide pour le bloc {}", block.height)
+                format!("Signature invalid pour le bloc {}", block.height)
             ));
         }
 
         Ok(())
     }
 
-    /// Vérifie si un algorithme est autorisé à une hauteur donnée
+    /// Checks if a algorithme is authorized to a height data
     fn is_algorithm_allowed(&self, height: u64, algorithm: SignatureAlgorithm) -> bool {
         let expected = self.expected_algorithm(height);
         
         match height.cmp(&self.config.slh_dsa_activation_height) {
             std::cmp::Ordering::Less => {
-                // Avant l'activation : ML-DSA uniquement
+                // Before activation: ML-DSA only
                 algorithm == SignatureAlgorithm::MlDsa65
             }
             std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
-                // Après l'activation : SLH-DSA uniquement
+                // After l'activation : SLH-DSA only
                 algorithm.is_modern()
             }
         }
     }
 
-    /// Valide la signature d'une transaction
+    /// Validates a transaction's signature
     pub fn validate_transaction_signature(
         &self,
         tx: &Transaction,

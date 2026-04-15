@@ -1,12 +1,12 @@
-//! Implémentation sécurisée utilisant subtle et primitives modernes
+//! Implementation secure utilisant subtle and primitives modernes
 //!
-//! SECURITY: Ce module remplace toutes les opérations cryptographiques
-//! potentiellement dangereuses par des versions sécurisées:
-//! - Pas de unwrap() dans les fonctions de chiffrement/déchiffrement
-//! - Comparaison en temps constant pour éviter les attaques par timing
-//! - Gestion d'erreurs explicite pour tous les cas limites
+//! SECURITY: This module replaces all cryptographic operations
+//! potentiellement dangereuses par of versions secure:
+//! - Pas de unwrap() in the fonctions de encryption/decryption
+//! - Comparaison in temps constant for avoidr the attaques par timing
+//! - Explicit error handling for all edge cases
 //!
-//! Toutes les fonctions retournent Result au lieu de paniquer.
+//! Toutes the fonctions retournent Result instead of paniquer.
 
 use subtle::ConstantTimeEq;
 use rand::RngCore;

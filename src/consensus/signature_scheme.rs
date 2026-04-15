@@ -1,5 +1,5 @@
-//! Abstraction des schémas de signature post-quantique
-//! Support ML-DSA-65 (legacy) et SLH-DSA (nouveau) avec gouvernance configurable
+//! Post-quantum signature scheme abstraction
+//! Support for ML-DSA-65 (legacy) and SLH-DSA (new) with configurable governance
 
 use crate::crypto::pq::slh_dsa::{SlhDsaPublicKey, SlhDsaSecretKey, SlhDsaSignature};
 use crate::crypto::pq::mldsa65::{Mldsa65PublicKey, Mldsa65SecretKey, Mldsa65Signature};
@@ -12,33 +12,33 @@ use thiserror::Error;
 pub enum SignatureVersion {
     /// ML-DSA-65 (FIPS 204) - version legacy
     V1Mldsa65,
-    /// SLH-DSA (FIPS 205) - version actuelle
+    /// SLH-DSA (FIPS 205) - current version
     V2SlhDsa,
 }
 
 impl SignatureVersion {
-    /// Version actuelle recommandée
+    /// Version current recommended
     pub fn current() -> Self {
         Self::V2SlhDsa
     }
     
-    /// Versions acceptées lors de la période de transition (avec gouvernance)
+    /// Accepted versions during the transition period (with governance)
     pub fn is_accepted_during_transition(&self, block_height: u64, governance_config: &GovernanceConfig) -> bool {
         match self {
-            Self::V2SlhDsa => true, // Toujours accepté
+            Self::V2SlhDsa => true, // Toujours accepted
             Self::V1Mldsa65 => {
-                // Période de transition configurable via gouvernance
+                // Period de transition configurable via governance
                 block_height < governance_config.signature_transition_period
             }
         }
     }
     
-    /// Version legacy pour compatibilité (utilise la valeur hardcodée)
+    /// Legacy version for compatibility (uses hardcoded value)
     #[deprecated(note = "Utiliser is_accepted_during_transition avec GovernanceConfig")]
     pub fn is_accepted_during_transition_legacy(&self, block_height: u64) -> bool {
         match self {
             Self::V2SlhDsa => true,
-            Self::V1Mldsa65 => block_height < 10_000, // Valeur hardcodée legacy
+            Self::V1Mldsa65 => block_height < 10_000, // Valeur hardcoded legacy
         }
     }
 }
@@ -57,41 +57,41 @@ pub enum Signature {
 
 #[derive(Error, Debug)]
 pub enum SignatureError {
-    #[error("Signature invalide")]
+    #[error("Signature invalid")]
     InvalidSignature,
-    #[error("Version non supportée: {0:?}")]
+    #[error("Version non supported: {0:?}")]
     UnsupportedVersion(SignatureVersion),
-    #[error("Clé publique incompatible avec la version")]
+    #[error("Key publique incompatible avec la version")]
     IncompatibleKeyVersion,
-    #[error("Signature expirée pour cette hauteur de bloc")]
+    #[error("Signature expired pour cette hauteur de bloc")]
     ExpiredSignatureVersion,
-    #[error("Erreur de gouvernance: {0}")]
+    #[error("Governance error: {0}")]
     GovernanceError(String),
 }
 
-/// Gestionnaire de schémas de signature avec gouvernance intégrée
+/// Signature scheme manager with integrated governance
 #[derive(Debug)]
 pub struct SignatureSchemeManager {
-    /// Gestionnaire de gouvernance
+    /// Gestionnaire de governance
     governance: Arc<RwLock<GovernanceManager>>,
 }
 
 impl SignatureSchemeManager {
-    /// Crée un nouveau gestionnaire avec gouvernance
+    /// Creates a new manager with governance
     pub fn new() -> Self {
         Self {
             governance: Arc::new(RwLock::new(GovernanceManager::new())),
         }
     }
 
-    /// Crée un gestionnaire avec une configuration de gouvernance existante
+    /// Creates a manager with an existing governance configuration
     pub fn with_governance(governance: GovernanceManager) -> Self {
         Self {
             governance: Arc::new(RwLock::new(governance)),
         }
     }
 
-    /// Vérifie si une version de signature est acceptée à une hauteur donnée
+    /// Checks if a version de signature is acceptsde to a height data
     pub fn is_version_accepted(&self, version: SignatureVersion, block_height: u64) -> Result<bool, SignatureError> {
         let governance = self.governance.read()
             .map_err(|e| SignatureError::GovernanceError(format!("Lock error: {}", e)))?;
@@ -100,7 +100,7 @@ impl SignatureSchemeManager {
         Ok(version.is_accepted_during_transition(block_height, config))
     }
 
-    /// Retourne la configuration de gouvernance actuelle
+    /// Returns the current governance configuration
     pub fn get_governance_config(&self) -> Result<GovernanceConfig, SignatureError> {
         let governance = self.governance.read()
             .map_err(|e| SignatureError::GovernanceError(format!("Lock error: {}", e)))?;
@@ -108,12 +108,12 @@ impl SignatureSchemeManager {
         Ok(governance.get_config().clone())
     }
 
-    /// Accès au gestionnaire de gouvernance (lecture seule)
+    /// Access to governance manager (read only)
     pub fn governance_manager(&self) -> Arc<RwLock<GovernanceManager>> {
         self.governance.clone()
     }
 
-    /// Met à jour la gouvernance (nettoyage des propositions expirées)
+    /// Updates governance (cleanup of expired proposals)
     pub fn update_governance(&self, current_height: u64) -> Result<(), SignatureError> {
         let mut governance = self.governance.write()
             .map_err(|e| SignatureError::GovernanceError(format!("Lock error: {}", e)))?;
@@ -130,7 +130,7 @@ impl Default for SignatureSchemeManager {
 }
 
 impl PublicKey {
-    /// Vérifie une signature avec le gestionnaire de schémas
+    /// Verifies a signature with the manager de schemas
     pub fn verify_with_manager(
         &self, 
         message: &[u8], 
@@ -138,13 +138,13 @@ impl PublicKey {
         manager: &SignatureSchemeManager,
         block_height: u64,
     ) -> Result<(), SignatureError> {
-        // Vérification de la compatibilité version/hauteur
+        // Verification de the compatibility version/hauteur
         let version = self.version();
         if !manager.is_version_accepted(version, block_height)? {
             return Err(SignatureError::ExpiredSignatureVersion);
         }
 
-        // Vérification cryptographique standard
+        // Verification cryptographique standard
         self.verify(message, signature)
     }
 
@@ -180,7 +180,7 @@ mod tests {
     fn test_version_transition_with_governance() {
         let manager = SignatureSchemeManager::new();
         
-        // Test avec configuration par défaut (10_000 blocs)
+        // Test with default configuration (10,000 blocks)
         let version = SignatureVersion::V1Mldsa65;
         assert!(manager.is_version_accepted(version, 0).unwrap());
         assert!(manager.is_version_accepted(version, 9_999).unwrap());
@@ -196,25 +196,25 @@ mod tests {
     fn test_governance_config_modification() {
         let mut governance = GovernanceManager::new();
         
-        // Créer une proposition pour étendre la période de transition
+        // Create a proposal to extend the transition period
         let parameter = ConfigParameter::SignatureTransitionPeriod(20_000);
         let proposal_id = governance.create_proposal(parameter, 100, 1).unwrap();
         
-        // Ajouter un membre au comité et voter
+        // Add a membre at the committee and voter
         let voter_key = crate::crypto::pq::slh_dsa::SlhDsaSecretKey::generate(&mut OsRng);
         let voter_pubkey = voter_key.public_key();
         governance.add_committee_member(voter_pubkey).unwrap();
         governance.submit_vote(proposal_id, &voter_key, true, 150, 1).unwrap();
         
-        // Appliquer la proposition
+        // Appliquer the proposition
         governance.apply_proposal(proposal_id, 200).unwrap();
         
-        // Vérifier la nouvelle configuration
+        // Verify the new configuration
         let manager = SignatureSchemeManager::with_governance(governance);
         let config = manager.get_governance_config().unwrap();
         assert_eq!(config.signature_transition_period, 20_000);
         
-        // Tester la nouvelle période
+        // Tester the new period
         let version = SignatureVersion::V1Mldsa65;
         assert!(manager.is_version_accepted(version, 19_999).unwrap());
         assert!(!manager.is_version_accepted(version, 20_000).unwrap());
@@ -224,7 +224,7 @@ mod tests {
     fn test_legacy_compatibility() {
         let version = SignatureVersion::V1Mldsa65;
         
-        // Test de la méthode legacy
+        // Test de the method legacy
         #[allow(deprecated)]
         {
             assert!(version.is_accepted_during_transition_legacy(0));
@@ -245,14 +245,14 @@ mod tests {
     fn test_signature_verification_with_manager() {
         let manager = SignatureSchemeManager::new();
         
-        // Générer une clé SLH-DSA
+        // Generate a key SLH-DSA
         let secret_key = crate::crypto::pq::slh_dsa::SlhDsaSecretKey::generate(&mut OsRng);
         let public_key = PublicKey::SlhDsa(secret_key.public_key());
         
         let message = b"test message";
         let signature = Signature::SlhDsa(secret_key.sign(message));
         
-        // Vérification avec le gestionnaire (SLH-DSA toujours accepté)
+        // Verification with the gestionnaire (SLH-DSA toujours accepted)
         assert!(public_key.verify_with_manager(message, &signature, &manager, 0).is_ok());
         assert!(public_key.verify_with_manager(message, &signature, &manager, 100_000).is_ok());
     }
@@ -261,10 +261,10 @@ mod tests {
     fn test_governance_update() {
         let manager = SignatureSchemeManager::new();
         
-        // Test de mise à jour (nettoyage)
+        // Test de update (cleanup)
         assert!(manager.update_governance(1000).is_ok());
         
-        // Vérifier que la configuration est toujours accessible
+        // Verify que the configuration is toujours accessible
         let config = manager.get_governance_config().unwrap();
         assert_eq!(config.signature_transition_period, 10_000);
     }

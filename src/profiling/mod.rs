@@ -1,20 +1,20 @@
-//! Module de profiling intégré pour diagnostics TSN
+//! Module de profiling integrated for diagnostics TSN
 //!
-//! Ce module fournit des métriques détaillées sur les performances des
-//! opérations critiques : signature/vérification crypto, sérialisation,
-//! requêtes DB. Les métriques sont exportées via Prometheus.
+//! This module provides metrics detailed on the performances des
+//! operations critiques : signature/verification crypto, serialization,
+//! requests DB. Les metrics are exported via Prometheus.
 //!
-//! ## Utilisation
+//! ## Usage
 //!
 //! ```rust
 //! use tsn::profiling::{profile_crypto_op, profile_db_op, profile_serde_op};
 //!
-//! // Profiler une opération crypto
+//! // Profiler a operation crypto
 //! let result = profile_crypto_op("sign", || {
 //!     sign_message(message, keypair)
 //! });
 //!
-//! // Profiler une requête DB
+//! // Profiler a request DB
 //! let block = profile_db_op("load_block", || {
 //!     db.load_block(&hash)
 //! });
@@ -38,41 +38,41 @@ pub use instrumentation::{
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Version du module de profiling
+/// Version of the module de profiling
 pub const PROFILING_VERSION: &str = "1.0.0";
 
-/// Active ou désactive le profiling globalement
+/// Enable or disable profiling globally
 static PROFILING_ENABLED: AtomicU64 = AtomicU64::new(1);
 
-/// Seuil minimum pour logger un avertissement (en millisecondes)
+/// Seuil minimum for logger a avertissement (in milliseconds)
 static SLOW_OP_THRESHOLD_MS: AtomicU64 = AtomicU64::new(100);
 
-/// Vérifie si le profiling est activé
+/// Checks if the profiling is enabled
 pub fn is_profiling_enabled() -> bool {
     PROFILING_ENABLED.load(Ordering::Relaxed) != 0
 }
 
-/// Active le profiling
+/// Active the profiling
 pub fn enable_profiling() {
     PROFILING_ENABLED.store(1, Ordering::Relaxed);
 }
 
-/// Désactive le profiling
+/// Disables the profiling
 pub fn disable_profiling() {
     PROFILING_ENABLED.store(0, Ordering::Relaxed);
 }
 
-/// Définit le seuil d'avertissement pour les opérations lentes (en ms)
+/// Defines the seuil d'avertissement for the operations lentes (en ms)
 pub fn set_slow_threshold_ms(threshold: u64) {
     SLOW_OP_THRESHOLD_MS.store(threshold, Ordering::Relaxed);
 }
 
-/// Récupère le seuil d'avertissement actuel
+/// Retrieves the seuil d'avertissement actuel
 pub fn get_slow_threshold_ms() -> u64 {
     SLOW_OP_THRESHOLD_MS.load(Ordering::Relaxed)
 }
 
-/// Structure pour mesurer la durée d'une opération
+/// Structure for mesurer the duration d'une operation
 pub struct OperationTimer {
     start: Instant,
     name: String,
@@ -89,7 +89,7 @@ pub enum OperationCategory {
 }
 
 impl OperationTimer {
-    /// Crée un nouveau timer
+    /// Creates a new timer
     pub fn new(name: impl Into<String>, category: OperationCategory) -> Self {
         Self {
             start: Instant::now(),
@@ -98,14 +98,14 @@ impl OperationTimer {
         }
     }
     
-    /// Arrête le timer et enregistre la métrique
+    /// Stoppinge the timer and records the metric
     pub fn stop(self) -> Duration {
         let duration = self.start.elapsed();
         
         if is_profiling_enabled() {
             record_duration(self.category, &self.name, duration);
             
-            // Vérifier si l'opération est lente
+            // Verify if l'operation is lente
             let threshold = Duration::from_millis(get_slow_threshold_ms());
             if duration > threshold {
                 tracing::warn!(
@@ -113,7 +113,7 @@ impl OperationTimer {
                     category = ?self.category,
                     duration_ms = %duration.as_millis(),
                     threshold_ms = %threshold.as_millis(),
-                    "Opération lente détectée"
+                    "Operation lente detectede"
                 );
             }
         }
@@ -121,7 +121,7 @@ impl OperationTimer {
         duration
     }
     
-    /// Arrête le timer sans enregistrer (pour les erreurs)
+    /// Stops the timer without recording (for errors)
     pub fn cancel(self) -> Duration {
         self.start.elapsed()
     }
@@ -129,11 +129,11 @@ impl OperationTimer {
 
 impl Drop for OperationTimer {
     fn drop(&mut self) {
-        // Rien à faire ici, utiliser explicitement stop() ou cancel()
+        // Rien to faire ici, utiliser explicitement stop() or cancel()
     }
 }
 
-/// Enregistre une durée dans les métriques appropriées
+/// Records a duration in the metrics appropriate
 fn record_duration(category: OperationCategory, name: &str, duration: Duration) {
     let duration_secs = duration.as_secs_f64();
     
@@ -148,15 +148,15 @@ fn record_duration(category: OperationCategory, name: &str, duration: Duration) 
             metrics::SERDE_METRICS.record_operation(name, duration_secs);
         }
         OperationCategory::Consensus => {
-            // Intégré avec les métriques consensus existantes
+            // Integrated with the metrics consensus existantes
         }
         OperationCategory::Network => {
-            // Intégré avec les métriques réseau existantes
+            // Integrated with the metrics network existantes
         }
     }
 }
 
-/// Wrapper pour profiler une fonction
+/// Wrapper for profiler a fonction
 pub fn profile_fn<T, F>(name: &str, category: OperationCategory, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -167,7 +167,7 @@ where
     result
 }
 
-/// Wrapper async pour profiler une fonction async
+/// Wrapper async for profiler a fonction async
 pub async fn profile_async<T, F>(name: &str, category: OperationCategory, f: F) -> T
 where
     F: std::future::Future<Output = T>,
@@ -178,7 +178,7 @@ where
     result
 }
 
-/// Collecte toutes les métriques de profiling
+/// Collect all metrics de profiling
 pub fn collect_profiling_metrics() -> ProfilingSnapshot {
     ProfilingSnapshot {
         crypto: CRYPTO_METRICS.snapshot(),
@@ -188,7 +188,7 @@ pub fn collect_profiling_metrics() -> ProfilingSnapshot {
     }
 }
 
-/// Snapshot des métriques de profiling
+/// Snapshot of metrics de profiling
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProfilingSnapshot {
     pub crypto: metrics::CategorySnapshot,

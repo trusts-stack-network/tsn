@@ -1,7 +1,7 @@
-//! Endpoint HTTP pour exposer les métriques Prometheus
+//! HTTP endpoint for exposing Prometheus metrics
 //!
-//! Ce module fournit un serveur HTTP dédié aux métriques,
-//! séparé de l'API principale pour des raisons de sécurité.
+//! This module provides a dedicated HTTP server for metrics,
+//! separate from the main API for security reasons.
 
 use crate::metrics::collect_metrics;
 use axum::{
@@ -17,14 +17,14 @@ use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tracing::{info, error, warn};
 
-/// Configuration du serveur de métriques
+/// Metrics server configuration
 #[derive(Debug, Clone)]
 pub struct MetricsServerConfig {
-    /// Port d'écoute (défaut: 9090)
+    /// Listening port (default: 9090)
     pub port: u16,
-    /// Interface d'écoute (défaut: 127.0.0.1 pour sécurité)
+    /// Listening interface (default: 127.0.0.1 for security)
     pub bind_address: String,
-    /// Activer CORS (défaut: false)
+    /// Enable CORS (default: false)
     pub enable_cors: bool,
 }
 
@@ -42,10 +42,10 @@ impl Default for MetricsServerConfig {
     }
 }
 
-/// Paramètres de requête pour l'endpoint /metrics
+/// Request parameters for the /metrics endpoint
 #[derive(Deserialize)]
 struct MetricsQuery {
-    /// Format de sortie (prometheus, json)
+    /// Output format (prometheus, json)
     #[serde(default = "default_format")]
     format: String,
 }
@@ -54,18 +54,18 @@ fn default_format() -> String {
     "prometheus".to_string()
 }
 
-/// Serveur HTTP pour les métriques Prometheus
+/// HTTP server for Prometheus metrics
 pub struct MetricsServer {
     config: MetricsServerConfig,
 }
 
 impl MetricsServer {
-    /// Crée un nouveau serveur de métriques
+    /// Creates a new metrics server
     pub fn new(config: MetricsServerConfig) -> Self {
         Self { config }
     }
     
-    /// Démarre le serveur de métriques
+    /// Starts the metrics server
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let app = self.create_router();
         
@@ -74,7 +74,7 @@ impl MetricsServer {
         
         info!(
             bind_address = %bind_addr,
-            "Serveur de métriques TSN démarré"
+            "TSN metrics server started"
         );
         
         axum::serve(listener, app).await?;
@@ -82,14 +82,14 @@ impl MetricsServer {
         Ok(())
     }
     
-    /// Crée le routeur Axum avec tous les endpoints
+    /// Creates the Axum router with all endpoints
     fn create_router(&self) -> Router {
         let mut router = Router::new()
             .route("/metrics", get(metrics_handler))
             .route("/health", get(health_handler))
             .route("/ready", get(readiness_handler));
         
-        // Ajouter CORS si activé
+        // Add CORS if enabled
         if self.config.enable_cors {
             router = router.layer(CorsLayer::permissive());
         }
@@ -98,19 +98,19 @@ impl MetricsServer {
     }
 }
 
-/// Handler principal pour l'endpoint /metrics
+/// Main handler for the /metrics endpoint
 async fn metrics_handler(Query(params): Query<MetricsQuery>) -> Response {
     match params.format.as_str() {
         "prometheus" => prometheus_metrics_handler().await,
         "json" => json_metrics_handler().await,
         _ => (
             StatusCode::BAD_REQUEST,
-            "Format non supporté. Utilisez 'prometheus' ou 'json'"
+            "Unsupported format. Use 'prometheus' or 'json'"
         ).into_response(),
     }
 }
 
-/// Handler pour les métriques au format Prometheus
+/// Handler for Prometheus format metrics
 async fn prometheus_metrics_handler() -> Response {
     match collect_metrics() {
         Ok(metrics) => (
@@ -119,16 +119,16 @@ async fn prometheus_metrics_handler() -> Response {
             metrics
         ).into_response(),
         Err(e) => {
-            error!(error = %e, "Erreur lors de la collecte des métriques");
+            error!(error = %e, "Error collecting metrics");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Erreur lors de la collecte des métriques"
+                "Error collecting metrics"
             ).into_response()
         }
     }
 }
 
-/// Handler pour les métriques au format JSON
+/// Handler for JSON format metrics
 async fn json_metrics_handler() -> Response {
     match collect_metrics_as_json().await {
         Ok(json) => (
@@ -137,21 +137,21 @@ async fn json_metrics_handler() -> Response {
             json
         ).into_response(),
         Err(e) => {
-            error!(error = %e, "Erreur lors de la collecte des métriques JSON");
+            error!(error = %e, "Error collecting JSON metrics");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Erreur lors de la collecte des métriques JSON"
+                "Error collecting JSON metrics"
             ).into_response()
         }
     }
 }
 
-/// Collecte les métriques et les convertit en JSON
+/// Collects metrics and converts them to JSON
 async fn collect_metrics_as_json() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Collecte des métriques principales
+    // Collecting main metrics
     let mut metrics: HashMap<&str, i64> = HashMap::new();
 
-    // Métriques de validation de blocs
+    // Block validation metrics
     metrics.insert("blocks_validated_total",
         crate::metrics::CONSENSUS_METRICS.blocks_validated_total.get() as i64);
     metrics.insert("blocks_rejected_total",
@@ -159,7 +159,7 @@ async fn collect_metrics_as_json() -> Result<String, Box<dyn std::error::Error +
     metrics.insert("blocks_validating_current",
         crate::metrics::CONSENSUS_METRICS.blocks_validating_current.get());
 
-    // Métriques de chaîne
+    // Chain metrics
     metrics.insert("chain_height",
         crate::metrics::CONSENSUS_METRICS.chain_height.get());
     metrics.insert("chain_reorgs_total",
@@ -169,17 +169,17 @@ async fn collect_metrics_as_json() -> Result<String, Box<dyn std::error::Error +
     metrics.insert("orphan_blocks_count",
         crate::metrics::CONSENSUS_METRICS.orphan_blocks_count.get());
 
-    // Métriques PoW
+    // PoW metrics
     metrics.insert("pow_validation_failures",
         crate::metrics::CONSENSUS_METRICS.pow_validation_failures.get() as i64);
 
-    // Métriques critiques pour le debug
+    // Critical metrics for debugging
     metrics.insert("invalid_commitment_root_errors",
         crate::metrics::CONSENSUS_METRICS.invalid_commitment_root_errors.get() as i64);
     metrics.insert("zk_proofs_validated_total",
         crate::metrics::CONSENSUS_METRICS.zk_proofs_validated_total.get() as i64);
 
-    // Métriques de performance
+    // Performance metrics
     metrics.insert("mempool_size",
         crate::metrics::CONSENSUS_METRICS.mempool_size.get());
     
@@ -192,7 +192,7 @@ async fn collect_metrics_as_json() -> Result<String, Box<dyn std::error::Error +
     Ok(serde_json::to_string_pretty(&json_response)?)
 }
 
-/// Handler pour le health check
+/// Handler for the health check
 async fn health_handler() -> Response {
     let health_status = serde_json::json!({
         "status": "healthy",
@@ -207,9 +207,9 @@ async fn health_handler() -> Response {
     ).into_response()
 }
 
-/// Handler pour le readiness check
+/// Handler for the readiness check
 async fn readiness_handler() -> Response {
-    // Vérifier que les métriques sont collectables
+    // Verify that metrics are collectable
     match collect_metrics() {
         Ok(_) => {
             let ready_status = serde_json::json!({
@@ -247,7 +247,7 @@ async fn readiness_handler() -> Response {
     }
 }
 
-/// Démarre le serveur de métriques en arrière-plan
+/// Starts the metrics server in background
 pub async fn start_metrics_server(
     config: MetricsServerConfig
 ) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error + Send + Sync>> {
@@ -255,7 +255,7 @@ pub async fn start_metrics_server(
     
     let handle = tokio::spawn(async move {
         if let Err(e) = server.start().await {
-            error!(error = %e, "Erreur du serveur de métriques");
+            error!(error = %e, "Metrics server error");
         }
     });
     

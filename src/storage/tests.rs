@@ -1,7 +1,7 @@
-//! Tests unitaires complets pour les modules storage/
+//! Comprehensive unit tests for storage modules
 //!
-//! Couvre database.rs, sled_backend.rs et faucet_store.rs avec tests d'erreur,
-//! persistence et cohérence des données lors des opérations CRUD.
+//! Covers database.rs, sled_backend.rs and faucet_store.rs with error tests,
+//! persistence and data consistency during CRUD operations.
 
 #[cfg(test)]
 mod database_tests {
@@ -14,12 +14,12 @@ mod database_tests {
     use tempfile::TempDir;
     use tokio;
 
-    /// Constantes pour les tests
+    /// Test constants
     const TEST_BLOCK_HASH_SIZE: usize = 32;
     const TEST_DIFFICULTY: u64 = 1000;
     const TEST_TIMESTAMP: u64 = 1640995200; // 1er janvier 2022
 
-    /// Crée une base de données temporaire pour les tests
+    /// Creates a temporary database for tests
     async fn create_test_database() -> (Arc<dyn Database>, TempDir) {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let db_path = temp_dir.path().join("test.db");
@@ -29,7 +29,7 @@ mod database_tests {
         (Arc::new(backend), temp_dir)
     }
 
-    /// Crée un bloc de test valide
+    /// Creates a valid test block
     fn create_test_block(height: u64, prev_hash: [u8; TEST_BLOCK_HASH_SIZE]) -> Block {
         let header = BlockHeader {
             version: 1,
@@ -38,7 +38,7 @@ mod database_tests {
             commitment_root: [1u8; TEST_BLOCK_HASH_SIZE],
             nullifier_root: [2u8; TEST_BLOCK_HASH_SIZE],
             state_root: [0u8; 32],
-            timestamp: TEST_TIMESTAMP + height * 600, // 10 minutes par bloc
+            timestamp: TEST_TIMESTAMP + height * 600, // 10 minutes per block
             difficulty: TEST_DIFFICULTY,
             nonce: height * 12345,
         };
@@ -57,7 +57,7 @@ mod database_tests {
         }
     }
 
-    /// Crée une transaction de test
+    /// Creates a test transaction
     fn create_test_transaction() -> Transaction {
         Transaction::Coinbase(CoinbaseTransaction {
             outputs: vec![],
@@ -91,7 +91,7 @@ mod database_tests {
     }
 
     #[tokio::test]
-    async fn test_get_nonexistent_block() {
+    async fn test_get_nonexistsnt_block() {
         let (db, _temp_dir) = create_test_database().await;
         let fake_id = BlockId::from_hash([99u8; TEST_BLOCK_HASH_SIZE]);
 
@@ -117,7 +117,7 @@ mod database_tests {
         let retrieved_tx = retrieved.unwrap();
         assert!(retrieved_tx.is_some(), "Transaction not found");
         
-        // Vérifier que la transaction récupérée correspond
+        // Verify the retrieved transaction matches
         match (&transaction, &retrieved_tx.unwrap()) {
             (Transaction::Coinbase(orig), Transaction::Coinbase(retrieved)) => {
                 assert_eq!(orig.fee, retrieved.fee);
@@ -128,7 +128,7 @@ mod database_tests {
     }
 
     #[tokio::test]
-    async fn test_get_nonexistent_transaction() {
+    async fn test_get_nonexistsnt_transaction() {
         let (db, _temp_dir) = create_test_database().await;
         let fake_id = TransactionId::from_hash([88u8; TEST_BLOCK_HASH_SIZE]);
 
@@ -206,7 +206,7 @@ mod database_tests {
     async fn test_concurrent_operations() {
         let (db, _temp_dir) = create_test_database().await;
         
-        // Créer plusieurs tâches concurrentes
+        // Create multiple concurrent tasks
         let mut handles = vec![];
         
         for i in 0..10 {
@@ -215,7 +215,7 @@ mod database_tests {
                 let block = create_test_block(i, [i as u8; TEST_BLOCK_HASH_SIZE]);
                 let block_id = BlockId::from_hash(block.header.hash());
                 
-                // Store et retrieve en parallèle
+                // Store and retrieve in parallel
                 let store_result = db_clone.store_block(&block_id, &block).await;
                 assert!(store_result.is_ok(), "Concurrent store failed for block {}", i);
                 
@@ -226,7 +226,7 @@ mod database_tests {
             handles.push(handle);
         }
         
-        // Attendre que toutes les tâches se terminent
+        // Wait for all tasks to complete
         for handle in handles {
             handle.await.expect("Concurrent task failed");
         }
@@ -256,7 +256,7 @@ mod sled_backend_tests {
 
     #[tokio::test]
     async fn test_sled_backend_invalid_path() {
-        // Tenter de créer une base avec un chemin invalide
+        // Try to create a database with an invalid path
         let result = SledBackend::new("/invalid/path/that/does/not/exist").await;
         assert!(result.is_err(), "Should fail with invalid path");
     }
@@ -271,7 +271,7 @@ mod sled_backend_tests {
             .expect("Failed to create backend");
         let db: Arc<dyn Database> = Arc::new(backend);
 
-        // Créer un bloc avec des données spécifiques pour tester la sérialisation
+        // Create a block with specific data to test serialization
         let header = BlockHeader {
             version: 42,
             prev_hash: [0xABu8; TEST_BLOCK_HASH_SIZE],
@@ -288,7 +288,7 @@ mod sled_backend_tests {
             outputs: vec![],
             fee: 5000,
             signature: Signature::default(),
-            public_key: vec![0x42u8; 64], // Clé plus longue pour tester
+            public_key: vec![0x42u8; 64], // Longer key for testing
         };
 
         let block = Block {
@@ -299,7 +299,7 @@ mod sled_backend_tests {
 
         let block_id = BlockId::from_hash(block.header.hash());
 
-        // Store et retrieve
+        // Store and retrieve
         let store_result = db.store_block(&block_id, &block).await;
         assert!(store_result.is_ok(), "Failed to store block with specific data");
 
@@ -308,7 +308,7 @@ mod sled_backend_tests {
         
         let retrieved_block = retrieved.unwrap().unwrap();
         
-        // Vérifier que tous les champs sont correctement sérialisés/désérialisés
+        // Verify all fields are correctly serialized/deserialized
         assert_eq!(retrieved_block.header.version, 42);
         assert_eq!(retrieved_block.header.prev_hash, [0xABu8; TEST_BLOCK_HASH_SIZE]);
         assert_eq!(retrieved_block.header.merkle_root, [0xCDu8; TEST_BLOCK_HASH_SIZE]);
@@ -332,8 +332,8 @@ mod sled_backend_tests {
             .expect("Failed to create backend");
         let db: Arc<dyn Database> = Arc::new(backend);
 
-        // Créer un bloc avec une grande clé publique pour tester les limites
-        let large_public_key = vec![0xFFu8; 10000]; // 10KB de données
+        // Create a block with a large public key to test limits
+        let large_public_key = vec![0xFFu8; 10000]; // 10KB of data
         
         let header = BlockHeader {
             version: 1,
@@ -362,7 +362,7 @@ mod sled_backend_tests {
 
         let block_id = BlockId::from_hash(block.header.hash());
 
-        // Test que Sled peut gérer de grandes données
+        // Test that Sled can handle large data
         let store_result = db.store_block(&block_id, &block).await;
         assert!(store_result.is_ok(), "Failed to store block with large data");
 
@@ -382,12 +382,12 @@ mod faucet_store_tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
 
-    /// Crée une adresse de test
+    /// Creates a test address
     fn create_test_address(seed: u8) -> Address {
         Address::new([seed; 32])
     }
 
-    /// Crée un timestamp de test
+    /// Creates a test timestamp
     fn create_test_timestamp() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -417,21 +417,21 @@ mod faucet_store_tests {
         let amount = 1000000; // 1 TSN
         let timestamp = create_test_timestamp();
 
-        // Vérifier qu'aucune claim n'existe initialement
+        // Verify no claim exists initially
         let initial_check = store.has_claimed(&address).await;
         assert!(initial_check.is_ok(), "Failed to check initial claim status");
         assert!(!initial_check.unwrap(), "Address should not have claimed initially");
 
-        // Enregistrer une claim
+        // Register a claim
         let record_result = store.record_claim(&address, amount, timestamp).await;
         assert!(record_result.is_ok(), "Failed to record claim: {:?}", record_result);
 
-        // Vérifier que la claim existe maintenant
+        // Verify the claim exists now
         let post_claim_check = store.has_claimed(&address).await;
         assert!(post_claim_check.is_ok(), "Failed to check post-claim status");
         assert!(post_claim_check.unwrap(), "Address should have claimed after recording");
 
-        // Récupérer les détails de la claim
+        // Retrieve the claim details
         let claim_details = store.get_claim(&address).await;
         assert!(claim_details.is_ok(), "Failed to get claim details");
         
@@ -459,15 +459,15 @@ mod faucet_store_tests {
         let first_timestamp = create_test_timestamp();
         let second_timestamp = first_timestamp + 3600; // 1 heure plus tard
 
-        // Première claim
+        // First claim
         let first_record = store.record_claim(&address, first_amount, first_timestamp).await;
         assert!(first_record.is_ok(), "Failed to record first claim");
 
-        // Deuxième claim (devrait écraser la première)
+        // Second claim (should overwrite the first))
         let second_record = store.record_claim(&address, second_amount, second_timestamp).await;
         assert!(second_record.is_ok(), "Failed to record second claim");
 
-        // Vérifier que seule la dernière claim est conservée
+        // Verify only the last claim is kept
         let claim_details = store.get_claim(&address).await;
         assert!(claim_details.is_ok(), "Failed to get claim details");
         
@@ -493,19 +493,19 @@ mod faucet_store_tests {
         let amount2 = 2000000;
         let timestamp = create_test_timestamp();
 
-        // Enregistrer des claims pour différentes adresses
+        // Register claims for different addresses
         let record1 = store.record_claim(&address1, amount1, timestamp).await;
         assert!(record1.is_ok(), "Failed to record claim for address1");
 
         let record2 = store.record_claim(&address2, amount2, timestamp + 60).await;
         assert!(record2.is_ok(), "Failed to record claim for address2");
 
-        // Vérifier les statuts individuels
+        // Verify individual statuses
         assert!(store.has_claimed(&address1).await.unwrap(), "Address1 should have claimed");
         assert!(store.has_claimed(&address2).await.unwrap(), "Address2 should have claimed");
         assert!(!store.has_claimed(&address3).await.unwrap(), "Address3 should not have claimed");
 
-        // Vérifier les détails individuels
+        // Verify individual details
         let claim1 = store.get_claim(&address1).await.unwrap().unwrap();
         assert_eq!(claim1.amount, amount1);
 
@@ -526,7 +526,7 @@ mod faucet_store_tests {
         let amount = 3000000;
         let timestamp = create_test_timestamp();
 
-        // Enregistrer une claim dans la première instance
+        // Register a claim in the first instance
         {
             let store = FaucetStore::new(db_path_str)
                 .await
@@ -536,7 +536,7 @@ mod faucet_store_tests {
             assert!(record_result.is_ok(), "Failed to record claim in first instance");
         }
 
-        // Vérifier la persistence dans une nouvelle instance
+        // Verify persistence in a new instance
         {
             let store = FaucetStore::new(db_path_str)
                 .await
@@ -557,7 +557,7 @@ mod faucet_store_tests {
 
     #[tokio::test]
     async fn test_faucet_claim_serialization() {
-        // Test de la sérialisation/désérialisation de FaucetClaim
+        // Test FaucetClaim serialization/deserialization
         let address = create_test_address(200);
         let amount = 5000000;
         let timestamp = 1640995200;
@@ -568,11 +568,11 @@ mod faucet_store_tests {
             timestamp,
         };
 
-        // Sérialiser
+        // Serialize
         let serialized = bincode::serialize(&original_claim);
         assert!(serialized.is_ok(), "Failed to serialize FaucetClaim");
 
-        // Désérialiser
+        // Deserialize
         let deserialized: Result<FaucetClaim, _> = bincode::deserialize(&serialized.unwrap());
         assert!(deserialized.is_ok(), "Failed to deserialize FaucetClaim");
 
@@ -593,20 +593,20 @@ mod faucet_store_tests {
 
         let address = create_test_address(255);
 
-        // Test avec amount = 0
+        // Test with amount = 0
         let zero_amount_result = store.record_claim(&address, 0, create_test_timestamp()).await;
         assert!(zero_amount_result.is_ok(), "Should allow zero amount claims");
 
-        // Test avec timestamp = 0
+        // Test with timestamp = 0
         let zero_timestamp_result = store.record_claim(&address, 1000, 0).await;
         assert!(zero_timestamp_result.is_ok(), "Should allow zero timestamp");
 
-        // Test avec amount très grand
+        // Test with very large amount
         let large_amount = u64::MAX;
         let large_amount_result = store.record_claim(&address, large_amount, create_test_timestamp()).await;
         assert!(large_amount_result.is_ok(), "Should allow maximum amount");
 
-        // Vérifier que la dernière valeur est conservée
+        // Verify that the last value is kept
         let final_claim = store.get_claim(&address).await.unwrap().unwrap();
         assert_eq!(final_claim.amount, large_amount);
     }

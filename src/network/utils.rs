@@ -4,9 +4,9 @@ use tokio::sync::RwLock;
 
 use libp2p::core::PeerId;
 
-// Fonction de validation des messages
+// Message validation function
 fn validate_message(message: &RpcResponse) -> bool {
-    // Validation des messages
+    // Message validation
     // ...
     true
 }

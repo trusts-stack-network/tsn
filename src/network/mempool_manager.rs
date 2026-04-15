@@ -1,10 +1,10 @@
-//! Gestionnaire de mémoire intelligent pour le mempool.
+//! Manager de memory intelligent for the mempool.
 //!
-//! Ce module implémente une gestion avancée de la mémoire du mempool avec :
-//! - Éviction intelligente basée sur les frais, l'ancienneté et la taille
-//! - Prévention des attaques OOM (Out of Memory)
-//! - Métriques détaillées pour monitoring
-//! - Algorithmes d'éviction configurables
+//! This module implements a gestion advanced de the memory of the mempool with :
+//! - Eviction smart based on the fees, seniority and the taille
+//! - Prevention of attaques OOM (Out of Memory)
+//! - Detailed metrics for monitoring
+//! - Algorithmes eviction configurables
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -16,37 +16,37 @@ use tracing::{debug, info, warn, error};
 
 use crate::network::types::TransactionId;
 
-/// Configuration du gestionnaire de mémoire.
+/// Memory manager configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MempoolMemoryConfig {
-    /// Limite de mémoire maximale en bytes (défaut: 256 MB).
+    /// Limite de memory maximale in bytes (default: 256 MB).
     pub max_memory_bytes: usize,
     
-    /// Seuil de pression mémoire (% de max_memory_bytes).
+    /// Seuil de pression memory (% de max_memory_bytes).
     pub pressure_threshold: f64,
     
-    /// Seuil critique de mémoire (% de max_memory_bytes).
+    /// Seuil critique de memory (% de max_memory_bytes).
     pub critical_threshold: f64,
     
-    /// Nombre maximum de transactions.
+    /// Maximum number of transactions.
     pub max_transactions: usize,
     
-    /// Taille maximale d'une transaction individuelle.
+    /// Size maximale d'une transaction individuelle.
     pub max_single_transaction_size: usize,
     
-    /// Stratégie d'éviction.
+    /// Strategy eviction.
     pub eviction_strategy: EvictionStrategy,
     
-    /// Intervalle de nettoyage automatique en secondes.
+    /// Intervalle de cleanup automatique in secondes.
     pub cleanup_interval_seconds: u64,
     
-    /// Âge maximum d'une transaction en secondes.
+    /// Maximum transaction age in seconds.
     pub max_transaction_age_seconds: u64,
     
-    /// Facteur de boost pour les frais élevés.
+    /// Facteur de boost for the fees highs.
     pub high_fee_boost_factor: f64,
     
-    /// Seuil de frais pour considérer une transaction comme "haute priorité".
+    /// Seuil de fees for consider a transaction like "haute priority".
     pub high_fee_threshold: u64,
 }
 
@@ -67,44 +67,44 @@ impl Default for MempoolMemoryConfig {
     }
 }
 
-/// Stratégies d'éviction disponibles.
+/// Strategies eviction availables.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EvictionStrategy {
     /// LRU simple (Least Recently Used).
     LRU,
     
-    /// LRU intelligent avec priorité aux frais élevés.
+    /// LRU intelligent with priority aux fees highs.
     SmartLRU,
     
-    /// Éviction basée sur le score de priorité.
+    /// Eviction based on the score de priority.
     PriorityBased,
     
-    /// Éviction basée sur le ratio frais/taille.
+    /// Eviction based on the ratio fees/taille.
     FeeRateBased,
 }
 
-/// Métadonnées d'une transaction dans le gestionnaire.
+/// Metadata d'une transaction in the manager.
 #[derive(Debug, Clone)]
 struct TransactionMetadata {
-    /// ID de la transaction.
+    /// ID de the transaction.
     id: TransactionId,
     
-    /// Taille en bytes.
+    /// Size in bytes.
     size: usize,
     
-    /// Frais de la transaction.
+    /// Frais de the transaction.
     fee: u64,
     
     /// Timestamp d'ajout.
     added_at: Instant,
     
-    /// Timestamp du dernier accès.
+    /// Timestamp of the last access.
     last_accessed: Instant,
     
-    /// Nombre d'accès.
+    /// Number of accesses.
     access_count: u64,
     
-    /// Score de priorité calculé.
+    /// Score de priority calculationated.
     priority_score: f64,
 }
 
@@ -122,24 +122,24 @@ impl TransactionMetadata {
         }
     }
     
-    /// Calculer le score de priorité.
+    /// Calculationate the score de priority.
     fn calculate_priority_score(&mut self, config: &MempoolMemoryConfig) -> f64 {
         let age_seconds = self.added_at.elapsed().as_secs() as f64;
         let fee_rate = self.fee as f64 / self.size as f64;
         
-        // Score de base basé sur le ratio frais/taille
+        // Score de base based on the ratio fees/taille
         let mut score = fee_rate;
         
-        // Boost pour les frais élevés
+        // Boost for the fees highs
         if self.fee >= config.high_fee_threshold {
             score *= config.high_fee_boost_factor;
         }
         
-        // Pénalité pour l'âge (transactions anciennes ont moins de priorité)
+        // Penalty for l'age (transactions anciennes ont moins de priority)
         let age_penalty = 1.0 - (age_seconds / config.max_transaction_age_seconds as f64).min(1.0);
         score *= age_penalty.max(0.1); // Minimum 10% du score original
         
-        // Bonus pour l'activité récente
+        // Bonus for l'activity recent
         let access_bonus = (self.access_count as f64).ln().max(1.0);
         score *= access_bonus;
         
@@ -147,81 +147,81 @@ impl TransactionMetadata {
         score
     }
     
-    /// Marquer comme accédé.
+    /// Marquer like accessed.
     fn mark_accessed(&mut self) {
         self.last_accessed = Instant::now();
         self.access_count += 1;
     }
     
-    /// Vérifier si la transaction est expirée.
+    /// Verify if the transaction is expired.
     fn is_expired(&self, max_age: Duration) -> bool {
         self.added_at.elapsed() > max_age
     }
 }
 
-/// Statistiques de mémoire.
+/// Statistiques de memory.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct MemoryStats {
-    /// Mémoire actuellement utilisée en bytes.
+    /// Memory currently used in bytes.
     pub current_memory_bytes: usize,
     
-    /// Mémoire maximale autorisée.
+    /// Memory maximale authorized.
     pub max_memory_bytes: usize,
     
-    /// Pourcentage d'utilisation mémoire.
+    /// Pourcentage d'utilisation memory.
     pub memory_usage_percent: f64,
     
-    /// Nombre de transactions actuelles.
+    /// Number of current transactions.
     pub current_transactions: usize,
     
-    /// Nombre maximum de transactions.
+    /// Maximum number of transactions.
     pub max_transactions: usize,
     
-    /// Nombre total d'évictions.
+    /// Total number of evictions.
     pub total_evictions: u64,
     
-    /// Nombre d'évictions par pression mémoire.
+    /// Number of memory pressure evictions.
     pub memory_pressure_evictions: u64,
     
-    /// Nombre d'évictions par âge.
+    /// Number of age-based evictions.
     pub age_evictions: u64,
     
-    /// Nombre d'évictions par priorité faible.
+    /// Number of low priority evictions.
     pub low_priority_evictions: u64,
     
-    /// Taille moyenne des transactions.
+    /// Average transaction size.
     pub average_transaction_size: f64,
     
     /// Frais moyens.
     pub average_fee: f64,
     
-    /// Dernière éviction.
+    /// Last eviction.
     pub last_eviction_timestamp: u64,
 }
 
-/// Gestionnaire de mémoire du mempool.
+/// Manager de memory of the mempool.
 pub struct MempoolMemoryManager {
     /// Configuration.
     config: MempoolMemoryConfig,
     
-    /// Métadonnées des transactions.
+    /// Metadata of transactions.
     transactions: Arc<RwLock<HashMap<TransactionId, TransactionMetadata>>>,
     
-    /// Index par priorité (score -> transaction_id).
+    /// Index par priority (score -> transaction_id).
     priority_index: Arc<RwLock<BTreeMap<u64, TransactionId>>>,
     
-    /// Queue LRU pour éviction.
+    /// Queue LRU for eviction.
     lru_queue: Arc<Mutex<VecDeque<TransactionId>>>,
     
     /// Statistiques.
     stats: Arc<RwLock<MemoryStats>>,
     
-    /// Mémoire actuellement utilisée.
+    /// Memory currently used.
     current_memory: Arc<RwLock<usize>>,
 }
 
 impl MempoolMemoryManager {
-    /// Créer un nouveau gestionnaire de mémoire.
+    /// Create a nouveau manager de memory.
     pub fn new(config: MempoolMemoryConfig) -> Self {
         let stats = MemoryStats {
             max_memory_bytes: config.max_memory_bytes,
@@ -239,19 +239,19 @@ impl MempoolMemoryManager {
         }
     }
     
-    /// Ajouter une transaction.
+    /// Ajouter a transaction.
     pub async fn add_transaction(
         &self,
         tx_id: TransactionId,
         size: usize,
         fee: u64,
     ) -> Result<(), MempoolError> {
-        // Vérifications préliminaires
+        // Verifications preliminary
         if size > self.config.max_single_transaction_size {
             return Err(MempoolError::TransactionTooLarge);
         }
         
-        // Vérifier si on a besoin d'éviction
+        // Verify if on a besoin eviction
         let current_memory = *self.current_memory.read().await;
         let current_count = self.transactions.read().await.len();
         
@@ -259,18 +259,18 @@ impl MempoolMemoryManager {
         let would_exceed_count = current_count >= self.config.max_transactions;
         
         if would_exceed_memory || would_exceed_count {
-            // Tenter l'éviction
+            // Try eviction
             let evicted = self.evict_if_needed(size).await?;
             if evicted == 0 && (would_exceed_memory || would_exceed_count) {
                 return Err(MempoolError::MemoryPressure);
             }
         }
         
-        // Calculer le score de priorité
+        // Calculationate the score de priority
         let mut metadata = TransactionMetadata::new(tx_id, size, fee);
         let priority_score = metadata.calculate_priority_score(&self.config);
         
-        // Vérifier si les frais sont suffisants en cas de pression mémoire
+        // Verify if the fees are suffisants in cas de pression memory
         if self.is_under_pressure().await {
             let min_fee_rate = self.calculate_minimum_fee_rate().await;
             let tx_fee_rate = fee as f64 / size as f64;
@@ -280,38 +280,38 @@ impl MempoolMemoryManager {
             }
         }
         
-        // Ajouter la transaction
+        // Ajouter the transaction
         {
             let mut transactions = self.transactions.write().await;
             transactions.insert(tx_id, metadata);
         }
         
-        // Mettre à jour l'index de priorité
+        // Update l'index de priority
         {
             let mut priority_index = self.priority_index.write().await;
             let priority_key = (priority_score * 1_000_000.0) as u64;
             priority_index.insert(priority_key, tx_id);
         }
         
-        // Ajouter à la queue LRU
+        // Add to LRU queue
         {
             let mut lru_queue = self.lru_queue.lock().await;
             lru_queue.push_back(tx_id);
         }
         
-        // Mettre à jour la mémoire utilisée
+        // Update the memory used
         {
             let mut current_memory = self.current_memory.write().await;
             *current_memory += size;
         }
         
-        debug!("Transaction ajoutée au gestionnaire de mémoire: {} (size: {}, fee: {}, priority: {:.2})",
+        debug!("Transaction addede au manager de memory: {} (size: {}, fee: {}, priority: {:.2})",
                hex::encode(&tx_id), size, fee, priority_score);
         
         Ok(())
     }
     
-    /// Supprimer une transaction.
+    /// Supprimer a transaction.
     pub async fn remove_transaction(&self, tx_id: &TransactionId) -> bool {
         let metadata = {
             let mut transactions = self.transactions.write().await;
@@ -319,14 +319,14 @@ impl MempoolMemoryManager {
         };
         
         if let Some(metadata) = metadata {
-            // Supprimer de l'index de priorité
+            // Delete de l'index de priority
             {
                 let mut priority_index = self.priority_index.write().await;
                 let priority_key = (metadata.priority_score * 1_000_000.0) as u64;
                 priority_index.remove(&priority_key);
             }
             
-            // Supprimer de la queue LRU
+            // Supprimer de the queue LRU
             {
                 let mut lru_queue = self.lru_queue.lock().await;
                 if let Some(pos) = lru_queue.iter().position(|id| id == tx_id) {
@@ -334,41 +334,41 @@ impl MempoolMemoryManager {
                 }
             }
             
-            // Mettre à jour la mémoire utilisée
+            // Update the memory used
             {
                 let mut current_memory = self.current_memory.write().await;
                 *current_memory = current_memory.saturating_sub(metadata.size);
             }
             
-            debug!("Transaction supprimée du gestionnaire de mémoire: {}", hex::encode(tx_id));
+            debug!("Transaction removede du manager de memory: {}", hex::encode(tx_id));
             true
         } else {
             false
         }
     }
     
-    /// Obtenir les transactions par ordre de priorité.
+    /// Get the transactions par ordre de priority.
     pub async fn get_transactions_by_priority(&self, limit: usize) -> Vec<TransactionId> {
         let priority_index = self.priority_index.read().await;
         
         priority_index
             .iter()
-            .rev() // Plus haute priorité en premier
+            .rev() // Plus haute priority en first
             .take(limit)
             .map(|(_, tx_id)| *tx_id)
             .collect()
     }
     
-    /// Marquer une transaction comme accédée.
+    /// Marquer a transaction like accessed.
     pub async fn mark_accessed(&self, tx_id: &TransactionId) {
         let mut transactions = self.transactions.write().await;
         if let Some(metadata) = transactions.get_mut(tx_id) {
             metadata.mark_accessed();
             
-            // Recalculer le score de priorité
+            // Recalculationate the score de priority
             let new_score = metadata.calculate_priority_score(&self.config);
             
-            // Mettre à jour l'index de priorité
+            // Update l'index de priority
             drop(transactions);
             let mut priority_index = self.priority_index.write().await;
             let priority_key = (new_score * 1_000_000.0) as u64;
@@ -376,14 +376,14 @@ impl MempoolMemoryManager {
         }
     }
     
-    /// Vérifier si le mempool est sous pression mémoire.
+    /// Verify if the mempool is sous pression memory.
     async fn is_under_pressure(&self) -> bool {
         let current_memory = *self.current_memory.read().await;
         let usage_ratio = current_memory as f64 / self.config.max_memory_bytes as f64;
         usage_ratio >= self.config.pressure_threshold
     }
     
-    /// Calculer le taux de frais minimum requis.
+    /// Calculer the taux de fees minimum requis.
     async fn calculate_minimum_fee_rate(&self) -> f64 {
         let transactions = self.transactions.read().await;
         
@@ -391,7 +391,7 @@ impl MempoolMemoryManager {
             return 0.0;
         }
         
-        // Calculer la médiane des taux de frais
+        // Calculationate the median of taux de fees
         let mut fee_rates: Vec<f64> = transactions
             .values()
             .map(|tx| tx.fee as f64 / tx.size as f64)
@@ -403,21 +403,21 @@ impl MempoolMemoryManager {
         fee_rates.get(median_index).copied().unwrap_or(0.0)
     }
     
-    /// Éviction si nécessaire.
+    /// Eviction if necessary.
     async fn evict_if_needed(&self, needed_space: usize) -> Result<usize, MempoolError> {
         let mut evicted_count = 0;
         let mut evicted_space = 0;
         
-        // Éviction par âge d'abord
+        // Eviction par age d'abord
         evicted_count += self.evict_expired().await;
         
-        // Vérifier si on a assez d'espace maintenant
+        // Verify if on a enough d'espace now
         let current_memory = *self.current_memory.read().await;
         if current_memory + needed_space <= self.config.max_memory_bytes {
             return Ok(evicted_count);
         }
         
-        // Éviction par stratégie
+        // Eviction par strategy
         match self.config.eviction_strategy {
             EvictionStrategy::LRU => {
                 evicted_count += self.evict_lru(needed_space - evicted_space).await;
@@ -436,7 +436,7 @@ impl MempoolMemoryManager {
         Ok(evicted_count)
     }
     
-    /// Éviction des transactions expirées.
+    /// Eviction of transactions expireds.
     async fn evict_expired(&self) -> usize {
         let max_age = Duration::from_secs(self.config.max_transaction_age_seconds);
         let mut to_evict = Vec::new();
@@ -464,13 +464,13 @@ impl MempoolMemoryManager {
                 .unwrap_or_default()
                 .as_secs();
             
-            info!("Éviction par âge: {} transactions supprimées", evicted_count);
+            info!("Eviction par age: {} transactions removedes", evicted_count);
         }
         
         evicted_count
     }
     
-    /// Éviction LRU simple.
+    /// Eviction LRU simple.
     async fn evict_lru(&self, needed_space: usize) -> usize {
         let mut evicted_count = 0;
         let mut freed_space = 0;
@@ -492,7 +492,7 @@ impl MempoolMemoryManager {
                     freed_space += size;
                 }
             } else {
-                break; // Plus de transactions à évincer
+                break; // Plus de transactions to evict
             }
         }
         
@@ -501,23 +501,23 @@ impl MempoolMemoryManager {
             stats.memory_pressure_evictions += evicted_count as u64;
             stats.total_evictions += evicted_count as u64;
             
-            info!("Éviction LRU: {} transactions supprimées", evicted_count);
+            info!("Eviction LRU: {} transactions removedes", evicted_count);
         }
         
         evicted_count
     }
     
-    /// Éviction LRU intelligente (évite les transactions haute priorité).
+    /// Eviction LRU smart (avoid the transactions haute priority).
     async fn evict_smart_lru(&self, needed_space: usize) -> usize {
         let mut evicted_count = 0;
         let mut freed_space = 0;
         
-        // Obtenir les transactions triées par priorité (plus faible en premier)
+        // Get the transactions sorted par priority (plus faible in first)
         let low_priority_txs = {
             let priority_index = self.priority_index.read().await;
             priority_index
                 .iter()
-                .take(100) // Considérer les 100 plus faibles priorités
+                .take(100) // Consider les 100 plus faibles prioritys
                 .map(|(_, tx_id)| *tx_id)
                 .collect::<Vec<_>>()
         };
@@ -543,19 +543,19 @@ impl MempoolMemoryManager {
             stats.low_priority_evictions += evicted_count as u64;
             stats.total_evictions += evicted_count as u64;
             
-            info!("Éviction Smart LRU: {} transactions supprimées", evicted_count);
+            info!("Eviction Smart LRU: {} transactions removedes", evicted_count);
         }
         
         evicted_count
     }
     
-    /// Éviction basée sur la priorité.
+    /// Eviction based on the priority.
     async fn evict_low_priority(&self, needed_space: usize) -> usize {
-        // Similaire à smart_lru mais plus agressif
+        // Similaire to smart_lru but plus agressif
         self.evict_smart_lru(needed_space).await
     }
     
-    /// Éviction basée sur le taux de frais.
+    /// Eviction based on the taux de fees.
     async fn evict_low_fee_rate(&self, needed_space: usize) -> usize {
         let mut candidates = Vec::new();
         
@@ -567,7 +567,7 @@ impl MempoolMemoryManager {
             }
         }
         
-        // Trier par taux de frais (plus faible en premier)
+        // Trier par taux de fees (plus faible in premier)
         candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         
         let mut evicted_count = 0;
@@ -589,29 +589,29 @@ impl MempoolMemoryManager {
             stats.low_priority_evictions += evicted_count as u64;
             stats.total_evictions += evicted_count as u64;
             
-            info!("Éviction par taux de frais: {} transactions supprimées", evicted_count);
+            info!("Eviction par taux de fees: {} transactions removedes", evicted_count);
         }
         
         evicted_count
     }
     
-    /// Nettoyage général.
+    /// Cleanup general.
     pub async fn cleanup(&self) -> Result<usize, MempoolError> {
         let mut total_cleaned = 0;
         
-        // Nettoyage des transactions expirées
+        // Cleanup of transactions expireds
         total_cleaned += self.evict_expired().await;
         
-        // Recalcul des scores de priorité
+        // Recalculation of scores de priority
         self.recalculate_priority_scores().await;
         
-        // Mise à jour des statistiques
+        // Update of statistics
         self.update_stats().await;
         
         Ok(total_cleaned)
     }
     
-    /// Recalculer tous les scores de priorité.
+    /// Recalculationate all scores de priority.
     async fn recalculate_priority_scores(&self) {
         let mut updates = Vec::new();
         
@@ -627,7 +627,7 @@ impl MempoolMemoryManager {
             }
         }
         
-        // Mettre à jour l'index de priorité
+        // Update l'index de priority
         if !updates.is_empty() {
             let mut priority_index = self.priority_index.write().await;
             
@@ -636,14 +636,14 @@ impl MempoolMemoryManager {
                 let old_key = (old_score * 1_000_000.0) as u64;
                 priority_index.remove(&old_key);
                 
-                // Ajouter le nouveau score
+                // Ajouter the nouveau score
                 let new_key = (new_score * 1_000_000.0) as u64;
                 priority_index.insert(new_key, tx_id);
             }
         }
     }
     
-    /// Mettre à jour les statistiques.
+    /// Update the statistics.
     async fn update_stats(&self) {
         let current_memory = *self.current_memory.read().await;
         let transactions = self.transactions.read().await;
@@ -662,13 +662,13 @@ impl MempoolMemoryManager {
         }
     }
     
-    /// Obtenir les statistiques.
+    /// Obtenir the statistics.
     pub async fn get_stats(&self) -> MemoryStats {
         self.update_stats().await;
         self.stats.read().await.clone()
     }
     
-    /// Démarrer la tâche de nettoyage automatique.
+    /// Start the task de cleanup automatique.
     pub async fn start_cleanup_task(&self) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         let interval = Duration::from_secs(self.config.cleanup_interval_seconds);
@@ -680,14 +680,14 @@ impl MempoolMemoryManager {
                 interval_timer.tick().await;
                 
                 if let Err(e) = manager.cleanup().await {
-                    warn!("Erreur lors du nettoyage du gestionnaire de mémoire: {:?}", e);
+                    warn!("Error lors du cleanup du manager de memory: {:?}", e);
                 }
             }
         })
     }
 }
 
-// Implémentation de Clone pour permettre l'utilisation dans les tâches async
+// Implementation de Clone for allowstre l'utilisation in the tasks async
 impl Clone for MempoolMemoryManager {
     fn clone(&self) -> Self {
         Self {
@@ -701,19 +701,19 @@ impl Clone for MempoolMemoryManager {
     }
 }
 
-/// Erreurs du gestionnaire de mémoire.
+/// Errors of the manager de memory.
 #[derive(Debug, thiserror::Error)]
 pub enum MempoolError {
     #[error("Transaction trop volumineuse")]
     TransactionTooLarge,
     
-    #[error("Pression mémoire - impossible d'ajouter la transaction")]
+    #[error("Pression memory - unable d'add la transaction")]
     MemoryPressure,
     
-    #[error("Taux de frais insuffisant pour la pression mémoire actuelle")]
+    #[error("Taux de fees insufficient pour la pression memory current")]
     InsufficientFeeRate,
     
-    #[error("Erreur interne: {0}")]
+    #[error("Internal error: {0}")]
     Internal(String),
 }
 
@@ -738,12 +738,12 @@ mod tests {
     #[tokio::test]
     async fn test_eviction_by_memory_pressure() {
         let mut config = MempoolMemoryConfig::default();
-        config.max_memory_bytes = 2000; // Très petit pour forcer l'éviction
+        config.max_memory_bytes = 2000; // Very small to force eviction
         config.max_transactions = 10;
         
         let manager = MempoolMemoryManager::new(config);
         
-        // Ajouter des transactions jusqu'à la limite
+        // Add transactions up to the limit
         for i in 0..3 {
             let tx_id = [i as u8; 32];
             let result = manager.add_transaction(tx_id, 1000, 1000 + i as u64).await;
@@ -751,8 +751,8 @@ mod tests {
             if i < 2 {
                 assert!(result.is_ok());
             } else {
-                // La troisième devrait déclencher une éviction ou être rejetée
-                // selon la stratégie d'éviction
+                // La third should trigger a eviction or be rejectede
+                // selon the strategy eviction
             }
         }
         
@@ -765,7 +765,7 @@ mod tests {
         let config = MempoolMemoryConfig::default();
         let manager = MempoolMemoryManager::new(config);
         
-        // Ajouter des transactions avec différents frais
+        // Add transactions with different fees
         let tx1 = [1u8; 32];
         let tx2 = [2u8; 32];
         let tx3 = [3u8; 32];
@@ -776,7 +776,7 @@ mod tests {
         
         let priority_txs = manager.get_transactions_by_priority(3).await;
         
-        // tx2 devrait être en premier (frais les plus élevés)
+        // tx2 should be in first (fees the plus highs)
         assert_eq!(priority_txs[0], tx2);
     }
 }

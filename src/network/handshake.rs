@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use log::{info, warn};
 
-// Structure pour stocker les informations de handshake
+// Structure for stocker the informations de handshake
 struct Handshake {
     socket: TcpStream,
     known_nodes: Mutex<HashMap<SocketAddr, u64>>,
@@ -35,7 +35,7 @@ impl Handshake {
         if message.starts_with(b"TSN_HANDSHAKE") {
             self.add_node(addr).await;
         } else {
-            warn!("Message inconnu reçu de {}", addr);
+            warn!("Message inconnu received de {}", addr);
         }
     }
 
@@ -48,12 +48,12 @@ impl Handshake {
     }
 }
 
-// Gestion des erreurs
+// Error handling
 async fn handle_error(err: std::io::Error) {
-    warn!("Erreur réseau : {}", err);
+    warn!("Network error: {}", err);
 }
 
-// Test avec mock network
+// Test with mock network
 #[cfg(test)]
 mod tests {
     use super::*;

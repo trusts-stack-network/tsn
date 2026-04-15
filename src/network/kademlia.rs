@@ -1,18 +1,18 @@
-//! Module DHT Kademlia de base pour TSN
+//! Module DHT Kademlia de base for TSN
 //! 
-//! Implémente les structures fondamentales : NodeId, table de routage k-buckets,
-//! et les constantes du protocole Kademlia. Conçu pour la robustesse dans
-//! des réseaux adversariaux avec partitions et nœuds malveillants.
+//! Implements the structures fondamentales : NodeId, table de routage k-buckets,
+//! and the constantes of the protocole Kademlia. Designed for the robustesse dans
+//! of networkx adversariaux with partitions and nodes malveillants.
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Serialize, Deserialize};
 use sha2::{Sha256, Digest};
 
-/// Constantes du protocole Kademlia
-pub const KADEMLIA_K: usize = 20;           // Taille des k-buckets et réponses
-pub const KADEMLIA_ALPHA: usize = 3;        // Parallélisme des requêtes
-pub const KADEMLIA_B: usize = 160;          // Bits dans un NodeId (SHA-1)
+/// Constantes of the protocole Kademlia
+pub const KADEMLIA_K: usize = 20;           // Size of k-buckets et responses
+pub const KADEMLIA_ALPHA: usize = 3;        // Parallelism des requests
+pub const KADEMLIA_B: usize = 160;          // Bits in a NodeId (SHA-1)
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(60);
 pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
 pub const BUCKET_REFRESH_INTERVAL: Duration = Duration::from_secs(3600); // 1h
@@ -22,12 +22,12 @@ pub const BUCKET_REFRESH_INTERVAL: Duration = Duration::from_secs(3600); // 1h
 pub struct NodeId([u8; 20]);
 
 impl NodeId {
-    /// Crée un NodeId depuis un array de 20 bytes
+    /// Creates a NodeId from a array de 20 bytes
     pub fn new(bytes: [u8; 20]) -> Self {
         Self(bytes)
     }
     
-    /// Génère un NodeId aléatoire
+    /// Generates a NodeId random
     pub fn random() -> Self {
         use rand::RngCore;
         let mut bytes = [0u8; 20];
@@ -35,7 +35,7 @@ impl NodeId {
         Self(bytes)
     }
     
-    /// Crée un NodeId depuis une clé publique ou adresse
+    /// Creates a NodeId from a key publique or adresse
     pub fn from_data(data: &[u8]) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(data);
@@ -46,7 +46,7 @@ impl NodeId {
         Self(node_id)
     }
     
-    /// Distance XOR entre deux NodeId (métrique Kademlia)
+    /// Distance XOR entre deux NodeId (metric Kademlia)
     pub fn distance(&self, other: &NodeId) -> NodeDistance {
         let mut result = [0u8; 20];
         for i in 0..20 {
@@ -55,7 +55,7 @@ impl NodeId {
         NodeDistance(result)
     }
     
-    /// Retourne le bit à la position donnée (0 = MSB)
+    /// Returns the bit to the position data (0 = MSB)
     pub fn bit(&self, position: usize) -> bool {
         if position >= 160 {
             return false;
@@ -65,7 +65,7 @@ impl NodeId {
         (self.0[byte_index] >> bit_index) & 1 == 1
     }
     
-    /// Préfixe commun le plus long avec un autre NodeId
+    /// Prefix commun the plus long with a other NodeId
     pub fn common_prefix_len(&self, other: &NodeId) -> usize {
         for i in 0..160 {
             if self.bit(i) != other.bit(i) {
@@ -75,7 +75,7 @@ impl NodeId {
         160 // Identiques
     }
     
-    /// Retourne les bytes bruts
+    /// Returns the bytes bruts
     pub fn as_bytes(&self) -> &[u8; 20] {
         &self.0
     }
@@ -83,7 +83,7 @@ impl NodeId {
 
 impl std::fmt::Display for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(&self.0[..8])) // Affiche seulement les 8 premiers bytes
+        write!(f, "{}", hex::encode(&self.0[..8])) // Affiche onlyment les 8 premiers bytes
     }
 }
 
@@ -98,12 +98,12 @@ impl From<[u8; 20]> for NodeId {
 pub struct NodeDistance([u8; 20]);
 
 impl NodeDistance {
-    /// Retourne la distance comme un array de bytes
+    /// Returns the distance like a array de bytes
     pub fn as_bytes(&self) -> &[u8; 20] {
         &self.0
     }
     
-    /// Calcule le nombre de bits de préfixe zéro (pour déterminer le bucket)
+    /// Calculates the number of leading zero prefix bits (to determine the bucket)
     pub fn leading_zeros(&self) -> usize {
         for i in 0..160 {
             let byte_index = i / 8;
@@ -129,15 +129,15 @@ impl Ord for NodeDistance {
     }
 }
 
-/// Nœud Kademlia avec métadonnées
+/// Node Kademlia with metadata
 #[derive(Debug, Clone)]
 pub struct KademliaNode {
     pub id: NodeId,
     pub addr: SocketAddr,
     pub last_seen: Instant,
     pub rtt: Option<Duration>,      // Round-trip time
-    pub failures: u32,             // Échecs consécutifs
-    pub capabilities: Vec<String>,  // Capacités du nœud
+    pub failures: u32,             // Failures consecutive
+    pub capabilities: Vec<String>,  // Capacitys du node
 }
 
 impl KademliaNode {
@@ -152,24 +152,24 @@ impl KademliaNode {
         }
     }
     
-    /// Met à jour les stats après un ping réussi
+    /// Updates the stats after a ping successful
     pub fn update_success(&mut self, rtt: Duration) {
         self.last_seen = Instant::now();
         self.rtt = Some(rtt);
         self.failures = 0;
     }
     
-    /// Incrémente les échecs
+    /// Increments the failures
     pub fn record_failure(&mut self) {
         self.failures += 1;
     }
     
-    /// Vérifie si le nœud est considéré comme "stale"
+    /// Checks if the node is considered like "stale"
     pub fn is_stale(&self, threshold: Duration) -> bool {
         self.last_seen.elapsed() > threshold
     }
     
-    /// Score de qualité du nœud (pour le tri)
+    /// Node quality score (for sorting)
     pub fn quality_score(&self) -> u64 {
         let base_score = 1000u64;
         let failure_penalty = self.failures as u64 * 100;
@@ -187,7 +187,7 @@ impl PartialEq for KademliaNode {
 
 impl Eq for KademliaNode {}
 
-// Implémentation Serialize/Deserialize pour KademliaNode
+// Implementation Serialize/Deserialize for KademliaNode
 impl Serialize for KademliaNode {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -229,7 +229,7 @@ impl<'de> Deserialize<'de> for KademliaNode {
         Ok(KademliaNode {
             id: data.id,
             addr: data.addr,
-            last_seen: Instant::now(), // Utilise le temps actuel lors de la désérialisation
+            last_seen: Instant::now(), // Use current time during deserialization
             rtt: None,
             failures: data.failures,
             capabilities: data.capabilities,
@@ -237,10 +237,10 @@ impl<'de> Deserialize<'de> for KademliaNode {
     }
 }
 
-/// K-bucket : liste de nœuds pour une plage de distance
+/// K-bucket : liste de nodes for a plage de distance
 #[derive(Debug, Clone)]
 pub struct KBucket {
-    pub nodes: Vec<KademliaNode>, // Rendu public pour kademlia_engine
+    pub nodes: Vec<KademliaNode>, // Made public for kademlia_engine
     last_updated: Instant,
     max_size: usize,
 }
@@ -254,9 +254,9 @@ impl KBucket {
         }
     }
     
-    /// Ajoute un nœud au bucket (LRU eviction)
+    /// Adds a node at the bucket (LRU eviction)
     pub fn add_node(&mut self, node: KademliaNode) -> bool {
-        // Si le nœud existe déjà, le met à jour et le déplace à la fin
+        // Si the node exists already, the met up to date and the moves to the fin
         if let Some(pos) = self.nodes.iter().position(|n| n.id == node.id) {
             self.nodes.remove(pos);
             self.nodes.push(node);
@@ -264,14 +264,14 @@ impl KBucket {
             return true;
         }
         
-        // Si le bucket n'est pas plein, ajoute directement
+        // Si the bucket n'est pas plein, ajoute directement
         if self.nodes.len() < self.max_size {
             self.nodes.push(node);
             self.last_updated = Instant::now();
             return true;
         }
         
-        // Bucket plein : vérifie si on peut remplacer un nœud stale
+        // Bucket plein : verifies if on can remplacer a node stale
         if let Some(pos) = self.nodes.iter().position(|n| n.is_stale(Duration::from_secs(900))) {
             self.nodes.remove(pos);
             self.nodes.push(node);
@@ -279,10 +279,10 @@ impl KBucket {
             return true;
         }
         
-        false // Bucket plein avec des nœuds actifs
+        false // Bucket full with active nodes
     }
     
-    /// Supprime un nœud du bucket
+    /// Removes a node of the bucket
     pub fn remove_node(&mut self, node_id: &NodeId) -> bool {
         if let Some(pos) = self.nodes.iter().position(|n| n.id == *node_id) {
             self.nodes.remove(pos);
@@ -293,40 +293,40 @@ impl KBucket {
         }
     }
     
-    /// Retourne tous les nœuds du bucket
+    /// Returns all nodes of the bucket
     pub fn nodes(&self) -> &[KademliaNode] {
         &self.nodes
     }
     
-    /// Retourne les nœuds triés par qualité
+    /// Returns the nodes sorted par quality
     pub fn nodes_by_quality(&self) -> Vec<KademliaNode> {
         let mut sorted = self.nodes.clone();
         sorted.sort_by_key(|n| std::cmp::Reverse(n.quality_score()));
         sorted
     }
     
-    /// Vérifie si le bucket est plein
+    /// Checks if the bucket is plein
     pub fn is_full(&self) -> bool {
         self.nodes.len() >= self.max_size
     }
     
-    /// Nombre de nœuds dans le bucket
+    /// Number of nodes in the bucket
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
     
-    /// Vérifie si le bucket est vide
+    /// Checks if the bucket is vide
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
     
-    /// Dernière mise à jour du bucket
+    /// Last update of the bucket
     pub fn last_updated(&self) -> Instant {
         self.last_updated
     }
 }
 
-/// Table de routage Kademlia avec k-buckets
+/// Table de routage Kademlia with k-buckets
 #[derive(Debug)]
 pub struct RoutingTable {
     local_id: NodeId,
@@ -335,7 +335,7 @@ pub struct RoutingTable {
 }
 
 impl RoutingTable {
-    /// Crée une nouvelle table de routage
+    /// Creates a new table de routage
     pub fn new(local_id: NodeId) -> Self {
         Self {
             local_id,
@@ -344,39 +344,39 @@ impl RoutingTable {
         }
     }
     
-    /// Ajoute un nœud à la table de routage
+    /// Adds a node to the table de routage
     pub fn add_node(&mut self, node: KademliaNode) -> bool {
         if node.id == self.local_id {
-            return false; // Ne s'ajoute pas soi-même
+            return false; // Ne s'adds pas itself
         }
         
         let bucket_index = self.bucket_index(&node.id);
         self.buckets[bucket_index].add_node(node)
     }
     
-    /// Supprime un nœud de la table
+    /// Removes a node de the table
     pub fn remove_node(&mut self, node_id: &NodeId) -> bool {
         let bucket_index = self.bucket_index(node_id);
         self.buckets[bucket_index].remove_node(node_id)
     }
     
-    /// Trouve les K nœuds les plus proches d'une cible
+    /// Trouve the K nodes the plus proches d'une cible
     pub fn closest_nodes(&self, target: &NodeId, count: usize) -> Vec<KademliaNode> {
         let mut candidates = Vec::new();
         
-        // Collecte tous les nœuds de tous les buckets
+        // Collect all nodes de all buckets
         for bucket in &self.buckets {
             candidates.extend(bucket.nodes().iter().cloned());
         }
         
-        // Trie par distance à la cible
+        // Trie par distance to the cible
         candidates.sort_by_key(|node| node.id.distance(target));
         
-        // Retourne les count premiers
+        // Returns the count premiers
         candidates.into_iter().take(count).collect()
     }
     
-    /// Trouve les nœuds dans un bucket spécifique
+    /// Trouve the nodes in a bucket specific
     pub fn bucket_nodes(&self, bucket_index: usize) -> Vec<KademliaNode> {
         if bucket_index < self.buckets.len() {
             self.buckets[bucket_index].nodes().to_vec()
@@ -385,12 +385,12 @@ impl RoutingTable {
         }
     }
     
-    /// Calcule l'index du bucket pour un NodeId donné
+    /// Calculationates l'index of the bucket for a NodeId given
     fn bucket_index(&self, node_id: &NodeId) -> usize {
         let distance = self.local_id.distance(node_id);
         let leading_zeros = distance.leading_zeros();
         
-        // Le bucket index est le nombre de bits de préfixe commun
+        // The bucket index is the number of common prefix bits
         // Bucket 0 = distance maximale, Bucket 159 = distance minimale
         if leading_zeros >= KADEMLIA_B {
             KADEMLIA_B - 1
@@ -399,7 +399,7 @@ impl RoutingTable {
         }
     }
     
-    /// Retourne des statistiques sur la table
+    /// Returns of statistics on the table
     pub fn stats(&self) -> RoutingTableStats {
         let mut total_nodes = 0;
         let mut full_buckets = 0;
@@ -422,7 +422,7 @@ impl RoutingTable {
         }
     }
     
-    /// Retourne tous les nœuds de la table
+    /// Returns all nodes de the table
     pub fn all_nodes(&self) -> Vec<KademliaNode> {
         let mut all = Vec::new();
         for bucket in &self.buckets {
@@ -431,7 +431,7 @@ impl RoutingTable {
         all
     }
     
-    /// Nettoie les nœuds stale
+    /// Clean up stale nodes
     pub fn cleanup_stale_nodes(&mut self, threshold: Duration) -> usize {
         let mut removed = 0;
         for bucket in &mut self.buckets {
@@ -442,13 +442,13 @@ impl RoutingTable {
         removed
     }
     
-    /// Maintenance périodique de la table de routage
+    /// Maintenance periodic de the table de routage
     pub fn maintenance(&mut self) -> usize {
         self.cleanup_stale_nodes(Duration::from_secs(1800)) // 30 minutes
     }
 }
 
-/// Statistiques de la table de routage
+/// Statistiques de the table de routage
 #[derive(Debug, Clone)]
 pub struct RoutingTableStats {
     pub total_nodes: usize,
@@ -460,7 +460,7 @@ pub struct RoutingTableStats {
 impl std::fmt::Display for RoutingTableStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, 
-            "RoutingTable: {} nœuds, {}/{} buckets pleins, {} vides",
+            "RoutingTable: {} nodes, {}/{} buckets pleins, {} vides",
             self.total_nodes, self.full_buckets, self.total_buckets, self.empty_buckets
         )
     }
@@ -485,7 +485,7 @@ mod tests {
         let id1 = NodeId::new([0b10101010u8; 20]);
         let id2 = NodeId::new([0b10101011u8; 20]);
         
-        // Diffèrent au dernier bit du premier byte
+        // Differ at the last bit of the first byte
         assert_eq!(id1.common_prefix_len(&id2), 7);
     }
     
@@ -501,10 +501,10 @@ mod tests {
         assert_eq!(bucket.len(), 2);
         assert!(bucket.is_full());
         
-        // Bucket plein, ne peut pas ajouter un nouveau nœud
+        // Bucket plein, not can pas ajouter a nouveau node
         assert!(!bucket.add_node(node3));
         
-        // Mais peut mettre à jour un nœud existant
+        // But can update an existing node
         assert!(bucket.add_node(node1.clone()));
         assert_eq!(bucket.len(), 2);
     }
@@ -523,7 +523,7 @@ mod tests {
         let closest = table.closest_nodes(&NodeId::new([2u8; 20]), 10);
         assert_eq!(closest.len(), 2);
         
-        // Le nœud [1u8; 20] devrait être plus proche de [2u8; 20] que [255u8; 20]
+        // Le node [1u8; 20] should be plus proche de [2u8; 20] que [255u8; 20]
         assert_eq!(closest[0].id, node1.id);
     }
 }

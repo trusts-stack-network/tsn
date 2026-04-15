@@ -5,7 +5,7 @@ use crate::core::block::{Block, BlockHeader};
 use crate::core::error::{ConsensusError, ValidationError};
 use std::collections::HashSet;
 
-/// Verifie les signatures SLH-DSA pour les blocs et transactions
+/// Verifie the signatures SLH-DSA for the blocs and transactions
 pub struct SignatureVerifier {
     verifier: SlhDsaVerifier,
 }
@@ -17,18 +17,18 @@ impl SignatureVerifier {
         }
     }
 
-    /// Verifie la signature du bloc (signature du producteur de bloc)
+    /// Verifie the signature of the bloc (signature of the producteur de bloc)
     pub fn verify_block_signature(&self, block: &Block) -> Result<(), ConsensusError> {
         let header_hash = block.header.hash();
         
-        // Extrait la signature et la clé publique du producteur
+        // Extrait the signature and the key publique of the producteur
         let signature = SlhDsaSignature::from_bytes(&block.signature)
             .map_err(|_| ConsensusError::InvalidSignature("Invalid SLH-DSA signature format".into()))?;
         
         let producer_key = PublicKey::from_bytes(&block.header.producer_key)
             .map_err(|_| ConsensusError::InvalidPublicKey("Invalid producer public key".into()))?;
 
-        // Verifie que la clé est bien une clé SLH-DSA
+        // Verifie que the key is bien a key SLH-DSA
         if !matches!(producer_key, PublicKey::SlhDsa(_)) {
             return Err(ConsensusError::InvalidPublicKey(
                 "Producer key must be SLH-DSA for post-quantum consensus".into()
@@ -41,15 +41,15 @@ impl SignatureVerifier {
         Ok(())
     }
 
-    /// Verifie toutes les signatures de transactions dans un bloc
+    /// Verifie all signatures de transactions in a bloc
     pub fn verify_block_transactions(&self, block: &Block) -> Result<(), ConsensusError> {
         let mut seen_nullifiers = HashSet::new();
         
         for tx in &block.transactions {
-            // Verifie la signature de la transaction
+            // Verifie the signature de the transaction
             self.verify_transaction_signature(tx)?;
             
-            // Verifie les double spends via nullifiers
+            // Verifie the double spends via nullifiers
             for nullifier in &tx.nullifiers {
                 if !seen_nullifiers.insert(nullifier.clone()) {
                     return Err(ConsensusError::DoubleSpend(
@@ -62,11 +62,11 @@ impl SignatureVerifier {
         Ok(())
     }
 
-    /// Verifie la signature d'une transaction
+    /// Verifie the signature d'une transaction
     pub fn verify_transaction_signature(&self, tx: &Transaction) -> Result<(), ConsensusError> {
         let tx_hash = tx.hash();
         
-        // Verifie chaque signature de dépense
+        // Verifie each signature de spending
         for (i, spend) in tx.spends.iter().enumerate() {
             let signature = SlhDsaSignature::from_bytes(&spend.signature)
                 .map_err(|_| ConsensusError::InvalidSignature(
@@ -93,7 +93,7 @@ impl SignatureVerifier {
         Ok(())
     }
 
-    /// Verifie qu'une clé publique est valide pour le consensus actuel
+    /// Verifie qu'une key publique is valid for the consensus actuel
     pub fn validate_public_key(&self, key: &PublicKey) -> Result<(), ConsensusError> {
         match key {
             PublicKey::SlhDsa(_) => Ok(()),
@@ -159,7 +159,7 @@ mod tests {
         let verifier = SignatureVerifier::new();
         let (mut tx, _) = create_test_transaction();
         
-        // Corrompt la signature
+        // Corrompt the signature
         tx.spends[0].signature[0] ^= 0xFF;
         
         assert!(matches!(
@@ -180,13 +180,13 @@ mod tests {
     #[test]
     fn test_reject_non_slh_dsa_key() {
         let verifier = SignatureVerifier::new();
-        // Crée une fausse clé non-SLH (simulée ici)
+        // Creates a fake non-SLH key (simulated here)
         let invalid_key = PublicKey::from_bytes(&[0u8; 32]).unwrap_or_else(|_| {
-            // Fallback pour le test
+            // Fallback for the test
             PublicKey::SlhDsa(create_test_keypair().public)
         });
         
-        // Force une erreur en créant une clé invalide
+        // Force a error in creating a key invalid
         assert!(verifier.validate_public_key(&invalid_key).is_err());
     }
 
@@ -228,7 +228,7 @@ mod tests {
         let verifier = SignatureVerifier::new();
         let (tx1, _) = create_test_transaction();
         let mut tx2 = tx1.clone();
-        tx2.spends[0].signature = tx1.spends[0].signature.clone(); // Même signature mais différentes tx
+        tx2.spends[0].signature = tx1.spends[0].signature.clone(); // Same signature but different tx
         
         let block = Block {
             header: BlockHeader {

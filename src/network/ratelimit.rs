@@ -1,1 +1,1 @@
-// Vérifions que le code est correct et qu'il n'y a pas d'erreurs de compilation
+// Let's verify que the code is correct and qu'il n'y a pas d'errors de compilation

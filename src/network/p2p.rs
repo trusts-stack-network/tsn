@@ -28,6 +28,8 @@ use tracing::{info, warn, error, debug};
 const TOPIC_BLOCKS: &str = "tsn/blocks/1";
 const TOPIC_TRANSACTIONS: &str = "tsn/transactions/1";
 const TOPIC_BLOCK_REQUEST: &str = "tsn/block-request/1";
+const TOPIC_TIP: &str = "tsn/tip/1";
+const TOPIC_BLOCK_RESPONSE: &str = "tsn/block-response/1";
 
 /// P2P configuration
 pub struct P2pConfig {
@@ -87,6 +89,8 @@ pub enum P2pCommand {
     RequestBlocks(u64, u64),
     /// Send blocks in response to a BlockRequest (serialized blocks)
     SendBlocks(Vec<Vec<u8>>),
+    /// Broadcast our current tip (height + hash) to P2P peers
+    BroadcastTip(u64, String),
 }
 
 /// Information about a connected peer
@@ -95,6 +99,8 @@ pub struct PeerInfo {
     pub peer_id: String,
     pub height: Option<u64>,
     pub protocol: String,
+    /// Epoch seconds when height was last updated (for staleness detection)
+    pub height_updated_at: Option<u64>,
 }
 
 /// Combined libp2p behaviour for TSN
@@ -251,9 +257,13 @@ impl P2pNode {
         let block_topic = gossipsub::IdentTopic::new(TOPIC_BLOCKS);
         let tx_topic = gossipsub::IdentTopic::new(TOPIC_TRANSACTIONS);
         let req_topic = gossipsub::IdentTopic::new(TOPIC_BLOCK_REQUEST);
+        let tip_topic = gossipsub::IdentTopic::new(TOPIC_TIP);
+        let resp_topic = gossipsub::IdentTopic::new(TOPIC_BLOCK_RESPONSE);
         swarm.behaviour_mut().gossipsub.subscribe(&block_topic)?;
         swarm.behaviour_mut().gossipsub.subscribe(&tx_topic)?;
         swarm.behaviour_mut().gossipsub.subscribe(&req_topic)?;
+        swarm.behaviour_mut().gossipsub.subscribe(&tip_topic)?;
+        swarm.behaviour_mut().gossipsub.subscribe(&resp_topic)?;
 
         // Listen on TCP and QUIC
         let listen_addr_tcp: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", config.listen_port).parse()?;
@@ -317,6 +327,12 @@ impl P2pNode {
         Ok(())
     }
 
+    /// Broadcast our current tip (height + hash) to P2P peers via GossipSub
+    pub async fn broadcast_tip(&self, height: u64, hash: String) -> anyhow::Result<()> {
+        self.command_tx.send(P2pCommand::BroadcastTip(height, hash)).await?;
+        Ok(())
+    }
+
     /// Get connected peers
     pub async fn get_peers(&self) -> Vec<PeerInfo> {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -339,11 +355,15 @@ async fn p2p_event_loop(
     let block_topic = gossipsub::IdentTopic::new(TOPIC_BLOCKS);
     let tx_topic = gossipsub::IdentTopic::new(TOPIC_TRANSACTIONS);
     let req_topic = gossipsub::IdentTopic::new(TOPIC_BLOCK_REQUEST);
+    let tip_topic = gossipsub::IdentTopic::new(TOPIC_TIP);
+    let resp_topic = gossipsub::IdentTopic::new(TOPIC_BLOCK_RESPONSE);
 
     // Track identified peers to avoid spam logging
     let mut identified_peers: std::collections::HashSet<PeerId> = std::collections::HashSet::new();
     // Track peer heights (updated via block-announces and identify)
     let mut peer_heights: std::collections::HashMap<PeerId, u64> = std::collections::HashMap::new();
+    // Track when each peer's height was last updated (epoch seconds)
+    let mut peer_height_times: std::collections::HashMap<PeerId, u64> = std::collections::HashMap::new();
     // Track peer protocol versions (updated via identify)
     let mut peer_versions: std::collections::HashMap<PeerId, String> = std::collections::HashMap::new();
     // Backoff for outdated peers: don't spam disconnect logs every 30s
@@ -359,6 +379,7 @@ async fn p2p_event_loop(
                     peer_id: p.to_string(),
                     height: peer_heights.get(p).copied(),
                     protocol: peer_versions.get(p).cloned().unwrap_or_else(|| local_proto.clone()),
+                    height_updated_at: peer_height_times.get(p).copied(),
                 })
                 .collect();
             if let Ok(mut sp) = shared_peers.write() {
@@ -387,26 +408,69 @@ async fn p2p_event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(TsnBehaviourEvent::Gossipsub(
-                        gossipsub::Event::Message { message, .. }
+                        gossipsub::Event::Message { propagation_source, message, .. }
                     )) => {
                         let topic = message.topic.as_str();
                         if topic == block_topic.hash().as_str() {
                             debug!("Received block via GossipSub ({} bytes)", message.data.len());
-                            // Track sender's height from the block
-                            if let Some(source) = message.source {
-                                // Try to parse height from the block data (coinbase.height)
-                                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&message.data) {
-                                    if let Some(h) = v.get("coinbase").and_then(|c| c.get("height")).and_then(|h| h.as_u64()) {
+                            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&message.data) {
+                                if let Some(h) = v.get("coinbase").and_then(|c| c.get("height")).and_then(|h| h.as_u64()) {
+                                    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    // Track original source's height
+                                    if let Some(source) = message.source {
                                         peer_heights.insert(source, h);
-                                        // v2.1.0: Refresh shared peer list so explorer shows live heights
-                                        refresh_shared_peers!();
+                                        peer_height_times.insert(source, now_secs);
                                     }
+                                    // v2.1.3: Also track propagation_source — the peer that
+                                    // forwarded us this block must be at least at this height.
+                                    // This keeps peer heights fresh even when tip broadcasts
+                                    // are delayed (mesh formation after restart).
+                                    let prev = peer_heights.get(&propagation_source).copied().unwrap_or(0);
+                                    if h > prev {
+                                        peer_heights.insert(propagation_source, h);
+                                        peer_height_times.insert(propagation_source, now_secs);
+                                    }
+                                    refresh_shared_peers!();
+                                }
+                            }
+                            event_tx.send(P2pEvent::NewBlock(message.data)).await.ok();
+                        } else if topic == resp_topic.hash().as_str() {
+                            // Block response (requested blocks) — treat as new block
+                            debug!("Received block response via GossipSub ({} bytes)", message.data.len());
+                            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&message.data) {
+                                if let Some(h) = v.get("coinbase").and_then(|c| c.get("height")).and_then(|h| h.as_u64()) {
+                                    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    if let Some(source) = message.source {
+                                        peer_heights.insert(source, h);
+                                        peer_height_times.insert(source, now_secs);
+                                    }
+                                    let prev = peer_heights.get(&propagation_source).copied().unwrap_or(0);
+                                    if h > prev {
+                                        peer_heights.insert(propagation_source, h);
+                                        peer_height_times.insert(propagation_source, now_secs);
+                                    }
+                                    refresh_shared_peers!();
                                 }
                             }
                             event_tx.send(P2pEvent::NewBlock(message.data)).await.ok();
                         } else if topic == tx_topic.hash().as_str() {
                             debug!("Received transaction via GossipSub ({} bytes)", message.data.len());
                             event_tx.send(P2pEvent::NewTransaction(message.data)).await.ok();
+                        } else if topic == tip_topic.hash().as_str() {
+                            // Tip announcement received — update peer height
+                            if let Some(source) = message.source {
+                                if let Ok(tip) = serde_json::from_slice::<serde_json::Value>(&message.data) {
+                                    if let Some(h) = tip.get("height").and_then(|v| v.as_u64()) {
+                                        let prev = peer_heights.get(&source).copied().unwrap_or(0);
+                                        if h > prev {
+                                            let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            peer_heights.insert(source, h);
+                                            peer_height_times.insert(source, now_secs);
+                                            refresh_shared_peers!();
+                                        }
+                                    }
+                                }
+                            }
                         } else if topic == req_topic.hash().as_str() {
                             // Block request received — forward to application to serve blocks
                             if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&message.data) {
@@ -427,7 +491,7 @@ async fn p2p_event_loop(
                             let is_new = identified_peers.insert(peer_id);
                             let in_backoff = outdated_backoff.contains_key(&peer_id);
                             if is_new && !in_backoff {
-                                info!("P2P: identified peer {} — {}",
+                                debug!("P2P: identified peer {} — {}",
                                     &peer_id.to_string()[..16],
                                     info.protocol_version,
                                 );
@@ -544,6 +608,7 @@ async fn p2p_event_loop(
                         debug!("P2P peer disconnected: {}", peer_id);
                         identified_peers.remove(&peer_id);
                         peer_heights.remove(&peer_id);
+                        peer_height_times.remove(&peer_id);
                         refresh_shared_peers!();
                         event_tx.send(P2pEvent::PeerDisconnected(peer_id)).await.ok();
                     }
@@ -577,6 +642,7 @@ async fn p2p_event_loop(
                                 peer_id: p.to_string(),
                                 height: peer_heights.get(p).copied(),
                                 protocol: peer_versions.get(p).cloned().unwrap_or_else(|| local_proto.clone()),
+                                height_updated_at: peer_height_times.get(p).copied(),
                             })
                             .collect();
                         reply.send(peers).ok();
@@ -592,12 +658,20 @@ async fn p2p_event_loop(
                         }
                     }
                     P2pCommand::SendBlocks(blocks) => {
-                        // Send blocks one by one via the blocks topic
+                        // v2.1.3: Send via dedicated response topic to bypass GossipSub dedup.
+                        // Publishing on block_topic would be deduplicated (same message_id as
+                        // the original broadcast), so requested blocks would be silently dropped.
                         for block_data in blocks {
-                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(block_topic.clone(), block_data) {
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(resp_topic.clone(), block_data) {
                                 debug!("P2P: failed to send requested block: {:?}", e);
                                 break;
                             }
+                        }
+                    }
+                    P2pCommand::BroadcastTip(height, hash) => {
+                        let payload = serde_json::json!({"height": height, "hash": hash});
+                        if let Ok(data) = serde_json::to_vec(&payload) {
+                            swarm.behaviour_mut().gossipsub.publish(tip_topic.clone(), data).ok();
                         }
                     }
                 }

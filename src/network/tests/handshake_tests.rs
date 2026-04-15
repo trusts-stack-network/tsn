@@ -1,6 +1,6 @@
-//! Tests unitaires pour le handshake TSN
+//! Tests unitaires for the handshake TSN
 //! 
-//! Tests isolés utilisant des mocks de transport.
+//! Tests isolated utilisant of mocks de transport.
 
 use std::time::Duration;
 use tokio::time::timeout;
@@ -12,7 +12,7 @@ use crate::network::protocol::{
 };
 use crate::network::NetworkError;
 
-/// Test: encodage/décodage d'un handshake basique
+/// Test: encoding/decoding d'un handshake basique
 #[test]
 fn test_handshake_encode_decode() {
     let handshake = HandshakeData {
@@ -44,7 +44,7 @@ fn test_handshake_encode_decode() {
     }
 }
 
-/// Test: handshake avec toutes les capabilities
+/// Test: handshake with all capabilities
 #[test]
 fn test_handshake_all_capabilities() {
     let handshake = HandshakeData {
@@ -75,7 +75,7 @@ fn test_handshake_all_capabilities() {
     }
 }
 
-/// Test: handshake sans capabilities
+/// Test: handshake without capabilities
 #[test]
 fn test_handshake_no_capabilities() {
     let handshake = HandshakeData {
@@ -124,7 +124,7 @@ fn test_handshake_ack() {
     }
 }
 
-/// Test: handshake ack rejeté
+/// Test: handshake ack rejected
 #[test]
 fn test_handshake_ack_rejected() {
     let msg = TsnMessage::HandshakeAck {
@@ -149,9 +149,9 @@ fn test_handshake_ack_rejected() {
 /// Test: timeout sur handshake (simulation)
 #[tokio::test]
 async fn test_handshake_timeout() {
-    // Simule un handshake qui timeout
+    // Simulate a handshake that timeout
     let result = timeout(Duration::from_millis(50), async {
-        // Simule un délai plus long que le timeout
+        // Simulate a delay plus long que the timeout
         tokio::time::sleep(Duration::from_millis(100)).await;
         Ok::<(), NetworkError>(())
     }).await;
@@ -159,7 +159,7 @@ async fn test_handshake_timeout() {
     assert!(result.is_err(), "Should timeout");
 }
 
-/// Test: handshake avec node_id aléatoire
+/// Test: handshake with node_id random
 #[test]
 fn test_handshake_random_node_id() {
     let mut node_id = [0u8; 32];
@@ -189,7 +189,7 @@ fn test_handshake_random_node_id() {
     }
 }
 
-/// Test: port d'écoute 0 (ephemeral)
+/// Test: port d'listening 0 (ephemeral)
 #[test]
 fn test_handshake_ephemeral_port() {
     let handshake = HandshakeData {
@@ -214,7 +214,7 @@ fn test_handshake_ephemeral_port() {
     }
 }
 
-/// Test: port d'écoute maximum (65535)
+/// Test: port d'listening maximum (65535)
 #[test]
 fn test_handshake_max_port() {
     let handshake = HandshakeData {
@@ -239,7 +239,7 @@ fn test_handshake_max_port() {
     }
 }
 
-/// Test: version du protocole
+/// Test: version of the protocole
 #[test]
 fn test_protocol_version() {
     let v1 = ProtocolVersion(1, 0);
@@ -252,7 +252,7 @@ fn test_protocol_version() {
     assert_eq!(v3.0, 2);
 }
 
-/// Test: handshake avec timestamp très grand
+/// Test: handshake with timestamp very grand
 #[test]
 fn test_handshake_large_timestamp() {
     let handshake = HandshakeData {
@@ -277,7 +277,7 @@ fn test_handshake_large_timestamp() {
     }
 }
 
-/// Test: handshake avec timestamp 0
+/// Test: handshake with timestamp 0
 #[test]
 fn test_handshake_zero_timestamp() {
     let handshake = HandshakeData {

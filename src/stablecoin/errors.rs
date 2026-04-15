@@ -1,4 +1,4 @@
-// ZST — Erreurs du protocole
+// ZST — Protocol errors
 
 use thiserror::Error;
 

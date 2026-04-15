@@ -1,17 +1,17 @@
 //! SLH-DSA (SPHINCS+) Signature Scheme Implementation
 //! 
 //! Remplace ML-DSA-65 par SLH-DSA-SHA2-128s (FIPS 205)
-//! - Sécurité: NIST Level 1 (équivalent AES-128)
-//! - Clé publique: 32 octets
-//! - Signature: 7 856 octets
+//! - Security: NIST Level 1 (equivalent AES-128)
+//! - Public key: 32 bytes
+//! - Signature: 7,856 bytes
 //! 
-//! Alternative disponible: SLH-DSA-SHA2-256s pour Level 3 (pk=64, sig=29792)
+//! Alternative available: SLH-DSA-SHA2-256s for Level 3 (pk=64, sig=29792)
 
 use sha2::{Sha256, Digest};
 use std::fmt;
 use thiserror::Error;
 
-/// Erreurs de signature SLH-DSA
+/// SLH-DSA signature errors
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum SignatureError {
     #[error("Signature verification failed")]
@@ -26,7 +26,7 @@ pub enum SignatureError {
     CryptoError(String),
 }
 
-/// Paramètres SLH-DSA utilisés
+/// Parameters SLH-DSA used
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlhDsaVariant {
     /// SLH-DSA-SHA2-128s: Petit, NIST Level 1
@@ -57,10 +57,10 @@ impl SlhDsaVariant {
     }
 }
 
-/// Clé publique SLH-DSA (taille fixe selon la variante)
+/// SLH-DSA public key (fixed size per variant)
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SlhDsaPublicKey {
-    bytes: [u8; 64], // Taille max pour Sha2_256s
+    bytes: [u8; 64], // Max size for Sha2_256s
     variant: SlhDsaVariant,
     len: usize,
 }

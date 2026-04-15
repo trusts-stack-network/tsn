@@ -1,34 +1,34 @@
-//! Génération de la trace d'exécution pour l'AIR Plonky3.
+//! Generation de the trace d'execution for l'AIR Plonky3.
 //!
-//! Ce module prend un `ZkTransactionWitness` (spends, outputs, fee)
-//! et génère une matrice de trace (`RowMajorMatrix<Goldilocks>`) compatible
-//! avec le système de preuve AIR de Plonky3.
+//! This module prend a `ZkTransactionWitness` (spends, outputs, fee)
+//! and generates a matrice de trace (`RowMajorMatrix<Goldilocks>`) compatible
+//! with the system de preuve AIR de Plonky3.
 //!
 //! ## Trace Layout
 //!
-//! La trace est organisée en sections par opération :
+//! La trace is organized in sections par operation :
 //!
-//! Pour chaque spend :
-//! - Calcul du note commitment via Poseidon2 (value, pk_hash, randomness)
-//! - Vérification du chemin Merkle (32 niveaux de hash Poseidon2)
-//! - Calcul du nullifier (nullifier_key, commitment, position)
+//! Pour each spend :
+//! - Calcul of the note commitment via Poseidon2 (value, pk_hash, randomness)
+//! - Verification of the path Merkle (32 niveaux de hash Poseidon2)
+//! - Calcul of the nullifier (nullifier_key, commitment, position)
 //!
-//! Pour chaque output :
-//! - Calcul du note commitment via Poseidon2 (value, pk_hash, randomness)
+//! Pour each output :
+//! - Calcul of the note commitment via Poseidon2 (value, pk_hash, randomness)
 //!
-//! La dernière ligne encode la contrainte de balance : sum(inputs) = sum(outputs) + fee.
+//! La last ligne encode the contrainte de balance : sum(inputs) = sum(outputs) + fee.
 //!
 //! ## Trace Width
 //!
-//! Chaque ligne contient `TRACE_WIDTH` = 16 colonnes de Goldilocks :
+//! Chaque ligne contient `TRACE_WIDTH` = 16 columns de Goldilocks :
 //! - Col 0     : type de ligne (0=padding, 1=commitment_hash, 2=merkle_level, 3=nullifier, 4=balance)
-//! - Col 1     : index (spend/output index, ou merkle level)
-//! - Col 2..9  : état Poseidon2 avant permutation (8 éléments)
-//! - Col 10..13: résultat du hash (4 éléments, capacité du sponge)
-//! - Col 14    : valeur auxiliaire (bit de chemin Merkle, valeur de note, etc.)
+//! - Col 1     : index (spend/output index, or merkle level)
+//! - Col 2..9  : state Poseidon2 before permutation (8 elements)
+//! - Col 10..13: result of the hash (4 elements, capacity of the sponge)
+//! - Col 14    : valeur auxiliaire (bit de path Merkle, valeur de note, etc.)
 //! - Col 15    : accumulateur de balance
 //!
-//! La hauteur de la trace est arrondie à la puissance de 2 supérieure.
+//! La height de the trace is roundede to the puissance de 2 higher.
 
 use p3_field::PrimeCharacteristicRing;
 use p3_field::PrimeField64 as P3PrimeField64;
@@ -44,10 +44,10 @@ use p3_symmetric::Permutation;
 
 use super::{OutputWitness, SpendWitness};
 
-/// Largeur de la trace (nombre de colonnes).
+/// Trace width (number of columns).
 pub const TRACE_WIDTH: usize = 16;
 
-/// Profondeur de l'arbre Merkle.
+/// Depth of the tree Merkle.
 const MERKLE_DEPTH: usize = 32;
 
 /// Colonnes de type de ligne.
@@ -58,7 +58,7 @@ const COL_RESULT_START: usize = 10;
 const COL_AUX: usize = 14;
 const COL_BALANCE_ACC: usize = 15;
 
-/// Types de lignes dans la trace.
+/// Types de lignes in the trace.
 const ROW_TYPE_PADDING: u64 = 0;
 const ROW_TYPE_COMMITMENT: u64 = 1;
 const ROW_TYPE_MERKLE: u64 = 2;
@@ -66,17 +66,17 @@ const ROW_TYPE_NULLIFIER: u64 = 3;
 const ROW_TYPE_BALANCE: u64 = 4;
 const ROW_TYPE_OUTPUT_COMMITMENT: u64 = 5;
 
-/// Témoin complet pour une transaction ZK.
+/// Witness complete for a transaction ZK.
 pub struct ZkTransactionWitness {
-    /// Témoins pour les notes dépensées
+    /// Witnesses for the notes spentes
     pub spends: Vec<SpendWitness>,
-    /// Témoins pour les notes créées
+    /// Witnesses for the notes created
     pub outputs: Vec<OutputWitness>,
     /// Frais de transaction
     pub fee: u64,
 }
 
-/// Construit la permutation Poseidon2 Goldilocks width-8 avec les constantes Horizen Labs.
+/// Construit the permutation Poseidon2 Goldilocks width-8 with the constantes Horizen Labs.
 fn make_poseidon2_perm() -> Poseidon2GoldilocksHL<8> {
     p3_poseidon2::Poseidon2::new(
         ExternalLayerConstants::<Goldilocks, 8>::new_from_saved_array(
@@ -87,20 +87,20 @@ fn make_poseidon2_perm() -> Poseidon2GoldilocksHL<8> {
     )
 }
 
-/// Convertit 32 bytes en 4 éléments Goldilocks (8 bytes par élément, little-endian).
+/// Convertedt 32 bytes in 4 elements Goldilocks (8 bytes par element, little-endian).
 fn bytes32_to_goldilocks4(bytes: &[u8; 32]) -> [Goldilocks; 4] {
     let mut result = [Goldilocks::ZERO; 4];
     for i in 0..4 {
         let mut chunk = [0u8; 8];
         chunk.copy_from_slice(&bytes[i * 8..(i + 1) * 8]);
         let val = u64::from_le_bytes(chunk);
-        // Réduction modulo le premier de Goldilocks pour rester dans le champ
+        // Reduction modulo the first de Goldilocks for rester in the champ
         result[i] = <Goldilocks as QuotientMap<u64>>::from_int(val);
     }
     result
 }
 
-/// Convertit 4 éléments Goldilocks en 32 bytes (little-endian).
+/// Convertedt 4 elements Goldilocks in 32 bytes (little-endian).
 fn goldilocks4_to_bytes32(elems: &[Goldilocks; 4]) -> [u8; 32] {
     let mut result = [0u8; 32];
     for i in 0..4 {
@@ -110,9 +110,9 @@ fn goldilocks4_to_bytes32(elems: &[Goldilocks; 4]) -> [u8; 32] {
     result
 }
 
-/// Hash Poseidon2 de 2 entrées (4 éléments chacune) → 4 éléments de sortie.
+/// Hash Poseidon2 de 2 entries (4 elements chacune) → 4 elements de sortie.
 ///
-/// Utilise un sponge width-8 : [input_left(4), input_right(4)] → permute → [output(4), _].
+/// Utilise a sponge width-8 : [input_left(4), input_right(4)] → permute → [output(4), _].
 fn poseidon2_hash_pair(
     perm: &Poseidon2GoldilocksHL<8>,
     left: &[Goldilocks; 4],
@@ -135,7 +135,7 @@ fn poseidon2_hash_pair(
     (state_before, result)
 }
 
-/// Hash Poseidon2 pour un note commitment : H(value, pk_hash[4], randomness[4]).
+/// Hash Poseidon2 for a note commitment : H(value, pk_hash[4], randomness[4]).
 ///
 /// Packing : state = [value, pk_hash[0..3], randomness[0..3]] puis permute.
 fn poseidon2_hash_commitment(
@@ -145,8 +145,8 @@ fn poseidon2_hash_commitment(
     randomness: &[Goldilocks; 4],
 ) -> ([Goldilocks; 8], [Goldilocks; 4]) {
     let mut state = [Goldilocks::ZERO; 8];
-    // Pack: value dans state[0], pk_hash dans state[1..4], randomness dans state[4..7]
-    // state[7] reste zéro (padding du sponge, capacité)
+    // Pack: value in state[0], pk_hash in state[1..4], randomness in state[4..7]
+    // state[7] reste zero (padding of the sponge, capacity)
     state[0] = value;
     state[1] = pk_hash[0];
     state[2] = pk_hash[1];
@@ -163,7 +163,7 @@ fn poseidon2_hash_commitment(
     (state_before, result)
 }
 
-/// Hash Poseidon2 pour un nullifier : H(nullifier_key[4], commitment[4]) suivi de
+/// Hash Poseidon2 for a nullifier : H(nullifier_key[4], commitment[4]) suivi de
 /// H(result[4], position, 0, 0, 0).
 fn poseidon2_hash_nullifier(
     perm: &Poseidon2GoldilocksHL<8>,
@@ -171,17 +171,17 @@ fn poseidon2_hash_nullifier(
     commitment: &[Goldilocks; 4],
     position: Goldilocks,
 ) -> ([Goldilocks; 8], [Goldilocks; 8], [Goldilocks; 4]) {
-    // Étape 1 : H(nk, commitment)
+    // Step 1 : H(nk, commitment)
     let (state1_before, intermediate) = poseidon2_hash_pair(perm, nk, commitment);
 
-    // Étape 2 : H(intermediate, [position, 0, 0, 0])
+    // Step 2 : H(intermediate, [position, 0, 0, 0])
     let position_block = [position, Goldilocks::ZERO, Goldilocks::ZERO, Goldilocks::ZERO];
     let (state2_before, nullifier) = poseidon2_hash_pair(perm, &intermediate, &position_block);
 
     (state1_before, state2_before, nullifier)
 }
 
-/// Arrondit à la puissance de 2 supérieure ou égale.
+/// Roundedt to the puissance de 2 higher or equal.
 fn next_power_of_two(n: usize) -> usize {
     if n == 0 {
         return 1;
@@ -189,35 +189,35 @@ fn next_power_of_two(n: usize) -> usize {
     n.next_power_of_two()
 }
 
-/// Génère la trace d'exécution pour une transaction complète.
+/// Generates the trace d'execution for a transaction completee.
 ///
 /// # Arguments
-/// * `witness` - Le témoin de la transaction (spends, outputs, fee)
+/// * `witness` - Le witness de the transaction (spends, outputs, fee)
 ///
 /// # Returns
-/// * `(trace_matrix, public_values)` où :
-///   - `trace_matrix` est une `RowMajorMatrix<Goldilocks>` de largeur `TRACE_WIDTH`
+/// * `(trace_matrix, public_values)` where :
+///   - `trace_matrix` is a `RowMajorMatrix<Goldilocks>` de largeur `TRACE_WIDTH`
 ///   - `public_values` contient : [merkle_roots..., nullifiers..., output_commitments..., fee]
 ///
 /// # Trace Structure
 ///
-/// Pour chaque spend (index `i`) :
-///   1. 1 ligne `ROW_TYPE_COMMITMENT` : hash du note commitment
-///   2. 32 lignes `ROW_TYPE_MERKLE` : vérification du chemin Merkle (un niveau par ligne)
-///   3. 2 lignes `ROW_TYPE_NULLIFIER` : hash du nullifier (2 étapes Poseidon2)
+/// Pour each spend (index `i`) :
+///   1. 1 ligne `ROW_TYPE_COMMITMENT` : hash of the note commitment
+///   2. 32 lignes `ROW_TYPE_MERKLE` : verification of the path Merkle (un niveau par ligne)
+///   3. 2 `ROW_TYPE_NULLIFIER` rows: nullifier hash (2 Poseidon2 steps)
 ///
-/// Pour chaque output (index `j`) :
-///   1. 1 ligne `ROW_TYPE_OUTPUT_COMMITMENT` : hash du note commitment
+/// Pour each output (index `j`) :
+///   1. 1 ligne `ROW_TYPE_OUTPUT_COMMITMENT` : hash of the note commitment
 ///
 /// 1 ligne finale `ROW_TYPE_BALANCE` : contrainte sum(inputs) == sum(outputs) + fee
 ///
-/// Le reste est rempli de lignes `ROW_TYPE_PADDING` (tous zéros).
+/// The rest is filled with `ROW_TYPE_PADDING` rows (all zeros).
 pub fn generate_transaction_trace(
     witness: &ZkTransactionWitness,
 ) -> (RowMajorMatrix<Goldilocks>, Vec<Goldilocks>) {
     let perm = make_poseidon2_perm();
 
-    // Nombre de lignes utiles :
+    // Number of useful rows:
     // - Par spend : 1 (commitment) + MERKLE_DEPTH (merkle) + 2 (nullifier) = 35
     // - Par output : 1 (commitment)
     // - 1 ligne de balance
@@ -229,10 +229,10 @@ pub fn generate_transaction_trace(
     let mut public_values: Vec<Goldilocks> = Vec::new();
     let mut row_idx: usize = 0;
 
-    // Accumulateur de balance : somme des valeurs d'input
+    // Accumulateur de balance : somme of valeurs d'input
     let mut balance_acc = Goldilocks::ZERO;
 
-    // --- Traitement des spends ---
+    // --- Traitement of spends ---
     for (spend_idx, spend) in witness.spends.iter().enumerate() {
         let value_gl = <Goldilocks as QuotientMap<u64>>::from_int(spend.value);
         let pk_hash_gl = bytes32_to_goldilocks4(&spend.recipient_pk_hash);
@@ -258,7 +258,7 @@ pub fn generate_transaction_trace(
         );
         row_idx += 1;
 
-        // 2. Vérification Merkle (32 niveaux)
+        // 2. Verification Merkle (32 niveaux)
         let mut current_hash = commitment;
         let merkle_path_len = spend.merkle_path.len().min(MERKLE_DEPTH);
 
@@ -266,15 +266,15 @@ pub fn generate_transaction_trace(
             let sibling = if level < merkle_path_len {
                 bytes32_to_goldilocks4(&spend.merkle_path[level])
             } else {
-                // Si le chemin est plus court, utiliser des zéros (empty subtree)
+                // Si the path is plus court, utiliser of zeros (empty subtree)
                 [Goldilocks::ZERO; 4]
             };
 
-            // Bit de chemin : détermine si current est à gauche ou à droite
+            // Bit de path : determines if current is to gauche or to droite
             let path_bit = if (spend.leaf_index >> level) & 1 == 0 {
-                Goldilocks::ZERO // current est à gauche
+                Goldilocks::ZERO // current est to gauche
             } else {
-                Goldilocks::ONE // current est à droite
+                Goldilocks::ONE // current est to droite
             };
 
             let (left, right) = if path_bit == Goldilocks::ZERO {
@@ -300,18 +300,18 @@ pub fn generate_transaction_trace(
             current_hash = parent_hash;
         }
 
-        // La racine Merkle calculée est dans current_hash
+        // La racine Merkle calculationatede is in current_hash
         let merkle_root_bytes = goldilocks4_to_bytes32(&current_hash);
-        // Ajouter la racine Merkle aux valeurs publiques
+        // Ajouter the racine Merkle aux valeurs publiques
         for elem in &current_hash {
             public_values.push(*elem);
         }
 
-        // 3. Nullifier (2 étapes de hash)
+        // 3. Nullifier (2 hash steps)
         let (nf_state1, nf_state2, nullifier) =
             poseidon2_hash_nullifier(&perm, &nk_gl, &commitment, position_gl);
 
-        // Étape 1 du nullifier : H(nk, commitment)
+        // Step 1 of the nullifier : H(nk, commitment)
         let nf_intermediate = {
             let mut st = [Goldilocks::ZERO; 8];
             st[..4].copy_from_slice(&nk_gl);
@@ -333,7 +333,7 @@ pub fn generate_transaction_trace(
         );
         row_idx += 1;
 
-        // Étape 2 du nullifier : H(intermediate, position_block)
+        // Step 2 of the nullifier : H(intermediate, position_block)
         write_row(
             &mut values,
             row_idx,
@@ -346,23 +346,23 @@ pub fn generate_transaction_trace(
         );
         row_idx += 1;
 
-        // Ajouter le nullifier aux valeurs publiques
+        // Ajouter the nullifier aux valeurs publiques
         for elem in &nullifier {
             public_values.push(*elem);
         }
 
-        // Ignorer merkle_root_bytes (utilisé implicitement via public_values)
+        // Ignorer merkle_root_bytes (used implicitement via public_values)
         let _ = merkle_root_bytes;
     }
 
-    // --- Traitement des outputs ---
+    // --- Traitement of outputs ---
     for (output_idx, output) in witness.outputs.iter().enumerate() {
         let value_gl = <Goldilocks as QuotientMap<u64>>::from_int(output.value);
         let pk_hash_gl = bytes32_to_goldilocks4(&output.recipient_pk_hash);
         let randomness_gl = bytes32_to_goldilocks4(&output.randomness);
 
-        // Soustraire la valeur de l'output de l'accumulateur
-        // (pour la balance finale : acc - sum(outputs) - fee == 0)
+        // Soustraire the valeur de l'output de l'accumulateur
+        // (for the final balance: acc - sum(outputs) - fee == 0)
         let (state_before, commitment) =
             poseidon2_hash_commitment(&perm, value_gl, &pk_hash_gl, &randomness_gl);
 
@@ -378,7 +378,7 @@ pub fn generate_transaction_trace(
         );
         row_idx += 1;
 
-        // Ajouter le commitment de l'output aux valeurs publiques
+        // Ajouter the commitment de l'output aux valeurs publiques
         for elem in &commitment {
             public_values.push(*elem);
         }
@@ -402,7 +402,7 @@ pub fn generate_transaction_trace(
         values[offset + COL_STATE_START + 1] = total_outputs_gl;
         values[offset + COL_STATE_START + 2] = fee_gl;
         values[offset + COL_STATE_START + 3] = expected;
-        // Result : la différence (devrait être zéro si balance correcte)
+        // Result : the difference (should be zero if balance correcte)
         let diff = balance_acc - expected;
         values[offset + COL_RESULT_START] = diff;
         values[offset + COL_AUX] = fee_gl;
@@ -410,17 +410,17 @@ pub fn generate_transaction_trace(
     }
     row_idx += 1;
 
-    // Ajouter le fee aux valeurs publiques
+    // Ajouter the fee aux valeurs publiques
     public_values.push(fee_gl);
 
-    // Les lignes restantes sont déjà à zéro (padding)
+    // Les lignes restantes are already to zero (padding)
     let _ = row_idx;
 
     let trace = RowMajorMatrix::new(values, TRACE_WIDTH);
     (trace, public_values)
 }
 
-/// Écrit une ligne dans le buffer de la trace.
+/// Written a ligne in the buffer de the trace.
 #[inline]
 fn write_row(
     values: &mut [Goldilocks],
@@ -487,10 +487,10 @@ mod tests {
 
         let (trace, public_values) = generate_transaction_trace(&witness);
 
-        // La largeur doit être TRACE_WIDTH
+        // La largeur must be TRACE_WIDTH
         assert_eq!(trace.width(), TRACE_WIDTH);
 
-        // La hauteur doit être une puissance de 2
+        // La height must be a puissance de 2
         let h = trace.height();
         assert!(h.is_power_of_two(), "Height {} is not power of 2", h);
 
@@ -505,7 +505,7 @@ mod tests {
             public_values.len()
         );
 
-        // Le fee doit être le dernier élément
+        // Le fee must be the last element
         let fee_val = public_values.last().unwrap().as_canonical_u64();
         assert_eq!(fee_val, 50);
     }
@@ -541,7 +541,7 @@ mod tests {
         let (trace, _) = generate_transaction_trace(&witness);
         let h = trace.height();
 
-        // Vérifier que les lignes de padding sont toutes à zéro
+        // Verify que the lignes de padding are all to zero
         let useful = 1 * 35 + 1 + 1; // 37
         for row in useful..h {
             let offset = row * TRACE_WIDTH;
@@ -567,7 +567,7 @@ mod tests {
 
         let (trace, _) = generate_transaction_trace(&witness);
 
-        // Ligne 0 : commitment du spend
+        // Ligne 0 : commitment of the spend
         assert_eq!(
             trace.values[0 * TRACE_WIDTH + COL_ROW_TYPE].as_canonical_u64(),
             ROW_TYPE_COMMITMENT
@@ -614,23 +614,23 @@ mod tests {
 
         let (trace, _) = generate_transaction_trace(&witness);
 
-        // La ligne de balance (dernière ligne utile = 36)
+        // La ligne de balance (last ligne utile = 36)
         let balance_row = 36;
         let offset = balance_row * TRACE_WIDTH;
 
-        // sum_inputs dans state[0]
+        // sum_inputs in state[0]
         let sum_inputs = trace.values[offset + COL_STATE_START].as_canonical_u64();
         assert_eq!(sum_inputs, 1000);
 
-        // sum_outputs dans state[1]
+        // sum_outputs in state[1]
         let sum_outputs = trace.values[offset + COL_STATE_START + 1].as_canonical_u64();
         assert_eq!(sum_outputs, 950);
 
-        // fee dans state[2]
+        // fee in state[2]
         let fee = trace.values[offset + COL_STATE_START + 2].as_canonical_u64();
         assert_eq!(fee, 50);
 
-        // diff dans result[0] devrait être 0
+        // diff in result[0] should be 0
         let diff = trace.values[offset + COL_RESULT_START].as_canonical_u64();
         assert_eq!(diff, 0, "Balance difference should be zero");
     }
@@ -662,9 +662,9 @@ mod tests {
 
         assert_eq!(trace.width(), TRACE_WIDTH);
         assert!(trace.height().is_power_of_two());
-        // Seule la ligne de balance
+        // Seule the ligne de balance
         assert!(trace.height() >= 1);
-        // Public values : juste le fee
+        // Public values : juste the fee
         assert_eq!(public_values.len(), 1);
         assert_eq!(public_values[0].as_canonical_u64(), 0);
     }

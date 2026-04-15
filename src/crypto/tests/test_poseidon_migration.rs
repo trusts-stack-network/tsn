@@ -1,8 +1,8 @@
-//! Tests de non-régression pour la migration Poseidon V1 vers Poseidon2
+//! Tests de non-regression for the migration Poseidon V1 vers Poseidon2
 //!
-//! Ces tests valident que la migration ne casse pas la compatibilité
-//! avec les données existantes et que les deux implémentations sont
-//! cryptographiquement équivalentes.
+//! Ces tests validnt que the migration not casse pas the compatibility
+//! with the data existantes and que the deux implementations sont
+//! cryptographiquement equivalent.
 
 use crate::crypto::poseidon_migration::{
     PoseidonMigrator, PoseidonMode, MigrationConfig, MigrationError,
@@ -12,15 +12,15 @@ use crate::crypto::poseidon::WIDTH as V1_WIDTH;
 use ark_std::rand::{Rng, SeedableRng};
 use ark_std::rand::rngs::StdRng;
 
-/// Vecteurs de test connus pour Poseidon V1
-/// Ces valeurs doivent être générées à partir de l'implémentation V1 existante
+/// Vecteurs de test connus for Poseidon V1
+/// Ces valeurs doivent be generatedes to partir de l'implementation V1 existante
 const TEST_VECTORS_V1: &[(Vec<u64>, &str)] = &[
     // Format: (input, expected_hash_hex)
-    // Note: Ces valeurs sont des exemples et doivent être remplacées
-    // par les vrais hash calculés avec l'implémentation V1
+    // Note: Ces valeurs are of exemples and doivent be replaced
+    // par the vrais hash calculationateds with l'implementation V1
 ];
 
-/// Génère des vecteurs de test aléatoires
+/// Generates of vecteurs de test random
 fn generate_random_test_vectors(count: usize, seed: u64) -> Vec<Vec<u64>> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut vectors = Vec::new();
@@ -44,25 +44,25 @@ mod tests {
         let test_vectors = generate_random_test_vectors(10, 12345);
 
         for input in test_vectors {
-            // Hash avec V1
+            // Hash with V1
             migrator.set_mode(PoseidonMode::V1Legacy);
             let v1_result = migrator.hash(&input);
 
-            // Hash avec V2
+            // Hash with V2
             migrator.set_mode(PoseidonMode::V2Native);
             let v2_result = migrator.hash(&input);
 
-            // Hash avec mode compatibilité
+            // Hash with mode compatibility
             migrator.set_mode(PoseidonMode::Compatibility);
             let compat_result = migrator.hash(&input);
 
-            // Vérifications
+            // Verifications
             match (v1_result, v2_result, compat_result) {
                 (Ok(v1), Ok(v2), Ok(compat)) => {
-                    // Le mode compatibilité doit retourner le résultat V2
+                    // Le mode compatibility must return the result V2
                     assert_eq!(v2, compat, "Compatibility mode should return V2 result");
                     
-                    // Les hash ne doivent pas être vides
+                    // Les hash not doivent pas be vides
                     assert!(!v1.is_empty(), "V1 hash should not be empty");
                     assert!(!v2.is_empty(), "V2 hash should not be empty");
                     
@@ -70,7 +70,7 @@ mod tests {
                              input, v1.len(), v2.len());
                 }
                 _ => {
-                    // Certains modes peuvent échouer selon la configuration
+                    // Certains modes peuvent failsr selon the configuration
                     println!("⚠ Input {:?}: Some modes failed (expected for certain configurations)", input);
                 }
             }
@@ -81,11 +81,11 @@ mod tests {
     fn test_deterministic_behavior() {
         let input = vec![42u64, 84u64];
 
-        // Créer deux migrateurs identiques
+        // Create deux migrateurs identiques
         let mut migrator1 = PoseidonMigrator::with_config(MigrationConfig {
             mode: PoseidonMode::V2Native,
             strict_validation: false,
-            enable_cache: false, // Désactiver le cache pour ce test
+            enable_cache: false, // Disable cache for this test
             max_cache_size: 0,
         });
 
@@ -113,23 +113,23 @@ mod tests {
 
         let input = vec![1u64, 2u64];
 
-        // Premier calcul - doit être mis en cache
+        // First calculation - must be mis in cache
         let start = std::time::Instant::now();
         let result1 = migrator.hash(&input).unwrap();
         let first_duration = start.elapsed();
 
-        // Deuxième calcul - doit utiliser le cache
+        // Second calcul - must utiliser the cache
         let start = std::time::Instant::now();
         let result2 = migrator.hash(&input).unwrap();
         let second_duration = start.elapsed();
 
         assert_eq!(result1, result2);
         
-        // Le deuxième appel devrait être plus rapide (cache hit)
-        // Note: Ce test peut être flaky sur des systèmes très rapides
+        // Le second appel should be plus rapide (cache hit)
+        // Note: Ce test can be flaky sur of systems very rapides
         println!("First call: {:?}, Second call: {:?}", first_duration, second_duration);
         
-        // Vérifier que le cache contient l'entrée
+        // Verify que the cache contient l'entry
         let (cache_size, _) = migrator.cache_stats().unwrap();
         assert_eq!(cache_size, 1);
     }
@@ -140,10 +140,10 @@ mod tests {
             mode: PoseidonMode::V2Native,
             strict_validation: false,
             enable_cache: true,
-            max_cache_size: 3, // Cache très petit pour tester l'éviction
+            max_cache_size: 3, // Very small cache to test eviction
         });
 
-        // Ajouter plus d'éléments que la taille du cache
+        // Add more elements than cache size
         for i in 0..5 {
             let input = vec![i as u64, (i + 1) as u64];
             let _ = migrator.hash(&input).unwrap();
@@ -167,15 +167,15 @@ mod tests {
         let result_v2 = hasher_v2.hash_nodes(&left, &right).unwrap();
         let result_compat = hasher_compat.hash_nodes(&left, &right).unwrap();
 
-        // V2 et compatibilité doivent donner le même résultat
+        // V2 and compatibility doivent donner the same result
         assert_eq!(result_v2, result_compat);
 
-        // Les résultats ne doivent pas être triviaux
+        // Les results not doivent pas be triviaux
         assert_ne!(result_v2, [0u8; 32]);
         assert_ne!(result_v2, left);
         assert_ne!(result_v2, right);
 
-        // V1 peut échouer selon la configuration
+        // V1 can failsr selon the configuration
         match result_v1 {
             Ok(v1) => {
                 assert_ne!(v1, [0u8; 32]);
@@ -193,11 +193,11 @@ mod tests {
     fn test_error_propagation() {
         let mut migrator = PoseidonMigrator::new();
 
-        // Test avec input de taille invalide
+        // Test with input de size invalid
         migrator.set_mode(PoseidonMode::V1Legacy);
         
         if V1_WIDTH > 0 {
-            let invalid_input = vec![1u64; V1_WIDTH + 5]; // Taille incorrecte
+            let invalid_input = vec![1u64; V1_WIDTH + 5]; // Incorrect size
             let result = migrator.hash(&invalid_input);
             
             assert!(result.is_err());
@@ -218,16 +218,16 @@ mod tests {
         let left = 123u64;
         let right = 456u64;
 
-        // Test avec V2 (doit utiliser l'optimisation native)
+        // Test with V2 (doit utiliser l'optimisation native)
         migrator.set_mode(PoseidonMode::V2Native);
         let result_v2 = migrator.hash_two(left, right).unwrap();
 
-        // Test avec mode compatibilité
+        // Test with mode compatibility
         migrator.set_mode(PoseidonMode::Compatibility);
         let result_compat = migrator.hash_two(left, right).unwrap();
 
-        // Les résultats peuvent être différents selon l'implémentation
-        // mais ne doivent pas être triviaux
+        // Les results peuvent be different selon l'implementation
+        // but not doivent pas be triviaux
         assert!(!result_v2.is_empty());
         assert!(!result_compat.is_empty());
 
@@ -240,7 +240,7 @@ mod tests {
         let mut migrator = PoseidonMigrator::new();
         let input = vec![1u64, 2u64];
 
-        // Tester le changement de mode
+        // Tester the changement de mode
         let modes = [
             PoseidonMode::V1Legacy,
             PoseidonMode::V2Native,
@@ -282,7 +282,7 @@ mod tests {
 
         let mut handles = Vec::new();
 
-        // Lancer plusieurs threads qui utilisent le migrator
+        // Start multiple threads that utilisent the migrator
         for i in 0..4 {
             let migrator_clone = Arc::clone(&migrator);
             let handle = thread::spawn(move || {
@@ -295,21 +295,21 @@ mod tests {
             handles.push(handle);
         }
 
-        // Attendre tous les threads
+        // Wait all threads
         let results: Vec<_> = handles.into_iter()
             .map(|h| h.join().unwrap())
             .collect();
 
-        // Vérifier que tous les résultats sont valides et différents
+        // Verify que all results are valids and different
         for (i, result) in results.iter().enumerate() {
             assert!(!result.is_empty());
             println!("✓ Thread {} result: {} bytes", i, result.len());
         }
 
-        // Vérifier les statistiques du cache
+        // Verify the statistics of the cache
         let guard = migrator.lock().unwrap();
         if let Some((cache_size, _)) = guard.cache_stats() {
-            assert!(cache_size <= 4); // Au maximum 4 entrées
+            assert!(cache_size <= 4); // Au maximum 4 entries
         }
     }
 
@@ -317,7 +317,7 @@ mod tests {
     fn test_memory_safety() {
         let mut migrator = PoseidonMigrator::new();
         
-        // Test avec des inputs de différentes tailles
+        // Test with inputs de different tailles
         let test_cases = vec![
             vec![],
             vec![0u64],
@@ -352,7 +352,7 @@ mod tests {
         let mut migrator = PoseidonMigrator::with_config(MigrationConfig {
             mode: PoseidonMode::V2Native,
             strict_validation: false,
-            enable_cache: false, // Pas de cache pour mesurer la performance pure
+            enable_cache: false, // No cache to measure raw performance
             max_cache_size: 0,
         });
 
@@ -375,7 +375,7 @@ mod tests {
         }
         let v2_duration = start.elapsed();
 
-        // Benchmark compatibilité
+        // Benchmark compatibility
         migrator.set_mode(PoseidonMode::Compatibility);
         let start = std::time::Instant::now();
         for _ in 0..iterations {
@@ -388,8 +388,8 @@ mod tests {
         println!("  V2: {:?}", v2_duration);
         println!("  Compatibility: {:?}", compat_duration);
 
-        // Le mode compatibilité devrait être plus lent (calcule les deux)
-        // mais pas plus de 3x plus lent
+        // Le mode compatibility should be plus lent (calculationates the deux)
+        // but pas plus de 3x plus lent
         if compat_duration > v2_duration {
             let ratio = compat_duration.as_nanos() as f64 / v2_duration.as_nanos() as f64;
             println!("  Compatibility overhead: {:.2}x", ratio);
@@ -401,7 +401,7 @@ mod tests {
     fn test_edge_cases() {
         let mut migrator = PoseidonMigrator::new();
 
-        // Test avec des valeurs extrêmes
+        // Test with valeurs extreme
         let edge_cases = vec![
             vec![0u64, 0u64],
             vec![u64::MAX, u64::MAX],
@@ -416,7 +416,7 @@ mod tests {
             assert!(!result.is_empty());
             assert!(result.len() > 0);
             
-            // Le hash ne doit pas être trivial
+            // Le hash not must pas be trivial
             assert!(result.iter().any(|&b| b != 0));
             
             println!("✓ Edge case {:?}: {} bytes", input, result.len());

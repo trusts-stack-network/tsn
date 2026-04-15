@@ -1,7 +1,7 @@
-// TEMPORAIREMENT DÉSACTIVÉ - Module dev_cli manquant
-// TODO: Réimplémenter le CLI de développement
+// TEMPORAIREMENT DISABLED - Module dev_cli missing
+// TODO: Re-implement the CLI de development
 
 fn main() {
-    println!("CLI de développement TSN temporairement désactivé");
-    println!("Module dev_cli en cours de développement");
+    println!("CLI de development TSN temporarily disabled");
+    println!("Module dev_cli in progress de development");
 }

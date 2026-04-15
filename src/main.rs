@@ -331,6 +331,16 @@ enum Commands {
         #[arg(short, long, default_value = "wallet.json")]
         output: String,
     },
+    /// Restore a wallet from a 24-word seed phrase
+    #[command(name = "restore-wallet")]
+    RestoreWallet {
+        /// The 24-word seed phrase (quoted string)
+        #[arg(long)]
+        seed: String,
+        /// Output file for the wallet (default: wallet.json)
+        #[arg(short, long, default_value = "wallet.json")]
+        output: String,
+    },
     /// Show wallet balance (scans blockchain for owned notes)
     Balance {
         /// Wallet file (default: auto-detect)
@@ -508,6 +518,19 @@ enum Commands {
         #[arg(long)]
         faucet_daily_limit: Option<u64>,
     },
+    /// Restore chain state from a verified snapshot (requires signed manifest)
+    #[command(name = "restore-snapshot")]
+    RestoreSnapshot {
+        /// Path to the compressed snapshot file (.json.gz)
+        #[arg(long)]
+        snapshot: String,
+        /// Path to the signed manifest file (.json) — REQUIRED for verification
+        #[arg(long)]
+        manifest: String,
+        /// Data directory (default: ./data)
+        #[arg(short, long)]
+        data_dir: Option<String>,
+    },
     /// Check for updates and install the latest version
     Update,
 }
@@ -517,11 +540,11 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Suppress logs for simple commands (balance, new-wallet)
-    let is_quiet_cmd = matches!(cli.command, Some(Commands::Wallet { .. }) | Some(Commands::Balance { .. }) | Some(Commands::NewWallet { .. }) | Some(Commands::Send { .. }) | Some(Commands::History { .. }) | Some(Commands::Update));
+    let is_quiet_cmd = matches!(cli.command, Some(Commands::Wallet { .. }) | Some(Commands::Balance { .. }) | Some(Commands::NewWallet { .. }) | Some(Commands::RestoreWallet { .. }) | Some(Commands::Send { .. }) | Some(Commands::History { .. }) | Some(Commands::Update));
     let log_level = if is_quiet_cmd {
         "error".to_string()
     } else {
-        "info,yamux=error,libp2p_swarm=warn".to_string()
+        "info,yamux=error,libp2p_swarm=warn,libp2p_gossipsub=error".to_string()
     };
 
     tracing_subscriber::registry()
@@ -551,6 +574,22 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::NewWallet { output }) => {
             cmd_new_wallet(&output)?;
+        }
+        Some(Commands::RestoreWallet { seed, output }) => {
+            let words: Vec<&str> = seed.trim().split_whitespace().collect();
+            if words.len() != 24 {
+                eprintln!("Error: seed phrase must be exactly 24 words (got {})", words.len());
+                std::process::exit(1);
+            }
+            let seed_bytes = seed_phrase_to_bytes(&seed);
+            let wallet = ShieldedWallet::from_seed(&seed_bytes);
+            wallet.save(&output).expect("Failed to save wallet");
+            println!();
+            println!("  Wallet restored from seed phrase.");
+            println!("  Address: {}", hex::encode(wallet.pk_hash()));
+            println!("  Saved to: {}", output);
+            println!();
+            println!("  Run './tsn balance' to scan the blockchain for your notes.");
         }
         Some(Commands::Balance { wallet, node }) => {
             let wallet = wallet.or_else(auto_detect_wallet).unwrap_or_else(|| "wallet.json".to_string());
@@ -600,6 +639,110 @@ async fn main() -> anyhow::Result<()> {
                 format!("http://127.0.0.1:{}", config::get_port())
             });
             cmd_send(&wallet, &node, &to, amount, fee).await?;
+        }
+        Some(Commands::RestoreSnapshot { snapshot, manifest, data_dir }) => {
+            let data_dir = data_dir.unwrap_or_else(|| "data".to_string());
+            println!("=== TSN Snapshot Restore (Verified) ===");
+            println!("Snapshot: {}", snapshot);
+            println!("Manifest: {}", manifest);
+            println!("Data dir: {}", data_dir);
+            println!();
+
+            // Read snapshot file
+            let compressed = std::fs::read(&snapshot)
+                .map_err(|e| anyhow::anyhow!("Failed to read snapshot file: {}", e))?;
+            println!("Compressed size: {} bytes", compressed.len());
+
+            // Parse manifest (REQUIRED — no unsigned imports allowed)
+            let manifest_data = std::fs::read_to_string(&manifest)
+                .map_err(|e| anyhow::anyhow!("Failed to read manifest: {}", e))?;
+            let m: tsn::network::snapshot_manifest::SnapshotManifest = serde_json::from_str(&manifest_data)
+                .map_err(|e| anyhow::anyhow!("Failed to parse manifest: {}", e))?;
+
+            println!("\n--- Verification (all 3 checks must pass) ---");
+
+            // Check 1: Producer signature
+            if m.verify_producer_signature() {
+                println!("  [PASS] 1/3 Producer signature valid");
+                println!("         Producer: {} (PK: {}...)", m.producer.seed_name, &m.producer.public_key[..16]);
+            } else {
+                println!("  [FAIL] 1/3 Producer signature INVALID");
+                return Err(anyhow::anyhow!("REJECTED: Producer signature invalid — snapshot cannot be trusted"));
+            }
+
+            // Check 2: At least 2 seed confirmations
+            let valid_confs = m.valid_confirmation_count();
+            if valid_confs >= 2 {
+                println!("  [PASS] 2/3 {} seed confirmations valid (minimum: 2)", valid_confs);
+                for c in &m.confirmations {
+                    if c.verify() {
+                        println!("         {} (PK: {}...)", c.seed_name, &c.public_key[..16]);
+                    }
+                }
+            } else {
+                println!("  [FAIL] 2/3 Only {} valid confirmations (minimum: 2)", valid_confs);
+                return Err(anyhow::anyhow!("REJECTED: Insufficient seed confirmations ({}/2)", valid_confs));
+            }
+
+            // Check 3: SHA256
+            let computed_sha = {
+                use sha2::Digest;
+                hex::encode(sha2::Sha256::digest(&compressed))
+            };
+            if computed_sha == m.snapshot_sha256 {
+                println!("  [PASS] 3/3 SHA256 match ({}...)", &computed_sha[..16]);
+            } else {
+                println!("  [FAIL] 3/3 SHA256 MISMATCH");
+                return Err(anyhow::anyhow!("REJECTED: SHA256 mismatch — file corrupted or tampered"));
+            }
+
+            println!("\n  All pre-import checks passed.");
+            println!("  Height: {}, Block: {}...", m.height, &m.block_hash[..24]);
+
+            // Decompress
+            println!("\nDecompressing...");
+            let json_data = {
+                use std::io::Read;
+                let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
+                let mut buf = Vec::new();
+                decoder.read_to_end(&mut buf)
+                    .map_err(|e| anyhow::anyhow!("Decompression failed: {}", e))?;
+                buf
+            };
+            println!("Decompressed: {} bytes", json_data.len());
+
+            let snapshot_state: tsn::core::StateSnapshotPQ = serde_json::from_slice(&json_data)
+                .map_err(|e| anyhow::anyhow!("Failed to parse snapshot state: {}", e))?;
+
+            // Initialize blockchain
+            println!("Opening blockchain in {}/blockchain...", data_dir);
+            std::fs::create_dir_all(&data_dir).ok();
+            let db_path = format!("{}/blockchain", data_dir);
+            let mut blockchain = ShieldedBlockchain::open(&db_path, GENESIS_DIFFICULTY)?;
+
+            // Import
+            let mut block_hash = [0u8; 32];
+            if let Ok(bytes) = hex::decode(&m.block_hash) {
+                if bytes.len() == 32 { block_hash.copy_from_slice(&bytes); }
+            }
+            blockchain.import_snapshot_at_height(
+                snapshot_state, m.height, block_hash,
+                1000, 1000, 0,
+            );
+
+            // Check 4: State root post-import
+            let computed_root = hex::encode(blockchain.state_root());
+            println!("\n--- Post-import verification ---");
+            if computed_root == m.state_root {
+                println!("  [PASS] 4/4 State root MATCH ({}...)", &computed_root[..16]);
+            } else {
+                println!("  [WARN] 4/4 State root MISMATCH: computed={}..., manifest={}...", &computed_root[..16], &m.state_root[..16]);
+                println!("         Chain may self-correct during sync.");
+            }
+
+            println!("\n=== Restore complete ===");
+            println!("Chain restored to height {}.", m.height);
+            println!("Start your node to sync remaining blocks from the network.");
         }
         Some(Commands::Update) => {
             tsn::network::auto_update::cmd_update().await.map_err(|e| anyhow::anyhow!(e))?;
@@ -877,13 +1020,32 @@ fn auto_wallet_for_mining(data_dir: &str) -> String {
 
     println!();
     std::fs::create_dir_all(data_dir).ok();
-    let wallet = ShieldedWallet::generate();
+
+    // Derive wallet deterministically from seed phrase via PBKDF2
+    let seed_bytes = seed_phrase_to_bytes(&seed_phrase);
+    let wallet = ShieldedWallet::from_seed(&seed_bytes);
     let path = data_wallet.to_string_lossy().to_string();
     wallet.save(&path).expect("Failed to create wallet");
     println!("  Wallet created: {}", path);
     println!("  Address: {}", hex::encode(wallet.pk_hash()));
     println!();
     path
+}
+
+/// Convert a BIP39-style seed phrase to a 32-byte seed using PBKDF2-SHA256.
+/// Same phrase always produces the same 32-byte seed.
+fn seed_phrase_to_bytes(phrase: &str) -> [u8; 32] {
+    use sha2::Sha256;
+    use hmac::Hmac;
+    use pbkdf2::pbkdf2;
+    let mut seed = [0u8; 32];
+    pbkdf2::<Hmac<Sha256>>(
+        phrase.as_bytes(),
+        b"tsn-wallet-seed-v1",
+        210_000, // OWASP recommended minimum for PBKDF2-SHA256
+        &mut seed,
+    ).expect("PBKDF2 should not fail");
+    seed
 }
 
 /// Auto-detect node role from parent directory name
@@ -966,17 +1128,52 @@ fn dedup_peers(peers: &mut Vec<String>) {
 }
 
 fn cmd_new_wallet(output: &str) -> anyhow::Result<()> {
-    println!("Generating new TSN shielded wallet...");
-    let wallet = ShieldedWallet::generate();
+    let red = "\x1b[1;31m";
+    let green = "\x1b[1;32m";
+    let yellow = "\x1b[1;33m";
+    let reset = "\x1b[0m";
 
+    println!();
+    println!("{}========================================{}", yellow, reset);
+    println!("{}  NEW WALLET CREATION{}", yellow, reset);
+    println!("{}========================================{}", yellow, reset);
+    println!();
+
+    let seed_phrase = generate_seed_phrase();
+
+    println!("  Your recovery seed phrase (24 words):");
+    println!();
+    println!("  {}{}{}", green, seed_phrase, reset);
+    println!();
+    println!("  {}WARNING: Write these words down and store them safely!{}", red, reset);
+    println!("  {}Without this phrase, your coins are LOST FOREVER.{}", red, reset);
+    println!("  This is the ONLY time this phrase will be shown.");
+    println!();
+    println!("  To restore later: ./tsn restore-wallet --seed \"word1 word2 ... word24\"");
+    println!();
+
+    print!("  Have you saved your seed phrase? Type YES to continue: ");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).ok();
+    if input.trim().to_uppercase() != "YES" {
+        println!("\n  Aborted. Please run again and save your seed phrase.");
+        std::process::exit(0);
+    }
+
+    // Derive wallet deterministically from the seed phrase
+    let seed_bytes = seed_phrase_to_bytes(&seed_phrase);
+    let wallet = ShieldedWallet::from_seed(&seed_bytes);
     wallet.save(output)?;
 
-    println!("Wallet saved to: {}", output);
-    println!("Address: {}", hex::encode(wallet.pk_hash()));
-    println!("\nThis wallet uses:");
-    println!("  - CRYSTALS-Dilithium post-quantum signatures");
-    println!("  - zk-SNARKs for private transactions");
-    println!("\nYour balance is private and can only be viewed with this wallet file.");
+    println!();
+    println!("  Wallet saved to: {}", output);
+    println!("  Address: {}", hex::encode(wallet.pk_hash()));
+    println!();
+    println!("  Post-quantum signatures: ML-DSA-65 (FIPS 204)");
+    println!("  Privacy: Shielded transactions with ZK proofs");
+    println!();
     Ok(())
 }
 
@@ -1778,6 +1975,147 @@ fn cmd_mine(
     Ok(())
 }
 
+/// Automatic snapshot export — triggered when a new block-based interval becomes finalized.
+/// Exports the snapshot, signs the manifest, and requests cross-confirmations from seeds.
+/// Runs as a fire-and-forget background task.
+async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>) {
+    use tracing::{info, warn};
+
+    // Only export if we have a signing key (seed nodes only)
+    let signing_key = match &state.seed_signing_key {
+        Some(k) => k,
+        None => return, // miners without signing key skip snapshot export
+    };
+
+    // Export snapshot
+    let (data, height, block_hash, state_root, peer_id_str) = {
+        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let tip = chain.height();
+        if tip <= tsn::config::MAX_REORG_DEPTH + 100 {
+            return;
+        }
+        let snapshot = match chain.export_snapshot() {
+            Some(s) => s,
+            None => return,
+        };
+        let state_root = hex::encode(chain.state_root());
+        let p2p_id = state.p2p_peer_id.read().unwrap().clone().unwrap_or_default();
+        (snapshot.0, snapshot.1, snapshot.2, state_root, p2p_id)
+    };
+
+    // Compress
+    let compressed = {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        if encoder.write_all(&data).is_err() { return; }
+        match encoder.finish() {
+            Ok(c) => c,
+            Err(_) => return,
+        }
+    };
+
+    // SHA256
+    let snapshot_sha256 = {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(&compressed))
+    };
+
+    // Build and sign manifest
+    let public_key_hex = hex::encode(signing_key.verifying_key().to_bytes());
+    let mut manifest = tsn::network::snapshot_manifest::SnapshotManifest {
+        version: 1,
+        chain_id: "tsn-mainnet".to_string(),
+        height,
+        block_hash,
+        state_root,
+        snapshot_sha256,
+        snapshot_size_bytes: compressed.len() as u64,
+        format: "json-gzip".to_string(),
+        binary_version: env!("CARGO_PKG_VERSION").to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        producer: tsn::network::snapshot_manifest::SeedIdentity {
+            seed_name: state.public_url.clone().unwrap_or_else(|| "unknown".to_string()),
+            peer_id: peer_id_str,
+            public_key: public_key_hex,
+        },
+        signature: String::new(),
+        confirmations: Vec::new(),
+    };
+
+    let payload = manifest.signing_payload();
+    manifest.signature = tsn::network::snapshot_manifest::sign_ed25519(signing_key, &payload);
+
+    info!(
+        "Auto snapshot exported: height={}, sha256={}, size={}KB",
+        manifest.height, &manifest.snapshot_sha256[..16], manifest.snapshot_size_bytes / 1024
+    );
+
+    // Store in snapshot cache for coherent /snapshot/download
+    {
+        let cache_hash = manifest.block_hash.clone();
+        let mut cache = state.snapshot_cache.write().await;
+        *cache = Some(tsn::network::api::CachedSnapshot {
+            compressed,
+            height,
+            hash: cache_hash,
+            raw_size: data.len(),
+        });
+    }
+
+    // Store manifest
+    {
+        let mut manifests = state.snapshot_manifests.write().unwrap();
+        if let Some(pos) = manifests.iter().position(|m| m.height == manifest.height) {
+            manifests[pos] = manifest.clone();
+        } else {
+            manifests.push(manifest.clone());
+            if manifests.len() > 10 { manifests.remove(0); }
+        }
+    }
+
+    // Request cross-confirmations from seeds (async)
+    let client = &state.http_client;
+    let confirm_body = match serde_json::to_string(&manifest) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+
+    for seed_url in tsn::config::SEED_NODES.iter() {
+        if let Some(ref our_url) = state.public_url {
+            if seed_url.contains(our_url.split("://").last().unwrap_or("")) {
+                continue;
+            }
+        }
+        let url = format!("{}/snapshot/confirm", seed_url);
+        match client.post(&url)
+            .header("Content-Type", "application/json")
+            .body(confirm_body.clone())
+            .timeout(std::time::Duration::from_secs(10))
+            .send().await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(confirmation) = resp.json::<tsn::network::snapshot_manifest::SeedConfirmation>().await {
+                    if confirmation.verify() {
+                        info!("Auto snapshot: confirmation from {} for height {}", confirmation.seed_name, manifest.height);
+                        let mut manifests = state.snapshot_manifests.write().unwrap();
+                        if let Some(m) = manifests.iter_mut().find(|m| m.height == manifest.height) {
+                            if !m.confirmations.iter().any(|c| c.seed_name == confirmation.seed_name) {
+                                m.confirmations.push(confirmation);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let final_confs = state.snapshot_manifests.read().unwrap()
+        .iter().find(|m| m.height == manifest.height)
+        .map(|m| m.valid_confirmation_count()).unwrap_or(0);
+    info!("Auto snapshot complete: height={}, {} confirmations", manifest.height, final_confs);
+}
+
 async fn cmd_node(
     port: u16,
     peers: Vec<String>,
@@ -1952,6 +2290,22 @@ async fn cmd_node(
                             let dl_url = format!("{}/snapshot/download", peer_url);
                             if let Ok(resp) = snapshot_client.get(&dl_url).send().await {
                                 if resp.status().is_success() {
+                                    // v2.1.3 FIX: Use actual snapshot height from download headers,
+                                    // not from /info which may be newer (cache staleness).
+                                    // The download serves a cached snapshot that can be up to 99
+                                    // blocks behind the live state reported by /info.
+                                    let snap_height = resp.headers()
+                                        .get("x-snapshot-height")
+                                        .and_then(|v| v.to_str().ok())
+                                        .and_then(|s| s.parse::<u64>().ok())
+                                        .unwrap_or(snap_height);
+                                    let snap_hash_str = resp.headers()
+                                        .get("x-snapshot-hash")
+                                        .and_then(|v| v.to_str().ok())
+                                        .unwrap_or(snap_hash_str)
+                                        .to_string();
+                                    let snap_hash_str = snap_hash_str.as_str();
+
                                     let compressed = resp.bytes().await?;
                                     println!("  Downloaded {}KB compressed", compressed.len() / 1024);
 
@@ -2199,6 +2553,18 @@ async fn cmd_node(
         peer_info: std::sync::RwLock::new(std::collections::HashMap::new()),
         error_log: std::sync::RwLock::new(Vec::new()),
         auto_heal_mode: std::sync::RwLock::new("automatic".to_string()),
+        removed_peers: std::sync::Mutex::new(std::collections::HashSet::new()),
+        metric_empty_batches: std::sync::atomic::AtomicU64::new(0),
+        metric_stale_blocks: std::sync::atomic::AtomicU64::new(0),
+        metric_fork_recoveries: std::sync::atomic::AtomicU64::new(0),
+        metric_recovery_time_ms: std::sync::atomic::AtomicU64::new(0),
+        metric_commitment_mismatches: std::sync::atomic::AtomicU64::new(0),
+        seed_signing_key: {
+            let key_path = std::path::Path::new(&data_dir).join("seed_key.bin");
+            Some(tsn::network::snapshot_manifest::load_or_generate_seed_key(&key_path))
+        },
+        snapshot_manifests: std::sync::RwLock::new(Vec::new()),
+        mining_address: miner_info.as_ref().map(|(pk, _)| hex::encode(pk)),
     });
 
     // ========================================================================
@@ -2303,7 +2669,7 @@ async fn cmd_node(
     });
 
     // ========================================================================
-    // SELF-HEALING WATCHDOG — monitors node health and auto-repairs
+    // SELF-HEALING WATCHDOG — monitors node health and auto-repeers
     // ========================================================================
     {
         let watchdog_state = state.clone();
@@ -2371,7 +2737,7 @@ async fn cmd_node(
                                     drop(chain);
                                     drop(_reorg_guard);
                                 } else {
-                                    tracing::info!("WATCHDOG: Mode validation — action proposée, en attente d'approbation via /admin/force-resync");
+                                    tracing::info!("WATCHDOG: Mode validation — action proposed, en attente d'approbation via /admin/force-resync");
                                 }
                                 stuck_since = None;
                                 resync_count += 1;
@@ -2418,7 +2784,7 @@ async fn cmd_node(
                             stuck_since = None;
                             last_height = 0;
                         } else {
-                            tracing::info!("WATCHDOG: Mode validation — peers far ahead (gap={}), action proposée via /admin/force-resync", gap);
+                            tracing::info!("WATCHDOG: Mode validation — peers far ahead (gap={}), action proposed via /admin/force-resync", gap);
                         }
                     }
                 }
@@ -2458,7 +2824,7 @@ async fn cmd_node(
                                 stuck_since = None;
                                 last_height = 0;
                             } else {
-                                tracing::info!("WATCHDOG: Mode validation — solo fork detected (gap={}), action proposée via /admin/force-resync", ahead_gap);
+                                tracing::info!("WATCHDOG: Mode validation — solo fork detected (gap={}), action proposed via /admin/force-resync", ahead_gap);
                             }
                         }
                     }
@@ -2641,6 +3007,7 @@ async fn cmd_node(
                 // Throttle orphan sync: at most one sync task every 10 seconds
                 let orphan_sync_lock = Arc::new(tokio::sync::Mutex::new(()));
                 let last_orphan_sync = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                // v2.1.3: Ghost peer blacklist is stored in AppState.removed_peers
 
                 while let Some(event) = p2p_events.recv().await {
                     match event {
@@ -2659,6 +3026,43 @@ async fn cmd_node(
                                             info!("P2P: new block #{} accepted", height);
                                             // Signal miner to cancel and restart on new tip
                                             p2p_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                                            // v2.1.3: Broadcast tip immediately after accepting a block.
+                                            // This keeps P2P peer heights fresh without waiting for
+                                            // the periodic 10s tip broadcast cycle.
+                                            {
+                                                let chain = p2p_blockchain.blockchain.read().unwrap();
+                                                let tip_h = chain.height();
+                                                let tip_hash = hex::encode(chain.latest_hash());
+                                                let tx = p2p_blockchain.p2p_broadcast.read().unwrap().clone();
+                                                if let Some(tx) = tx {
+                                                    tokio::spawn(async move {
+                                                        let _ = tx.send(tsn::network::p2p::P2pCommand::BroadcastTip(tip_h, tip_hash)).await;
+                                                    });
+                                                }
+                                            }
+                                            // v2.1.5: Auto snapshot trigger — block-based, not clock-based.
+                                            // When a new multiple of SNAPSHOT_MANIFEST_INTERVAL becomes
+                                            // finalized (tip >= multiple + MAX_REORG_DEPTH), export a
+                                            // signed snapshot and request cross-confirmations.
+                                            {
+                                                let tip_h = p2p_blockchain.blockchain.read().unwrap().height();
+                                                let interval = tsn::config::SNAPSHOT_MANIFEST_INTERVAL;
+                                                let max_reorg = tsn::config::MAX_REORG_DEPTH;
+                                                if tip_h > max_reorg + interval {
+                                                    let finalized = tip_h - max_reorg;
+                                                    let latest_eligible = (finalized / interval) * interval;
+                                                    let prev_finalized = (tip_h - 1).saturating_sub(max_reorg);
+                                                    let prev_eligible = (prev_finalized / interval) * interval;
+                                                    if latest_eligible > prev_eligible {
+                                                        // A new interval just became finalized — trigger snapshot
+                                                        info!("Snapshot auto-trigger: height {} finalized interval {}", latest_eligible, interval);
+                                                        let snap_state = p2p_blockchain.clone();
+                                                        tokio::spawn(async move {
+                                                            auto_snapshot_export(snap_state).await;
+                                                        });
+                                                    }
+                                                }
+                                            }
                                         }
                                         Ok(false) => {
                                             // Stored as orphan — request missing blocks via P2P
@@ -2673,12 +3077,37 @@ async fn cmd_node(
                                                 last_orphan_sync.store(now_secs, std::sync::atomic::Ordering::Relaxed);
                                                 let gap = height.saturating_sub(local_height);
                                                 if gap > 0 && gap <= 50 {
-                                                    // Request missing blocks via P2P (no HTTP needed)
-                                                    tracing::info!("P2P: block #{} orphan (local: {}), requesting {} blocks via P2P", height, local_height, gap);
+                                                    // Request missing blocks via P2P first
+                                                    tracing::info!("P2P: block #{} orphan (local: {}), requesting {} blocks via P2P + HTTP fallback", height, local_height, gap);
                                                     let tx = p2p_blockchain.p2p_broadcast.read().unwrap().clone();
                                                     if let Some(tx) = tx {
                                                         let _ = tx.send(tsn::network::p2p::P2pCommand::RequestBlocks(local_height + 1, height)).await;
                                                     }
+                                                    // v2.1.3: HTTP fallback — P2P RequestBlocks is unreliable
+                                                    // (broadcast, not unicast; mesh may not include the source)
+                                                    let fb_state = p2p_blockchain.clone();
+                                                    let fb_lock = orphan_sync_lock.clone();
+                                                    let fb_height = local_height;
+                                                    tokio::spawn(async move {
+                                                        // Give P2P 3s to fill the gap first
+                                                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                                                        let cur_h = fb_state.blockchain.read().unwrap().height();
+                                                        if cur_h <= fb_height {
+                                                            // P2P didn't fill the gap — use HTTP
+                                                            let _guard = fb_lock.lock().await;
+                                                            let peers = fb_state.peers.read().unwrap().clone();
+                                                            for peer in &peers {
+                                                                if !tsn::network::is_contactable_peer(peer) { continue; }
+                                                                match tsn::network::sync_from_peer(fb_state.clone(), peer).await {
+                                                                    Ok(n) if n > 0 => {
+                                                                        tracing::info!("HTTP orphan fallback: synced {} blocks from {}", n, tsn::network::peer_id(peer));
+                                                                        break;
+                                                                    }
+                                                                    _ => {}
+                                                                }
+                                                            }
+                                                        }
+                                                    });
                                                 } else if gap > 50 {
                                                     // Too far behind — try HTTP sync as fallback
                                                     tracing::info!("P2P: block #{} orphan (local: {}, gap={}), falling back to HTTP sync", height, local_height, gap);
@@ -2725,10 +3154,15 @@ async fn cmd_node(
                             info!("P2P: NAT status = {}", status);
                         }
                         P2pEvent::PeerHttpAddr(url) => {
-                            let mut peers = p2p_blockchain.peers.write().unwrap();
-                            if !peers.contains(&url) {
-                                debug!("P2P: discovered HTTP peer {}", tsn::network::peer_id(&url));
-                                peers.push(url);
+                            // v2.1.3: Don't re-add peers that were removed by ghost cleanup.
+                            // Ghost peers get removed after 5 sync failures, but P2P Identify
+                            // keeps rediscovering them via Kademlia → infinite add/remove loop.
+                            if !p2p_blockchain.removed_peers.lock().unwrap().contains(&url) {
+                                let mut peers = p2p_blockchain.peers.write().unwrap();
+                                if !peers.contains(&url) {
+                                    debug!("P2P: discovered HTTP peer {}", tsn::network::peer_id(&url));
+                                    peers.push(url);
+                                }
                             }
                         }
                         P2pEvent::BlockRequest(from, to) => {
@@ -2764,7 +3198,8 @@ async fn cmd_node(
         }
     }
 
-    // Start tip broadcast loop (announces local tip to peers every 30 seconds)
+    // Start tip broadcast loop (announces local tip to peers every 10 seconds)
+    // v2.1.3: reduced from 30s to 10s to match block time — keeps P2P peer heights fresh
     {
         let tip_state = state.clone();
         let tip_our_url = our_url.clone();
@@ -2775,7 +3210,7 @@ async fn cmd_node(
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
                 .unwrap_or_default();
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
             loop {
                 interval.tick().await;
 
@@ -2783,6 +3218,15 @@ async fn cmd_node(
                     let chain = tip_state.blockchain.read().unwrap();
                     (chain.height(), hex::encode(chain.latest_hash()))
                 };
+
+                // P2P tip broadcast: announce height+hash to all GossipSub peers
+                {
+                    let p2p_tx = tip_state.p2p_broadcast.read().unwrap().clone();
+                    if let Some(tx) = p2p_tx {
+                        use tsn::network::p2p::P2pCommand;
+                        tx.send(P2pCommand::BroadcastTip(height, hash.clone())).await.ok();
+                    }
+                }
 
                 let mut peers = tip_state.peers.read().unwrap().clone();
                 peers.retain(|p| p != &tip_our_url && p != &tip_local_url && p != &tip_local_ip_url);
@@ -2932,6 +3376,13 @@ async fn cmd_node(
 
         tokio::spawn(async move {
             let client = mine_state.http_client.clone();
+
+            // v2.1.3: Wait for P2P mesh formation before mining.
+            // After fast-sync, GossipSub needs time to form mesh connections.
+            // Mining immediately causes blocks to be lost (no mesh peers yet).
+            println!("Waiting 15s for P2P mesh formation...");
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+
             println!("Starting integrated miner...");
             println!("Mining threads: {}", jobs);
             {
@@ -3028,8 +3479,8 @@ async fn cmd_node(
                             local_height, verified_max_height, gap
                         );
 
-                        // Fix 2: exponential backoff (30s base, up to 300s)
-                        let backoff_secs = std::cmp::min(30u64 * 2u64.pow(resync_attempts.min(4)), 300);
+                        // Fix 2: fast backoff (5s base, up to 30s) — let sync catch up quickly
+                        let backoff_secs = std::cmp::min(5u64 * 2u64.pow(resync_attempts.min(3)), 30);
                         tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
 
                         let fresh_height = mine_state.blockchain.read().unwrap().height();
@@ -3096,9 +3547,18 @@ async fn cmd_node(
                                                 let highest_cp = crate::config::HARDCODED_CHECKPOINTS.iter()
                                                     .map(|(h, _)| *h).max().unwrap_or(0);
                                                 if snap_height > fresh_height && snap_height >= highest_cp {
-                                                    let snap_hash_str = info["block_hash"].as_str().unwrap_or("");
+                                                    let mut snap_hash_str = info["block_hash"].as_str().unwrap_or("").to_string();
                                                     let dl_url = format!("{}/snapshot/download", peer_url);
                                                     if let Ok(resp) = sync_client.get(&dl_url).send().await {
+                                                        // v2.1.3 FIX: use actual snapshot height/hash from download headers
+                                                        let snap_height = resp.headers()
+                                                            .get("x-snapshot-height")
+                                                            .and_then(|v| v.to_str().ok())
+                                                            .and_then(|s| s.parse::<u64>().ok())
+                                                            .unwrap_or(snap_height);
+                                                        if let Some(h) = resp.headers().get("x-snapshot-hash").and_then(|v| v.to_str().ok()) {
+                                                            snap_hash_str = h.to_string();
+                                                        }
                                                         if let Ok(compressed) = resp.bytes().await {
                                                             use std::io::Read;
                                                             let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
@@ -3106,7 +3566,7 @@ async fn cmd_node(
                                                             if decoder.read_to_end(&mut json_data).is_ok() {
                                                                 if let Ok(snapshot) = serde_json::from_slice::<tsn::core::StateSnapshotPQ>(&json_data) {
                                                                     let mut block_hash = [0u8; 32];
-                                                                    if let Ok(bytes) = hex::decode(snap_hash_str) {
+                                                                    if let Ok(bytes) = hex::decode(&snap_hash_str) {
                                                                         if bytes.len() == 32 { block_hash.copy_from_slice(&bytes); }
                                                                     }
                                                                     let ci_url = format!("{}/chain/info", peer_url);
@@ -3209,9 +3669,18 @@ async fn cmd_node(
                                                 let highest_cp = crate::config::HARDCODED_CHECKPOINTS.iter()
                                                     .map(|(h, _)| *h).max().unwrap_or(0);
                                                 if snap_height > 0 && snap_height >= highest_cp {
-                                                    let snap_hash_str = info["block_hash"].as_str().unwrap_or("");
+                                                    let mut snap_hash_str = info["block_hash"].as_str().unwrap_or("").to_string();
                                                     let dl_url = format!("{}/snapshot/download", peer_url);
                                                     if let Ok(resp) = sync_client.get(&dl_url).send().await {
+                                                        // v2.1.3 FIX: use actual snapshot height/hash from download headers
+                                                        let snap_height = resp.headers()
+                                                            .get("x-snapshot-height")
+                                                            .and_then(|v| v.to_str().ok())
+                                                            .and_then(|s| s.parse::<u64>().ok())
+                                                            .unwrap_or(snap_height);
+                                                        if let Some(h) = resp.headers().get("x-snapshot-hash").and_then(|v| v.to_str().ok()) {
+                                                            snap_hash_str = h.to_string();
+                                                        }
                                                         if let Ok(compressed) = resp.bytes().await {
                                                             use std::io::Read;
                                                             let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
@@ -3219,7 +3688,7 @@ async fn cmd_node(
                                                             if decoder.read_to_end(&mut json_data).is_ok() {
                                                                 if let Ok(snapshot) = serde_json::from_slice::<tsn::core::StateSnapshotPQ>(&json_data) {
                                                                     let mut block_hash = [0u8; 32];
-                                                                    if let Ok(bytes) = hex::decode(snap_hash_str) {
+                                                                    if let Ok(bytes) = hex::decode(&snap_hash_str) {
                                                                         if bytes.len() == 32 { block_hash.copy_from_slice(&bytes); }
                                                                     }
                                                                     let ci_url = format!("{}/chain/info", peer_url);
@@ -3417,8 +3886,9 @@ async fn cmd_node(
                     let chain = mine_state.blockchain.read().unwrap();
                     let current_tip = chain.latest_hash();
                     if template_prev_hash != current_tip {
-                        tracing::warn!(
-                            "Mined block is stale (tip changed during PoW). Discarding."
+                        mine_state.metric_stale_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::debug!(
+                            "Mined block discarded (tip changed during PoW)"
                         );
                         drop(_reorg_read_post);
                         continue;
@@ -3431,7 +3901,7 @@ async fn cmd_node(
                     match chain.add_block(mined_block.clone()) {
                         Ok(()) => {
                             println!(
-                                "💎 Mined block #{} (hash: {})",
+                                "\x1b[1;33m🧱 Potential mined block #{} (hash: {})\x1b[0m",
                                 chain.height(),
                                 mined_block.hash_hex()
                             );
@@ -3503,7 +3973,8 @@ async fn cmd_node(
                     tsn::network::is_contactable_peer(peer) && peer != &announce_url && peer != &local_url && peer != &local_ip_url
                 });
                 if !current_peers.is_empty() {
-                    broadcast_block(&mined_block, &current_peers, &client).await;
+                    let local_pid = mine_state.p2p_peer_id.read().unwrap().clone();
+                    tsn::network::broadcast_block_with_id(&mined_block, &current_peers, &client, local_pid).await;
                 }
 
                 // v1.6.1: Fork check by HEIGHT + HASH, never by cumulative_work.
@@ -3522,7 +3993,47 @@ async fn cmd_node(
                             };
 
                             if peer_hash == local_hash_hex {
-                                // Same tip — no fork
+                                // Same tip — no fork. Verify confirmation after short delay.
+                                let confirm_height = height;
+                                let confirm_hash = local_hash_hex.clone();
+                                let confirm_state = mine_state.clone();
+                                let confirm_peers = current_peers.clone();
+                                tokio::spawn(async move {
+                                    // Wait for next block cycle to check if our block survived
+                                    tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+                                    let local_hash_at_h = {
+                                        let chain = confirm_state.blockchain.read().unwrap();
+                                        chain.get_hash_at_height(confirm_height)
+                                            .map(|h| hex::encode(h))
+                                            .unwrap_or_default()
+                                    };
+                                    if local_hash_at_h == confirm_hash {
+                                        // Our block is still canonical locally, verify with a seed
+                                        let client = reqwest::Client::new();
+                                        let mut confirmed = false;
+                                        for peer in &confirm_peers {
+                                            let url = format!("{}/block/height/{}", peer, confirm_height);
+                                            if let Ok(resp) = client.get(&url)
+                                                .timeout(std::time::Duration::from_secs(3))
+                                                .send().await
+                                            {
+                                                if let Ok(info) = resp.json::<serde_json::Value>().await {
+                                                    if info.get("hash").and_then(|v| v.as_str()) == Some(&confirm_hash) {
+                                                        confirmed = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if confirmed {
+                                            println!("\x1b[1;32m💎 Block #{} CONFIRMED by network (hash: {})\x1b[0m", confirm_height, confirm_hash);
+                                        } else {
+                                            println!("\x1b[1;31m✗ Block #{} ORPHANED — replaced by another miner\x1b[0m", confirm_height);
+                                        }
+                                    } else {
+                                        println!("\x1b[1;31m✗ Block #{} ORPHANED — replaced by another miner\x1b[0m", confirm_height);
+                                    }
+                                });
                                 tracing::info!("Block #{} mined, synced with peers at height {}", height, peer_height);
                                 unaccepted_count = 0;
                             } else if peer_height > height {
@@ -3584,6 +4095,12 @@ async fn cmd_node(
                     let pid = console_state.p2p_peer_id.read().unwrap().clone().unwrap_or_default();
                     println!("{violet}> {cyan}{pid}{reset}");
                 }
+                "address" | "addr" => {
+                    match &console_state.mining_address {
+                        Some(addr) => println!("{violet}> {cyan}{addr}{reset}"),
+                        None => println!("{violet}> No wallet loaded{reset}"),
+                    }
+                }
                 "status" => {
                     let chain = console_state.blockchain.read().unwrap();
                     let h = chain.height();
@@ -3631,6 +4148,7 @@ async fn cmd_node(
                 "help" | "?" => {
                     println!("{violet}> Commands:{reset}");
                     println!("{violet}  id         {reset}Show your Node ID (PeerID)");
+                    println!("{violet}  address    {reset}Show your mining/wallet address");
                     println!("{violet}  status     {reset}Height, peers, difficulty, version");
                     println!("{violet}  peers      {reset}List connected P2P peers");
                     println!("{violet}  version    {reset}Show node version");

@@ -1,6 +1,6 @@
-//! Tests unitaires isolés pour le module réseau TSN
+//! Tests unitaires isolated for the module network TSN
 //! 
-//! Tests sans dépendances externes, avec mocks et timeouts appropriés.
+//! Tests without dependencies externes, with mocks and timeouts appropriate.
 
 use std::time::Duration;
 use tokio::time::timeout;
@@ -12,7 +12,7 @@ use crate::network::protocol::{
 };
 use crate::network::NetworkError;
 
-/// Test: encodage/décodage basique de HandshakeData
+/// Test: encoding/decoding basique de HandshakeData
 #[test]
 fn test_basic_handshake_encode_decode() {
     let handshake = HandshakeData {
@@ -51,7 +51,7 @@ fn test_basic_handshake_encode_decode() {
     }
 }
 
-/// Test: encodage/décodage de HandshakeAck
+/// Test: encoding/decoding de HandshakeAck
 #[test]
 fn test_handshake_ack_encode_decode() {
     let msg = TsnMessage::HandshakeAck {
@@ -77,7 +77,7 @@ fn test_handshake_ack_encode_decode() {
     }
 }
 
-/// Test: toutes les capabilities
+/// Test: all capabilities
 #[test]
 fn test_all_capabilities() {
     let capabilities = vec![
@@ -121,7 +121,7 @@ fn test_all_capabilities() {
     }
 }
 
-/// Test: handshake avec capabilities vides
+/// Test: handshake with capabilities vides
 #[test]
 fn test_empty_capabilities() {
     let handshake = HandshakeData {
@@ -148,7 +148,7 @@ fn test_empty_capabilities() {
     }
 }
 
-/// Test: différentes versions de protocole
+/// Test: different versions de protocole
 #[test]
 fn test_protocol_versions() {
     let versions = vec![
@@ -186,7 +186,7 @@ fn test_protocol_versions() {
     }
 }
 
-/// Test: différents ports d'écoute
+/// Test: different ports d'listening
 #[test]
 fn test_listen_ports() {
     let ports = vec![1, 80, 443, 8080, 9333, 65535];
@@ -217,7 +217,7 @@ fn test_listen_ports() {
     }
 }
 
-/// Test: différents node_id
+/// Test: different node_id
 #[test]
 fn test_node_ids() {
     let node_ids = vec![
@@ -264,7 +264,7 @@ fn test_node_ids() {
     }
 }
 
-/// Test: timestamps extrêmes
+/// Test: timestamps extreme
 #[test]
 fn test_extreme_timestamps() {
     let timestamps = vec![0, 1, u64::MAX - 1, u64::MAX];
@@ -295,7 +295,7 @@ fn test_extreme_timestamps() {
     }
 }
 
-/// Test: HandshakeAck avec différents états
+/// Test: HandshakeAck with different states
 #[test]
 fn test_handshake_ack_states() {
     let states = vec![true, false];
@@ -323,7 +323,7 @@ fn test_handshake_ack_states() {
     }
 }
 
-/// Test: buffer insuffisant pour un message complet
+/// Test: buffer insuffisant for a message complet
 #[test]
 fn test_insufficient_buffer() {
     let handshake = HandshakeData {
@@ -337,7 +337,7 @@ fn test_insufficient_buffer() {
     let msg = TsnMessage::Handshake(handshake);
     let encoded = encode_message(&msg).expect("Encoding should succeed");
     
-    // Prend seulement les premiers bytes
+    // Prend onlyment the premiers bytes
     let partial = &encoded[..encoded.len().min(10)];
     let mut buf = BytesMut::from(partial);
     
@@ -345,13 +345,13 @@ fn test_insufficient_buffer() {
     
     match result {
         Ok(None) => {
-            // Comportement attendu : pas assez de données
+            // Comportement attendu : pas enough of data
         }
         Ok(Some(_)) => {
-            panic!("Ne devrait pas décoder avec un buffer insuffisant");
+            panic!("Ne should pas decode avec un buffer insufficient");
         }
         Err(_) => {
-            // Erreur acceptable
+            // Acceptable error
         }
     }
 }
@@ -368,15 +368,15 @@ fn test_empty_buffer() {
             // Comportement attendu
         }
         Ok(Some(_)) => {
-            panic!("Ne devrait pas décoder un buffer vide");
+            panic!("Ne should pas decode un buffer vide");
         }
         Err(_) => {
-            // Erreur acceptable
+            // Acceptable error
         }
     }
 }
 
-/// Test: round-trip de tous les types de messages
+/// Test: round-trip de all types de messages
 #[test]
 fn test_all_message_types_roundtrip() {
     let messages = vec![
@@ -410,7 +410,7 @@ fn test_all_message_types_roundtrip() {
         
         assert!(consumed > 0, "Should consume bytes for message {}", i);
         
-        // Vérifie que le message décodé correspond à l'original
+        // Verify that the message decoded matches to l'original
         match (&original_msg, &decoded_msg) {
             (TsnMessage::Handshake(orig), TsnMessage::Handshake(dec)) => {
                 assert_eq!(orig.version.0, dec.version.0);
@@ -431,10 +431,10 @@ fn test_all_message_types_roundtrip() {
     }
 }
 
-/// Test: timeout avec opération async mock
+/// Test: timeout with operation async mock
 #[tokio::test]
 async fn test_timeout_with_mock_operation() {
-    // Opération qui réussit dans les temps
+    // Operation that succeeds in the temps
     let result = timeout(Duration::from_millis(100), async {
         tokio::time::sleep(Duration::from_millis(50)).await;
         Ok::<i32, NetworkError>(42)
@@ -445,7 +445,7 @@ async fn test_timeout_with_mock_operation() {
     assert!(inner_result.is_ok());
     assert_eq!(inner_result.unwrap(), 42);
     
-    // Opération qui timeout
+    // Operation that timeout
     let result = timeout(Duration::from_millis(50), async {
         tokio::time::sleep(Duration::from_millis(100)).await;
         Ok::<i32, NetworkError>(42)
@@ -454,10 +454,10 @@ async fn test_timeout_with_mock_operation() {
     assert!(result.is_err()); // Timeout
 }
 
-/// Test: gestion d'erreur avec NetworkError
+/// Test: error handling with NetworkError
 #[tokio::test]
 async fn test_network_error_handling() {
-    // Simule différents types d'erreurs réseau
+    // Simulate different types d'errors network
     let errors = vec![
         NetworkError::ConnectionFailed,
         NetworkError::Timeout,
@@ -475,11 +475,11 @@ async fn test_network_error_handling() {
         
         assert!(result.is_ok()); // Pas de timeout
         let inner_result = result.unwrap();
-        assert!(inner_result.is_err()); // Mais erreur réseau
+        assert!(inner_result.is_err()); // But network error
     }
 }
 
-/// Test: validation des capabilities MaxPeers
+/// Test: validation of capabilities MaxPeers
 #[test]
 fn test_max_peers_capability_values() {
     let max_peers_values = vec![0, 1, 10, 100, 1000, 10000, u32::MAX];

@@ -1,20 +1,20 @@
-//! Système de gouvernance pour la configuration cryptographique
+//! System de governance for the configuration cryptographique
 //! 
-//! Ce module implémente un système de gouvernance décentralisé pour ajuster
-//! les paramètres cryptographiques de TSN, notamment la période de transition
-//! entre les schémas de signature ML-DSA et SLH-DSA.
+//! This module implements a system de governance decentralized for ajuster
+//! the parameters cryptographiques de TSN, notamment the period de transition
+//! between schemas de signature ML-DSA and SLH-DSA.
 //! 
-//! ## Sécurité
+//! ## Security
 //! 
-//! - Votes cryptographiquement vérifiables avec SLH-DSA
-//! - Seuil de consensus configurable (défaut: 67% supermajorité)
-//! - Protection contre les attaques de replay avec nonces
-//! - Validation des propositions par merkle tree commitment
+//! - Votes cryptographiquement verifiable with SLH-DSA
+//! - Seuil de consensus configurable (default: 67% supermajority)
+//! - Protection contre the attaques de replay with nonces
+//! - Validation of proposals par merkle tree commitment
 //! 
-//! ## Références
+//! ## References
 //! 
-//! - FIPS 205: SLH-DSA pour la signature des votes
-//! - RFC 6962: Merkle Tree Hash pour l'intégrité des propositions
+//! - FIPS 205: SLH-DSA for the signature of votes
+//! - RFC 6962: Merkle Tree Hash for l'integrity of proposals
 
 use crate::crypto::pq::slh_dsa::{SlhDsaPublicKey, SlhDsaSecretKey, SlhDsaSignature};
 use crate::crypto::merkle_tree::MerkleTree;
@@ -25,134 +25,134 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// Identifiant unique d'une proposition de gouvernance
+/// Identifiant unique d'une proposition de governance
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProposalId(pub [u8; 32]);
 
-/// Type de paramètre configurable
+/// Type de parameter configurable
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConfigParameter {
-    /// Période de transition ML-DSA → SLH-DSA (en blocs)
+    /// Period de transition ML-DSA → SLH-DSA (en blocs)
     SignatureTransitionPeriod(u64),
-    /// Seuil de consensus pour les votes (en pourcentage, 0-100)
+    /// Seuil de consensus for the votes (en pourcentage, 0-100)
     ConsensusThreshold(u8),
-    /// Durée de validité d'une proposition (en blocs)
+    /// Duration de validity d'une proposition (en blocs)
     ProposalValidityPeriod(u64),
-    /// Taille maximale du comité de gouvernance
+    /// Size maximale of the committee de governance
     MaxCommitteeSize(u32),
 }
 
-/// Proposition de modification de paramètre
+/// Proposition de modification de parameter
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proposal {
     /// Identifiant unique
     pub id: ProposalId,
-    /// Paramètre à modifier
+    /// Parameter to modifier
     pub parameter: ConfigParameter,
-    /// Hauteur de bloc de création
+    /// Height de bloc de creation
     pub created_at_height: u64,
-    /// Hauteur de bloc d'expiration
+    /// Height de bloc d'expiration
     pub expires_at_height: u64,
-    /// Hash de commitment pour l'intégrité
+    /// Hash de commitment for l'integrity
     pub commitment: [u8; 32],
     /// Nonce anti-replay
     pub nonce: u64,
 }
 
-/// Vote sur une proposition
+/// Vote on a proposition
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Vote {
-    /// ID de la proposition
+    /// ID de the proposition
     pub proposal_id: ProposalId,
-    /// Clé publique du votant
+    /// Key publique of the votant
     pub voter_pubkey: SlhDsaPublicKey,
-    /// Support (true) ou opposition (false)
+    /// Support (true) or opposition (false)
     pub support: bool,
-    /// Timestamp du vote
+    /// Timestamp of the vote
     pub timestamp: u64,
     /// Nonce anti-replay
     pub nonce: u64,
-    /// Signature SLH-DSA du vote
+    /// Signature SLH-DSA of the vote
     pub signature: SlhDsaSignature,
 }
 
-/// État d'une proposition
+/// State d'une proposition
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProposalStatus {
     /// En cours de vote
     Active,
-    /// Approuvée (seuil atteint)
+    /// Approved (seuil atteint)
     Approved,
-    /// Rejetée (seuil non atteint à l'expiration)
+    /// Rejectede (seuil non atteint to l'expiration)
     Rejected,
-    /// Expirée sans vote suffisant
+    /// Expired without vote suffisant
     Expired,
 }
 
-/// Configuration actuelle du système
+/// Configuration current of the system
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GovernanceConfig {
-    /// Période de transition signature (blocs)
+    /// Period de transition signature (blocs)
     pub signature_transition_period: u64,
     /// Seuil de consensus (pourcentage)
     pub consensus_threshold: u8,
-    /// Durée de validité des propositions (blocs)
+    /// Duration de validity of proposals (blocs)
     pub proposal_validity_period: u64,
-    /// Taille max du comité
+    /// Size max of the committee
     pub max_committee_size: u32,
-    /// Hauteur de bloc de dernière mise à jour
+    /// Height de bloc de last update
     pub last_updated_height: u64,
 }
 
 impl Default for GovernanceConfig {
     fn default() -> Self {
         Self {
-            signature_transition_period: 10_000, // Valeur actuelle hardcodée
-            consensus_threshold: 67, // Supermajorité
-            proposal_validity_period: 1_000, // ~1 semaine à 1 bloc/10s
+            signature_transition_period: 10_000, // Current value hardcoded
+            consensus_threshold: 67, // Supermajority
+            proposal_validity_period: 1_000, // ~1 week at 1 block/10s
             max_committee_size: 100,
             last_updated_height: 0,
         }
     }
 }
 
-/// Gestionnaire du système de gouvernance
+/// Gestionnaire of the system de governance
 #[derive(Debug)]
 pub struct GovernanceManager {
-    /// Configuration actuelle
+    /// Current configuration
     config: GovernanceConfig,
-    /// Propositions actives
+    /// Propositions active
     active_proposals: HashMap<ProposalId, Proposal>,
     /// Votes par proposition
     votes: HashMap<ProposalId, Vec<Vote>>,
-    /// Comité de gouvernance (clés publiques autorisées)
+    /// Committee de governance (keys publics authorizeds)
     committee: Vec<SlhDsaPublicKey>,
-    /// Nonces utilisés (anti-replay)
+    /// Nonces used (anti-replay)
     used_nonces: HashMap<SlhDsaPublicKey, u64>,
 }
 
 #[derive(Error, Debug)]
 pub enum GovernanceError {
-    #[error("Proposition non trouvée: {0:?}")]
+    #[error("Proposition non founde: {0:?}")]
     ProposalNotFound(ProposalId),
-    #[error("Proposition expirée")]
+    #[error("Proposition expired")]
     ProposalExpired,
-    #[error("Vote invalide: signature incorrecte")]
+    #[error("Vote invalid: signature incorrecte")]
     InvalidVoteSignature,
-    #[error("Votant non autorisé")]
+    #[error("Votant non authorized")]
     UnauthorizedVoter,
-    #[error("Nonce déjà utilisé")]
+    #[error("Nonce already used")]
     NonceReused,
-    #[error("Paramètre invalide: {0}")]
+    #[error("Parameter invalid: {0}")]
     InvalidParameter(String),
-    #[error("Comité plein (max: {0})")]
+    #[error("Committee plein (max: {0})")]
     CommitteeFull(u32),
-    #[error("Commitment invalide")]
+    #[error("Commitment invalid")]
     InvalidCommitment,
 }
 
 impl GovernanceManager {
-    /// Crée un nouveau gestionnaire avec la configuration par défaut
+    /// Creates a new manager with the configuration by default
     pub fn new() -> Self {
         Self {
             config: GovernanceConfig::default(),
@@ -163,7 +163,7 @@ impl GovernanceManager {
         }
     }
 
-    /// Ajoute un membre au comité de gouvernance
+    /// Adds a membre at the committee de governance
     pub fn add_committee_member(&mut self, pubkey: SlhDsaPublicKey) -> Result<(), GovernanceError> {
         if self.committee.len() >= self.config.max_committee_size as usize {
             return Err(GovernanceError::CommitteeFull(self.config.max_committee_size));
@@ -175,24 +175,24 @@ impl GovernanceManager {
         Ok(())
     }
 
-    /// Crée une nouvelle proposition
+    /// Creates a new proposition
     pub fn create_proposal(
         &mut self,
         parameter: ConfigParameter,
         current_height: u64,
         nonce: u64,
     ) -> Result<ProposalId, GovernanceError> {
-        // Validation du paramètre
+        // Validation of the parameter
         self.validate_parameter(&parameter)?;
         
-        // Génération de l'ID unique
+        // Generation de l'ID unique
         let proposal_data = bincode::serialize(&(&parameter, current_height, nonce))
             .map_err(|_| GovernanceError::InvalidParameter("Serialization failed".to_string()))?;
         
         let id_hash = PoseidonHash::hash(&proposal_data);
         let proposal_id = ProposalId(id_hash);
         
-        // Calcul du commitment
+        // Calcul of the commitment
         let commitment = self.compute_proposal_commitment(&parameter, current_height, nonce);
         
         let proposal = Proposal {
@@ -210,7 +210,7 @@ impl GovernanceManager {
         Ok(proposal_id)
     }
 
-    /// Soumet un vote sur une proposition
+    /// Soumet a vote on a proposition
     pub fn submit_vote(
         &mut self,
         proposal_id: ProposalId,
@@ -219,30 +219,30 @@ impl GovernanceManager {
         current_height: u64,
         nonce: u64,
     ) -> Result<(), GovernanceError> {
-        // Vérification de l'existence de la proposition
+        // Verification de l'existsnce de the proposition
         let proposal = self.active_proposals.get(&proposal_id)
             .ok_or(GovernanceError::ProposalNotFound(proposal_id))?;
         
-        // Vérification de l'expiration
+        // Verification de l'expiration
         if current_height >= proposal.expires_at_height {
             return Err(GovernanceError::ProposalExpired);
         }
         
         let voter_pubkey = voter_key.public_key();
         
-        // Vérification de l'autorisation
+        // Verification de l'autorisation
         if !self.committee.contains(&voter_pubkey) {
             return Err(GovernanceError::UnauthorizedVoter);
         }
         
-        // Vérification du nonce anti-replay
+        // Verification of the nonce anti-replay
         if let Some(&last_nonce) = self.used_nonces.get(&voter_pubkey) {
             if nonce <= last_nonce {
                 return Err(GovernanceError::NonceReused);
             }
         }
         
-        // Création du message à signer
+        // Creation of the message to signer
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -250,7 +250,7 @@ impl GovernanceManager {
         
         let vote_message = self.create_vote_message(proposal_id, support, timestamp, nonce);
         
-        // Signature du vote
+        // Signature of the vote
         let signature = voter_key.sign(&vote_message);
         
         let vote = Vote {
@@ -262,19 +262,19 @@ impl GovernanceManager {
             signature,
         };
         
-        // Vérification de la signature
+        // Verification de the signature
         if voter_pubkey.verify(&vote_message, &vote.signature).is_err() {
             return Err(GovernanceError::InvalidVoteSignature);
         }
         
-        // Enregistrement du vote
+        // Enregistrement of the vote
         self.votes.get_mut(&proposal_id).unwrap().push(vote);
         self.used_nonces.insert(voter_pubkey, nonce);
         
         Ok(())
     }
 
-    /// Évalue le statut d'une proposition
+    /// Evaluates the statut d'une proposition
     pub fn evaluate_proposal(&self, proposal_id: ProposalId, current_height: u64) -> Result<ProposalStatus, GovernanceError> {
         let proposal = self.active_proposals.get(&proposal_id)
             .ok_or(GovernanceError::ProposalNotFound(proposal_id))?;
@@ -300,7 +300,7 @@ impl GovernanceManager {
         }
     }
 
-    /// Applique une proposition approuvée
+    /// Applique a proposition approved
     pub fn apply_proposal(&mut self, proposal_id: ProposalId, current_height: u64) -> Result<(), GovernanceError> {
         let status = self.evaluate_proposal(proposal_id, current_height)?;
         
@@ -311,7 +311,7 @@ impl GovernanceManager {
         let proposal = self.active_proposals.remove(&proposal_id)
             .ok_or(GovernanceError::ProposalNotFound(proposal_id))?;
         
-        // Application du changement de configuration
+        // Application of the changement de configuration
         match proposal.parameter {
             ConfigParameter::SignatureTransitionPeriod(period) => {
                 self.config.signature_transition_period = period;
@@ -336,12 +336,12 @@ impl GovernanceManager {
         Ok(())
     }
 
-    /// Retourne la configuration actuelle
+    /// Returns the current configuration
     pub fn get_config(&self) -> &GovernanceConfig {
         &self.config
     }
 
-    /// Nettoie les propositions expirées
+    /// Cleans up the proposals expireds
     pub fn cleanup_expired_proposals(&mut self, current_height: u64) {
         let expired_ids: Vec<_> = self.active_proposals
             .iter()
@@ -355,7 +355,7 @@ impl GovernanceManager {
         }
     }
 
-    /// Validation des paramètres
+    /// Validation of parameters
     fn validate_parameter(&self, parameter: &ConfigParameter) -> Result<(), GovernanceError> {
         match parameter {
             ConfigParameter::SignatureTransitionPeriod(period) => {
@@ -390,13 +390,13 @@ impl GovernanceManager {
         Ok(())
     }
 
-    /// Calcule le commitment d'une proposition
+    /// Calculates the commitment d'une proposition
     fn compute_proposal_commitment(&self, parameter: &ConfigParameter, height: u64, nonce: u64) -> [u8; 32] {
         let data = bincode::serialize(&(parameter, height, nonce)).unwrap();
         PoseidonHash::hash(&data)
     }
 
-    /// Crée le message à signer pour un vote
+    /// Creates the message to signer for a vote
     fn create_vote_message(&self, proposal_id: ProposalId, support: bool, timestamp: u64, nonce: u64) -> Vec<u8> {
         let vote_data = (proposal_id, support, timestamp, nonce);
         bincode::serialize(&vote_data).unwrap()
@@ -444,10 +444,10 @@ mod tests {
         let voter_key = SlhDsaSecretKey::generate(&mut OsRng);
         let voter_pubkey = voter_key.public_key();
         
-        // Ajouter au comité
+        // Add to committee
         manager.add_committee_member(voter_pubkey).unwrap();
         
-        // Créer une proposition
+        // Create a proposition
         let parameter = ConfigParameter::SignatureTransitionPeriod(15_000);
         let proposal_id = manager.create_proposal(parameter, 100, 1).unwrap();
         
@@ -470,11 +470,11 @@ mod tests {
         let parameter = ConfigParameter::SignatureTransitionPeriod(15_000);
         let proposal_id = manager.create_proposal(parameter, 100, 1).unwrap();
         
-        // Sans vote
+        // Without vote
         let status = manager.evaluate_proposal(proposal_id, 150).unwrap();
         assert_eq!(status, ProposalStatus::Active);
         
-        // Avec vote positif (100% support)
+        // With positive vote (100% support)
         manager.submit_vote(proposal_id, &voter_key, true, 150, 1).unwrap();
         let status = manager.evaluate_proposal(proposal_id, 150).unwrap();
         assert_eq!(status, ProposalStatus::Approved);
@@ -487,7 +487,7 @@ mod tests {
         // Valide
         assert!(manager.validate_parameter(&ConfigParameter::SignatureTransitionPeriod(5_000)).is_ok());
         
-        // Invalide
+        // Invalid
         assert!(manager.validate_parameter(&ConfigParameter::SignatureTransitionPeriod(0)).is_err());
         assert!(manager.validate_parameter(&ConfigParameter::ConsensusThreshold(101)).is_err());
     }

@@ -4,7 +4,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-// Structure pour stocker les informations de l'API
+// Structure for stocker the informations de l'API
 struct Api {
     tx: mpsc::Sender<SocketAddr>,
 }
@@ -29,28 +29,28 @@ impl Api {
     }
 
     async fn get_peers(&self) -> Vec<SocketAddr> {
-        // Récupérer la liste des pairs connus
+        // Retrieve the liste of peers connus
         let mut peers = Vec::new();
         // ...
         peers
     }
 
     async fn get_blocks(&self) -> Vec<Block> {
-        // Récupérer la liste des blocs
+        // Retrieve the liste of blocs
         let mut blocks = Vec::new();
         // ...
         blocks
     }
 }
 
-// Structure pour stocker les informations de la requête
+// Structure for stocker the informations de the request
 #[derive(Deserialize, Serialize)]
 enum Request {
     GetPeers,
     GetBlocks,
 }
 
-// Structure pour stocker les informations du bloc
+// Structure for stocker the informations of the bloc
 #[derive(Deserialize, Serialize)]
 struct Block {
     // ...

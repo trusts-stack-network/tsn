@@ -8,7 +8,7 @@ use crate::storage::Storage;
 use crate::crypto::merkle_tree::MerkleTree;
 use crate::network::mempool::Mempool;
 
-/// Structure pour les données d'affichage d'un bloc
+/// Structure for the data d'affichage d'un bloc
 #[derive(Debug)]
 pub struct BlockDisplayData {
     pub height: u64,
@@ -22,7 +22,7 @@ pub struct BlockDisplayData {
     pub size_bytes: usize,
 }
 
-/// Structure pour les données d'affichage d'une transaction
+/// Structure for the data d'affichage d'une transaction
 #[derive(Debug)]
 pub struct TransactionDisplayData {
     pub hash: String,
@@ -37,7 +37,7 @@ pub struct TransactionDisplayData {
     pub is_signature_valid: Option<bool>,
 }
 
-/// Structure pour les données d'affichage d'un compte
+/// Structure for the data d'affichage d'un compte
 #[derive(Debug)]
 pub struct AccountDisplayData {
     pub address: String,
@@ -48,7 +48,7 @@ pub struct AccountDisplayData {
     pub transaction_count: u64,
 }
 
-/// Structure pour les statistiques de la blockchain
+/// Structure for the statistics de the blockchain
 #[derive(Debug)]
 pub struct BlockchainStats {
     pub latest_height: u64,
@@ -66,11 +66,11 @@ impl BlockchainInspector {
         Self { storage }
     }
 
-    /// Inspecte un bloc et retourne les données structurées
+    /// Inspecte a bloc and returns the data structured
     pub async fn get_block_data(&self, block_height: u64) -> Result<BlockDisplayData> {
         let block = self.storage.get_block(block_height).await
-            .context("Erreur lors de la récupération du bloc")?
-            .ok_or_else(|| anyhow::anyhow!("Bloc #{} non trouvé", block_height))?;
+            .context("Error lors de la retrieval du bloc")?
+            .ok_or_else(|| anyhow::anyhow!("Bloc #{} non found", block_height))?;
 
         Ok(BlockDisplayData {
             height: block.height,
@@ -85,11 +85,11 @@ impl BlockchainInspector {
         })
     }
 
-    /// Inspecte une transaction et retourne les données structurées
+    /// Inspecte a transaction and returns the data structured
     pub async fn get_transaction_data(&self, tx_hash: &str) -> Result<TransactionDisplayData> {
         let transaction = self.storage.get_transaction(tx_hash).await
-            .context("Erreur lors de la récupération de la transaction")?
-            .ok_or_else(|| anyhow::anyhow!("Transaction {} non trouvée", tx_hash))?;
+            .context("Error lors de la retrieval de la transaction")?
+            .ok_or_else(|| anyhow::anyhow!("Transaction {} non founde", tx_hash))?;
 
         let is_signature_valid = match transaction.verify_signature() {
             Ok(valid) => Some(valid),
@@ -110,11 +110,11 @@ impl BlockchainInspector {
         })
     }
 
-    /// Inspecte un compte et retourne les données structurées
+    /// Inspecte a compte and returns the data structured
     pub async fn get_account_data(&self, address: &str) -> Result<AccountDisplayData> {
         let account = self.storage.get_account(address).await
-            .context("Erreur lors de la récupération du compte")?
-            .ok_or_else(|| anyhow::anyhow!("Compte {} non trouvé", address))?;
+            .context("Error lors de la retrieval du compte")?
+            .ok_or_else(|| anyhow::anyhow!("Compte {} non found", address))?;
 
         Ok(AccountDisplayData {
             address: account.address().to_string(),
@@ -126,16 +126,16 @@ impl BlockchainInspector {
         })
     }
 
-    /// Récupère les statistiques de la blockchain
+    /// Retrieves the statistics de the blockchain
     pub async fn get_blockchain_stats(&self) -> Result<BlockchainStats> {
         let latest_height = self.storage.get_latest_block_height().await
-            .context("Erreur lors de la récupération de la hauteur")?;
+            .context("Error lors de la retrieval de la hauteur")?;
 
         let total_transactions = self.storage.get_total_transaction_count().await
-            .context("Erreur lors du comptage des transactions")?;
+            .context("Error counting transactions")?;
 
         let total_accounts = self.storage.get_total_account_count().await
-            .context("Erreur lors du comptage des comptes")?;
+            .context("Error counting accounts")?;
 
         let avg_tx_per_block = if latest_height > 0 {
             total_transactions as f64 / latest_height as f64
@@ -151,7 +151,7 @@ impl BlockchainInspector {
         })
     }
 
-    /// Commande d'inspection de bloc avec affichage
+    /// Commande d'inspection de bloc with affichage
     pub async fn inspect_block(&self, block_height: u64, verbose: bool) -> Result<()> {
         println!("🔍 Inspection du bloc #{}", block_height);
 
@@ -160,8 +160,8 @@ impl BlockchainInspector {
 
         if verbose {
             let block = self.storage.get_block(block_height).await
-                .context("Erreur lors de la récupération du bloc")?
-                .ok_or_else(|| anyhow::anyhow!("Bloc #{} non trouvé", block_height))?;
+                .context("Error lors de la retrieval du bloc")?
+                .ok_or_else(|| anyhow::anyhow!("Bloc #{} non found", block_height))?;
 
             self.analyze_block_transactions(&block).await?;
             self.verify_block_integrity(&block).await?;
@@ -170,7 +170,7 @@ impl BlockchainInspector {
         Ok(())
     }
 
-    /// Commande d'inspection de transaction avec affichage
+    /// Commande d'inspection de transaction with affichage
     pub async fn inspect_transaction(&self, tx_hash: &str, verbose: bool) -> Result<()> {
         println!("🔍 Inspection de la transaction {}", &tx_hash[..16]);
 
@@ -179,8 +179,8 @@ impl BlockchainInspector {
 
         if verbose {
             let transaction = self.storage.get_transaction(tx_hash).await
-                .context("Erreur lors de la récupération de la transaction")?
-                .ok_or_else(|| anyhow::anyhow!("Transaction {} non trouvée", tx_hash))?;
+                .context("Error lors de la retrieval de la transaction")?
+                .ok_or_else(|| anyhow::anyhow!("Transaction {} non founde", tx_hash))?;
 
             self.analyze_transaction_details(&transaction).await?;
         }
@@ -188,7 +188,7 @@ impl BlockchainInspector {
         Ok(())
     }
 
-    /// Commande d'inspection de compte avec affichage
+    /// Commande d'inspection de compte with affichage
     pub async fn inspect_account(&self, address: &str, verbose: bool) -> Result<()> {
         println!("🔍 Inspection du compte {}", &address[..16]);
 
@@ -199,8 +199,8 @@ impl BlockchainInspector {
             self.analyze_account_history(address).await?;
             
             let account = self.storage.get_account(address).await
-                .context("Erreur lors de la récupération du compte")?
-                .ok_or_else(|| anyhow::anyhow!("Compte {} non trouvé", address))?;
+                .context("Error lors de la retrieval du compte")?
+                .ok_or_else(|| anyhow::anyhow!("Compte {} non found", address))?;
             
             self.check_account_state_consistency(&account).await?;
         }
@@ -208,36 +208,36 @@ impl BlockchainInspector {
         Ok(())
     }
 
-    /// Commande d'inspection des statistiques blockchain avec affichage
+    /// Commande d'inspection of statistics blockchain with affichage
     pub async fn inspect_blockchain_stats(&self) -> Result<()> {
         println!("📊 Statistiques de la blockchain");
 
         let stats = self.get_blockchain_stats().await?;
         self.print_blockchain_stats(&stats);
 
-        // Analyser les derniers blocs
+        // Analyser the derniers blocs
         self.analyze_recent_blocks(10).await?;
 
         Ok(())
     }
 
-    // === MÉTHODES D'AFFICHAGE (SÉPARÉES DE LA LOGIQUE) ===
+    // === METHODS D'AFFICHAGE (SEPARATE DE LA LOGIQUE) ===
 
     fn print_block_info(&self, data: &BlockDisplayData, verbose: bool) {
         println!("┌─────────────────────────────────────┐");
         println!("│            BLOC INFO                │");
         println!("├─────────────────────────────────────┤");
-        println!("│ Hauteur: {:>26} │", data.height);
+        println!("│ Height: {:>26} │", data.height);
         println!("│ Hash: {:>30} │", self.format_hash_display(&data.hash));
-        println!("│ Hash précédent: {:>18} │", self.format_hash_display(&data.previous_hash));
+        println!("│ Hash previous: {:>18} │", self.format_hash_display(&data.previous_hash));
         println!("│ Timestamp: {:>24} │", data.timestamp);
         println!("│ Transactions: {:>20} │", data.transaction_count);
-        println!("│ Difficulté: {:>22} │", data.difficulty);
+        println!("│ Difficulty: {:>22} │", data.difficulty);
         println!("│ Nonce: {:>29} │", data.nonce);
         
         if verbose {
             println!("│ Merkle Root: {:>21} │", self.format_hash_display(&data.merkle_root));
-            println!("│ Taille (bytes): {:>18} │", data.size_bytes);
+            println!("│ Size (bytes): {:>18} │", data.size_bytes);
         }
         
         println!("└─────────────────────────────────────┘");
@@ -249,7 +249,7 @@ impl BlockchainInspector {
         println!("├─────────────────────────────────────┤");
         println!("│ Hash: {:>30} │", self.format_hash_display(&data.hash));
         println!("│ Type: {:>30} │", data.tx_type);
-        println!("│ Expéditeur: {:>22} │", self.format_address_display(&data.from));
+        println!("│ Sender:     {:>22} │", self.format_address_display(&data.from));
         println!("│ Destinataire: {:>20} │", self.format_address_display(&data.to));
         println!("│ Montant: {:>27} │", data.amount);
         println!("│ Frais: {:>29} │", data.fee);
@@ -259,11 +259,11 @@ impl BlockchainInspector {
         if verbose {
             let sig_status = match data.is_signature_valid {
                 Some(true) => "✅ Valide",
-                Some(false) => "❌ Invalide",
-                None => "❓ Erreur vérif",
+                Some(false) => "❌ Invalid",
+                None => "❓ Error verif",
             };
             println!("│ Signature: {:>25} │", sig_status);
-            println!("│ Taille (bytes): {:>18} │", data.size_bytes);
+            println!("│ Size (bytes): {:>18} │", data.size_bytes);
         }
         
         println!("└─────────────────────────────────────┘");
@@ -278,8 +278,8 @@ impl BlockchainInspector {
         println!("│ Nonce: {:>29} │", data.nonce);
         
         if verbose {
-            println!("│ Créé au bloc: {:>20} │", data.created_at_block);
-            println!("│ Dernière activité: {:>15} │", data.last_activity_block);
+            println!("│ Created au bloc: {:>20} │", data.created_at_block);
+            println!("│ Last activity: {:>15} │", data.last_activity_block);
             println!("│ Nb transactions: {:>17} │", data.transaction_count);
         }
         
@@ -290,7 +290,7 @@ impl BlockchainInspector {
         println!("┌─────────────────────────────────────┐");
         println!("│          BLOCKCHAIN STATS           │");
         println!("├─────────────────────────────────────┤");
-        println!("│ Hauteur actuelle: {:>15} │", stats.latest_height);
+        println!("│ Current height: {:>15} │", stats.latest_height);
         println!("│ Total transactions: {:>13} │", stats.total_transactions);
         println!("│ Total comptes: {:>18} │", stats.total_accounts);
         
@@ -301,9 +301,9 @@ impl BlockchainInspector {
         println!("└─────────────────────────────────────┘");
     }
 
-    // === MÉTHODES UTILITAIRES D'AFFICHAGE ===
+    // === METHODS UTILITAIRES D'AFFICHAGE ===
 
-    /// Formate un hash pour l'affichage (premiers et derniers 4 caractères)
+    /// Formate a hash for l'affichage (firsts and last 4 characters)
     fn format_hash_display(&self, hash: &str) -> String {
         if hash.len() >= 8 {
             format!("{}...{}", &hash[..4], &hash[hash.len()-4..])
@@ -312,7 +312,7 @@ impl BlockchainInspector {
         }
     }
 
-    /// Formate une adresse pour l'affichage (premiers et derniers 4 caractères)
+    /// Formate a adresse for l'affichage (firsts and last 4 characters)
     fn format_address_display(&self, address: &str) -> String {
         if address.len() >= 8 {
             format!("{}...{}", &address[..4], &address[address.len()-4..])
@@ -321,7 +321,7 @@ impl BlockchainInspector {
         }
     }
 
-    // === MÉTHODES D'ANALYSE (LOGIQUE MÉTIER) ===
+    // === METHODS D'ANALYSE (LOGIQUE BUSINESS) ===
 
     async fn analyze_block_transactions(&self, block: &Block) -> Result<()> {
         println!("\n📋 Analyse des transactions du bloc:");
@@ -348,21 +348,21 @@ impl BlockchainInspector {
     }
 
     async fn verify_block_integrity(&self, block: &Block) -> Result<()> {
-        println!("\n🔐 Vérification de l'intégrité du bloc:");
+        println!("\n🔐 Verification de l'integrity du bloc:");
 
-        // Vérifier le hash du bloc
+        // Verify the hash of the bloc
         let calculated_hash = block.calculate_hash();
         let stored_hash = block.hash();
         
         if calculated_hash == stored_hash {
-            println!("  ✅ Hash du bloc valide");
+            println!("  ✅ Hash du bloc valid");
         } else {
-            println!("  ❌ Hash du bloc invalide!");
-            println!("     Calculé: {}", hex::encode(calculated_hash));
-            println!("     Stocké:  {}", hex::encode(stored_hash));
+            println!("  ❌ Hash du bloc invalid!");
+            println!("     Calculationated: {}", hex::encode(calculated_hash));
+            println!("     Stored:  {}", hex::encode(stored_hash));
         }
 
-        // Vérifier le merkle root
+        // Verify the merkle root
         let tx_hashes: Vec<[u8; 32]> = block.transactions
             .iter()
             .map(|tx| tx.hash())
@@ -373,29 +373,29 @@ impl BlockchainInspector {
             let calculated_root = merkle_tree.root();
             
             if calculated_root == block.merkle_root {
-                println!("  ✅ Merkle root valide");
+                println!("  ✅ Merkle root valid");
             } else {
-                println!("  ❌ Merkle root invalide!");
+                println!("  ❌ Merkle root invalid!");
             }
         }
 
-        // Vérifier la difficulté
+        // Verify the difficulty
         let hash_value = u64::from_be_bytes(stored_hash[..8].try_into().unwrap());
         let target = u64::MAX >> block.difficulty;
         
         if hash_value <= target {
-            println!("  ✅ Difficulté respectée");
+            println!("  ✅ Difficulty respected");
         } else {
-            println!("  ❌ Difficulté non respectée!");
+            println!("  ❌ Difficulty non respected!");
         }
 
         Ok(())
     }
 
     async fn analyze_transaction_details(&self, transaction: &Transaction) -> Result<()> {
-        println!("\n🔍 Analyse détaillée de la transaction:");
+        println!("\n🔍 Analyse detailed de la transaction:");
 
-        // Analyser les inputs/outputs si c'est une transaction complexe
+        // Analyser the inputs/outputs if c'est a transaction complexe
         match transaction.tx_type() {
             "transfer" => {
                 println!("  📤 Transfert simple");
@@ -404,14 +404,14 @@ impl BlockchainInspector {
                 println!("     Montant: {} TSN", transaction.amount());
             }
             "mint" => {
-                println!("  🏭 Création de tokens");
+                println!("  🏭 Creation de tokens");
                 println!("     Destinataire: {}", self.format_address_display(&transaction.to().to_string()));
-                println!("     Montant créé: {} TSN", transaction.amount());
+                println!("     Montant created: {} TSN", transaction.amount());
             }
             "burn" => {
                 println!("  🔥 Destruction de tokens");
-                println!("     Propriétaire: {}", self.format_address_display(&transaction.from().to_string()));
-                println!("     Montant détruit: {} TSN", transaction.amount());
+                println!("     Owner: {}", self.format_address_display(&transaction.from().to_string()));
+                println!("     Montant destroyed: {} TSN", transaction.amount());
             }
             _ => {
                 println!("  ❓ Type de transaction inconnu: {}", transaction.tx_type());
@@ -425,14 +425,14 @@ impl BlockchainInspector {
         println!("\n📜 Historique du compte:");
 
         let transactions = self.storage.get_account_transactions(address, 10).await
-            .context("Erreur lors de la récupération de l'historique")?;
+            .context("Error lors de la retrieval de l'historique")?;
 
         if transactions.is_empty() {
-            println!("  📭 Aucune transaction trouvée");
+            println!("  📭 Aucune transaction founde");
             return Ok(());
         }
 
-        println!("  📊 Dernières {} transactions:", transactions.len());
+        println!("  📊 Lasts {} transactions:", transactions.len());
         
         for (i, tx) in transactions.iter().enumerate() {
             let direction = if tx.from().to_string() == address { "📤" } else { "📥" };
@@ -451,17 +451,17 @@ impl BlockchainInspector {
     }
 
     async fn check_account_state_consistency(&self, account: &Account) -> Result<()> {
-        println!("\n🔍 Vérification de la cohérence du compte:");
+        println!("\n🔍 Verification de la consistency du compte:");
 
-        // Recalculer la balance à partir des transactions
+        // Recalculationate the balance to partir of transactions
         let calculated_balance = self.calculate_account_balance_from_history(account.address()).await?;
         
         if calculated_balance == account.balance() {
-            println!("  ✅ Balance cohérente avec l'historique");
+            println!("  ✅ Balance consistent avec l'historique");
         } else {
-            println!("  ❌ Incohérence de balance détectée!");
-            println!("     Balance stockée: {} TSN", account.balance());
-            println!("     Balance calculée: {} TSN", calculated_balance);
+            println!("  ❌ Inconsistency de balance detectede!");
+            println!("     Balance stored: {} TSN", account.balance());
+            println!("     Balance calculationatede: {} TSN", calculated_balance);
         }
 
         Ok(())
@@ -471,7 +471,7 @@ impl BlockchainInspector {
         println!("\n📈 Analyse des {} derniers blocs:", count);
 
         let latest_height = self.storage.get_latest_block_height().await
-            .context("Erreur lors de la récupération de la hauteur")?;
+            .context("Error lors de la retrieval de la hauteur")?;
 
         let start_height = if latest_height >= count { latest_height - count + 1 } else { 0 };
 
@@ -492,21 +492,21 @@ impl BlockchainInspector {
         if blocks_analyzed > 0 {
             println!("  📊 Moyennes sur {} blocs:", blocks_analyzed);
             println!("     Transactions/bloc: {:.1}", total_transactions as f64 / blocks_analyzed as f64);
-            println!("     Taille/bloc: {:.1} bytes", total_size as f64 / blocks_analyzed as f64);
+            println!("     Size/bloc: {:.1} bytes", total_size as f64 / blocks_analyzed as f64);
             
             if !difficulties.is_empty() {
                 let avg_difficulty = difficulties.iter().sum::<u64>() as f64 / difficulties.len() as f64;
-                println!("     Difficulté moyenne: {:.1}", avg_difficulty);
+                println!("     Difficulty moyenne: {:.1}", avg_difficulty);
             }
         }
 
         Ok(())
     }
 
-    // === MÉTHODES UTILITAIRES DE CALCUL ===
+    // === METHODS UTILITAIRES DE CALCUL ===
 
     fn calculate_block_size(&self, block: &Block) -> usize {
-        // Estimation de la taille du bloc en bytes
+        // Estimation de the size of the bloc in bytes
         let mut size = 80; // Header approximatif
         for tx in &block.transactions {
             size += self.calculate_transaction_size(tx);
@@ -515,14 +515,14 @@ impl BlockchainInspector {
     }
 
     fn calculate_transaction_size(&self, transaction: &Transaction) -> usize {
-        // Estimation de la taille de la transaction en bytes
-        // Cette estimation peut être affinée selon le format exact
+        // Estimation de the size de the transaction in bytes
+        // This estimation can be refined based on the exact format
         200 + transaction.tx_type().len() // Estimation basique
     }
 
     async fn calculate_account_balance_from_history(&self, address: &str) -> Result<u64> {
         let transactions = self.storage.get_account_transactions(address, u32::MAX).await
-            .context("Erreur lors de la récupération de l'historique complet")?;
+            .context("Error lors de la retrieval de l'historique complete")?;
 
         let mut balance = 0u64;
         
@@ -539,7 +539,7 @@ impl BlockchainInspector {
     }
 }
 
-/// Structure pour l'inspection du mempool
+/// Structure for l'inspection of the mempool
 pub struct MempoolInspector {
     mempool: Mempool,
 }
@@ -569,7 +569,7 @@ impl MempoolInspector {
         
         if verbose && !filtered_transactions.is_empty() {
             println!("│                                     │");
-            println!("│ Détail des transactions:            │");
+            println!("│ Detail des transactions:            │");
             
             for (i, tx) in filtered_transactions.iter().take(10).enumerate() {
                 let hash_display = if hex::encode(tx.hash()).len() >= 8 {

@@ -263,7 +263,7 @@
         <!-- Métriques principales -->
         <div class="grid">
             <div class="card">
-                <h3>État du Réseau</h3>
+                <h3>Network Status</h3>
                 <div class="metric-grid">
                     <div class="metric">
                         <div class="metric-value" id="peer-count">0</div>
@@ -271,7 +271,7 @@
                     </div>
                     <div class="metric">
                         <div class="metric-value" id="block-height">0</div>
-                        <div class="metric-label">Hauteur de Bloc</div>
+                        <div class="metric-label">Block Height</div>
                     </div>
                     <div class="metric">
                         <div class="metric-value" id="mempool-size">0</div>
@@ -285,15 +285,15 @@
             </div>
             
             <div class="card">
-                <h3>Performance Réseau</h3>
+                <h3>Network Performance</h3>
                 <div class="metric-grid">
                     <div class="metric">
                         <div class="metric-value" id="latency">0ms</div>
-                        <div class="metric-label">Latence Moyenne</div>
+                        <div class="metric-label">Average Latency</div>
                     </div>
                     <div class="metric">
                         <div class="metric-value" id="throughput">0 KB/s</div>
-                        <div class="metric-label">Débit</div>
+                        <div class="metric-label">Throughput</div>
                     </div>
                     <div class="metric">
                         <div class="metric-value" id="messages-per-sec">0</div>
@@ -310,35 +310,35 @@
         <!-- Graphiques temps-réel -->
         <div class="card">
             <div class="tabs">
-                <button class="tab active" onclick="showTab('latency-tab')">Latence</button>
+                <button class="tab active" onclick="showTab('latency-tab')">Latency</button>
                 <button class="tab" onclick="showTab('peers-tab')">Pairs</button>
-                <button class="tab" onclick="showTab('throughput-tab')">Débit</button>
+                <button class="tab" onclick="showTab('throughput-tab')">Throughput</button>
                 <button class="tab" onclick="showTab('mempool-tab')">Mempool</button>
             </div>
             
             <div id="latency-tab" class="tab-content active">
-                <h3>Latence Réseau (ms)</h3>
+                <h3>Network Latency (ms)</h3>
                 <div class="chart-container">
                     <canvas id="latency-chart"></canvas>
                 </div>
             </div>
             
             <div id="peers-tab" class="tab-content">
-                <h3>Nombre de Pairs Connectés</h3>
+                <h3>Connected Peers</h3>
                 <div class="chart-container">
                     <canvas id="peers-chart"></canvas>
                 </div>
             </div>
             
             <div id="throughput-tab" class="tab-content">
-                <h3>Débit Réseau (KB/s)</h3>
+                <h3>Network Throughput (KB/s)</h3>
                 <div class="chart-container">
                     <canvas id="throughput-chart"></canvas>
                 </div>
             </div>
             
             <div id="mempool-tab" class="tab-content">
-                <h3>Taille du Mempool</h3>
+                <h3>Mempool Size</h3>
                 <div class="chart-container">
                     <canvas id="mempool-chart"></canvas>
                 </div>
@@ -416,7 +416,7 @@
             ...chartConfig,
             data: {
                 datasets: [{
-                    label: 'Latence (ms)',
+                    label: 'Latency (ms)',
                     data: [],
                     borderColor: '#667eea',
                     backgroundColor: 'rgba(102, 126, 234, 0.1)',
@@ -442,7 +442,7 @@
             ...chartConfig,
             data: {
                 datasets: [{
-                    label: 'Débit (KB/s)',
+                    label: 'Throughput (KB/s)',
                     data: [],
                     borderColor: '#FF9800',
                     backgroundColor: 'rgba(255, 152, 0, 0.1)',

@@ -22,12 +22,13 @@ pub mod sync_gate;
 pub mod transport;
 pub mod auto_update;
 pub mod version_check;
+pub mod snapshot_manifest;
 
 pub use api::{AppState, CachedSnapshot, MinerStats, NodeError, create_router, log_node_error};
 pub use sync_gate::SyncGate;
 pub use mempool::Mempool;
 pub use discovery::discovery_loop;
-pub use sync::{sync_from_peer, sync_loop, broadcast_block};
+pub use sync::{sync_from_peer, sync_loop, broadcast_block, broadcast_block_with_id};
 pub use protocol::{TsnMessage, HandshakeData, ProtocolVersion};
 pub use peer::{PeerHandle, PeerManager};
 pub use rate_limiter::{RateLimiter, RateLimitConfig};
@@ -50,12 +51,12 @@ use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::time::Duration;
 
-/// Masque une URL de peer en identifiant court pour les logs.
+/// Masque a URL de peer in identifiant court for the logs.
 ///
 /// - Seeds connus (seed1-4.tsnchain.com) → "seed1", "seed2", etc.
 /// - Autres URLs → "peer:" + 8 premiers hex d'un hash SHA-256
 ///
-/// L'URL originale reste utilisée en interne ; seul l'affichage change.
+/// L'URL originale reste used in interne ; seul l'affichage change.
 ///
 /// Returns true if this peer string is a contactable HTTP URL (not a hashed peer ID).
 /// Hashed peer IDs like "peer:a1b2c3d4" are display-only and must never be used for HTTP requests.
@@ -64,7 +65,7 @@ pub fn is_contactable_peer(peer: &str) -> bool {
 }
 
 pub fn peer_id(url: &str) -> String {
-    // Détection des seeds connus
+    // Detection of seeds connus
     for i in 1..=4 {
         let seed_domain = format!("seed{}.tsnchain.com", i);
         if url.contains(&seed_domain) {
@@ -72,7 +73,7 @@ pub fn peer_id(url: &str) -> String {
         }
     }
 
-    // Hash SHA-256 de l'URL → 8 premiers caractères hex
+    // Hash SHA-256 de l'URL → 8 firsts characters hex
     use sha2::{Sha256, Digest};
     let mut hasher = Sha256::new();
     hasher.update(url.as_bytes());
@@ -147,7 +148,7 @@ pub enum NetworkMessage {
     Payload(Vec<u8>),
 }
 
-/// Configuration globale du réseau
+/// Configuration globale of the network
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
     pub listen_addr: SocketAddr,

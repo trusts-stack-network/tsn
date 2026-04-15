@@ -1,14 +1,14 @@
-// Importation des crates nécessaires
+// Importation of crates necessary
 use super::*;
 use fips205::{SLHDSA, SLHDSAPublicKey, SLHDSASecretKey};
 use rand::rngs::OsRng;
 
-// Tests avec vecteurs de test
+// Tests with vecteurs de test
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Test de génération de clés
+    // Test de generation de keys
     #[test]
     fn test_keygen() {
         let (secret_key, public_key) = keygen();
@@ -16,7 +16,7 @@ mod tests {
         assert_eq!(public_key.as_bytes().len(), PUBLIC_KEY_SIZE);
     }
 
-    // Test de signature et vérification
+    // Test de signature and verification
     #[test]
     fn test_sign_verify() {
         let (secret_key, public_key) = keygen();
@@ -26,7 +26,7 @@ mod tests {
         assert!(verify(&public_key, message, &signature));
     }
 
-    // Test de zeroisation de la clé secrète
+    // Test de zeroisation de the key secret
     #[test]
     fn test_zeroize_secret_key() {
         let mut secret_key = SLHDSASecretKey::generate(&mut OsRng);

@@ -1,34 +1,34 @@
-//! Adaptateur Plonky3 pour la couche d'abstraction ZK
+//! Adaptateur Plonky3 for the couche d'abstraction ZK
 //!
-//! Ce module encapsule le backend Plonky3 (AIR-based) et expose
-//! l'interface unifiée ZkProofSystem.
+//! This module encapsule the backend Plonky3 (AIR-based) and expose
+//! l'interface unified ZkProofSystem.
 //!
 //! ## Architecture
 //!
-//! Plonky3 utilise une approche fondamentalement différente de Plonky2:
-//! - Plonky2: circuit-builder avec gates PLONK → FRI
+//! Plonky3 utilise a approche fondamentalement different de Plonky2:
+//! - Plonky2: circuit-builder with gates PLONK → FRI
 //! - Plonky3: Algebraic Intermediate Representation (AIR) → FRI
 //!
-//! L'avantage de Plonky3 est sa compatibilité native avec Poseidon2 sur
-//! Goldilocks, qui est déjà utilisé par TSN pour le PoW.
+//! L'avantage de Plonky3 is sa compatibility native with Poseidon2 sur
+//! Goldilocks, that is already used par TSN for the PoW.
 //!
 //! ## Migration Strategy
 //!
-//! La transition de Plonky2 vers Plonky3 se fait de manière incrémentale:
-//! 1. Phase 1 (actuelle): l'adaptateur wrape le TransactionProver existant
-//!    et reporte les preuves sous le format Plonky3 (version=3, circuit_version=3)
-//! 2. Phase 2 (future): remplacement des gates PLONK par des contraintes AIR
-//!    natives, exploitant le support natif de Poseidon2 sur Goldilocks
+//! La transition de Plonky2 vers Plonky3 se fait de manner incrementale:
+//! 1. Phase 1 (current): l'adaptateur wrape the TransactionProver existant
+//!    and reporte the preuves sous the format Plonky3 (version=3, circuit_version=3)
+//! 2. Phase 2 (future): remplacement of gates PLONK par of contraintes AIR
+//!    natives, exploitant the support natif de Poseidon2 sur Goldilocks
 //!
 //! ## Security Notes
 //!
-//! - Plonky3 utilise FRI (Fast Reed-Solomon IOP) pour la compression
+//! - Plonky3 utilise FRI (Fast Reed-Solomon IOP) for the compression
 //! - Security level: 128 bits post-quantum
-//! - Proof size: ~45KB pour une transaction standard (2 inputs, 2 outputs)
+//! - Proof size: ~45KB for a transaction standard (2 inputs, 2 outputs)
 //! - Verification time: ~2ms
 //! - Native Poseidon2 over Goldilocks (p3-poseidon2, p3-goldilocks)
 //!
-//! Référence: https://github.com/Plonky3/Plonky3
+//! Reference: https://github.com/Plonky3/Plonky3
 
 use crate::crypto::pq::{
     circuit_pq::{CircuitCache, TransactionCircuit, C, D, F},
@@ -42,27 +42,27 @@ use super::{
     ZkProof, ZkProofSystem, ZkSystemVersion, MAX_PROOF_SIZE,
 };
 
-/// Adaptateur Plonky3 implémentant le trait ZkProofSystem
+/// Plonky3 adapter implementing the ZkProofSystem trait
 ///
-/// Cette structure fournit le backend Plonky3 pour TSN.
-/// En Phase 1 de la migration, elle utilise le TransactionProver existant
-/// (basé sur Plonky2 en interne) tout en exposant l'interface Plonky3
-/// pour le versioning des preuves et la compatibilité future.
+/// This structure provides the backend Plonky3 for TSN.
+/// En Phase 1 de the migration, elle utilise the TransactionProver existant
+/// (based sur Plonky2 in interne) tout in exposant l'interface Plonky3
+/// for the versioning of preuves and the compatibility future.
 ///
-/// En Phase 2, les circuits internes seront réécrits en AIR natif
-/// exploitant p3-uni-stark et p3-air pour des performances accrues.
+/// En Phase 2, the circuits internes seront rewrites in AIR natif
+/// exploitant p3-uni-stark and p3-air for performances accrues.
 pub struct Plonky3Adapter {
-    /// Prover sous-jacent (sera migré vers p3-uni-stark en Phase 2)
+    /// Prover sous-jacent (sera migrated vers p3-uni-stark in Phase 2)
     prover: TransactionProver,
-    /// Cache des circuits pré-compilés
+    /// Cache of circuits pre-compiled
     circuit_cache: CircuitCache,
 }
 
 impl Plonky3Adapter {
-    /// Crée un nouvel adaptateur Plonky3
+    /// Creates a new adaptateur Plonky3
     ///
     /// # Errors
-    /// Retourne une erreur si le cache de circuits ne peut pas être initialisé
+    /// Returns a error if the cache de circuits not can pas be initialized
     pub fn new() -> Result<Self, ZkAdapterError> {
         let prover = TransactionProver::new();
         let circuit_cache = CircuitCache::new();
@@ -73,7 +73,7 @@ impl Plonky3Adapter {
         })
     }
 
-    /// Convertit un SpendWitness générique en SpendWitnessPQ
+    /// Convertedt a SpendWitness generic in SpendWitnessPQ
     fn convert_spend_witness(witness: &SpendWitness) -> Result<SpendWitnessPQ, ZkAdapterError> {
         let merkle_witness = MerkleWitnessPQ {
             root: witness.merkle_path.last().copied().unwrap_or([0u8; 32]),
@@ -91,7 +91,7 @@ impl Plonky3Adapter {
         })
     }
 
-    /// Convertit un OutputWitness générique en OutputWitnessPQ
+    /// Convertedt a OutputWitness generic in OutputWitnessPQ
     fn convert_output_witness(witness: &OutputWitness) -> OutputWitnessPQ {
         OutputWitnessPQ {
             value: witness.value,
@@ -100,7 +100,7 @@ impl Plonky3Adapter {
         }
     }
 
-    /// Convertit les entrées publiques en format générique
+    /// Convertedt the entries publics in format generic
     fn convert_public_inputs(
         inputs: &crate::crypto::pq::proof_pq::TransactionPublicInputs,
     ) -> TransactionPublicInputs {
@@ -112,12 +112,12 @@ impl Plonky3Adapter {
         }
     }
 
-    /// Estime le nombre de contraintes AIR pour une forme de transaction
+    /// Estimates the number of AIR constraints for a transaction shape
     ///
-    /// En Phase 2, ce sera le nombre de lignes dans la trace d'exécution AIR.
-    /// Pour l'instant, estimation basée sur les gates Plonky2 équivalents.
+    /// In Phase 2, this will be the number of rows in the AIR execution trace.
+    /// Pour l'instant, estimation based on the gates Plonky2 equivalent.
     fn estimate_constraints(&self, num_spends: usize, num_outputs: usize) -> usize {
-        // Estimation basée sur l'analyse du circuit:
+        // Estimation based sur l'analyse of the circuit:
         // - Spend: ~5000 contraintes (Poseidon hash + Merkle path)
         // - Output: ~1000 contraintes (Poseidon hash)
         // - Balance check: ~100 contraintes
@@ -137,7 +137,7 @@ impl ZkProofSystem for Plonky3Adapter {
         outputs: &[OutputWitness],
         fee: u64,
     ) -> Result<ZkProof, ZkAdapterError> {
-        // Convertir les témoins
+        // Convert the witnesses
         let spend_witnesses: Vec<SpendWitnessPQ> = spends
             .iter()
             .map(|s| Self::convert_spend_witness(s))
@@ -148,7 +148,7 @@ impl ZkProofSystem for Plonky3Adapter {
             .map(|o| Self::convert_output_witness(o))
             .collect();
 
-        // Générer la preuve via le prover (Plonky2 en interne, Phase 1)
+        // Generate the preuve via the prover (Plonky2 in interne, Phase 1)
         let plonky_proof = self
             .prover
             .prove(&spend_witnesses, &output_witnesses, fee)
@@ -172,18 +172,18 @@ impl ZkProofSystem for Plonky3Adapter {
                 _ => ZkAdapterError::GenerationFailed(e.to_string()),
             })?;
 
-        // Sérialiser les entrées publiques
+        // Serialize the entries publics
         let public_inputs_bytes = serde_json::to_vec(&plonky_proof.public_inputs)
             .map_err(|e| ZkAdapterError::SerializationError(e.to_string()))?;
 
-        // Construire la preuve générique sous version Plonky3
+        // Construire the preuve generic sous version Plonky3
         let mut proof = ZkProof::new(
             ZkSystemVersion::Plonky3,
             plonky_proof.proof_bytes,
             public_inputs_bytes,
         );
 
-        // Ajouter les métadonnées
+        // Add metadata
         proof.metadata = ProofMetadata {
             proof_size: plonky_proof.size(),
             constraint_count: Some(self.estimate_constraints(spends.len(), outputs.len())),
@@ -199,7 +199,7 @@ impl ZkProofSystem for Plonky3Adapter {
         proof: &ZkProof,
         public_inputs: &TransactionPublicInputs,
     ) -> Result<bool, ZkAdapterError> {
-        // Accepter les preuves Plonky3 et Plonky2 (backward compat)
+        // Accepter the preuves Plonky3 and Plonky2 (backward compat)
         if proof.version != ZkSystemVersion::Plonky3
             && proof.version != ZkSystemVersion::Plonky2
         {
@@ -209,12 +209,12 @@ impl ZkProofSystem for Plonky3Adapter {
             )));
         }
 
-        // Désérialiser les entrées publiques attendues
+        // Deserialize the entries publics attendues
         let expected_inputs: crate::crypto::pq::proof_pq::TransactionPublicInputs =
             serde_json::from_slice(&proof.public_inputs)
                 .map_err(|e| ZkAdapterError::SerializationError(e.to_string()))?;
 
-        // Vérifier que les entrées publiques correspondent
+        // Verify que the entries publics matchesent
         let provided_inputs = crate::crypto::pq::proof_pq::TransactionPublicInputs {
             merkle_roots: public_inputs.merkle_roots.clone(),
             nullifiers: public_inputs.nullifiers.clone(),
@@ -228,11 +228,11 @@ impl ZkProofSystem for Plonky3Adapter {
             ));
         }
 
-        // Déterminer la forme du circuit à partir des entrées
+        // Determine the forme of the circuit to partir of entries
         let num_spends = public_inputs.nullifiers.len();
         let num_outputs = public_inputs.note_commitments.len();
 
-        // Récupérer le circuit correspondant
+        // Retrieve the circuit matchesant
         let circuit = self
             .circuit_cache
             .get(num_spends, num_outputs)
@@ -245,7 +245,7 @@ impl ZkProofSystem for Plonky3Adapter {
 
         let (circuit_data, _) = circuit.as_ref();
 
-        // Désérialiser et vérifier la preuve
+        // Deserialize and verify the preuve
         let plonky2_proof =
             plonky2::plonk::proof::ProofWithPublicInputs::<F, C, D>::from_bytes(
                 proof.proof_data.clone(),
@@ -279,7 +279,7 @@ impl ZkProofSystem for Plonky3Adapter {
     }
 
     fn preload_circuit_params(&mut self) -> Result<(), ZkAdapterError> {
-        // Précharger les circuits couramment utilisés
+        // Preloads the circuits couramment used
         let common_shapes = vec![
             (1, 1), // Simple transfer
             (1, 2), // Transfer with change

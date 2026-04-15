@@ -1,21 +1,21 @@
-//! Configuration STARK Plonky3 pour TSN
+//! Configuration STARK Plonky3 for TSN
 //!
 //! Goldilocks field, Poseidon2 hash (Horizen Labs constants), FRI PCS.
 //!
-//! Ce module définit les type aliases et la fonction de construction pour
-//! la configuration STARK complète utilisée par le prover/verifier Plonky3.
+//! This module defines the type aliases and the fonction de construction pour
+//! the configuration STARK completee used par the prover/verifier Plonky3.
 //!
-//! ## Paramètres de sécurité
+//! ## Parameters de security
 //!
 //! - `log_blowup = 2` → blowup factor = 4
 //! - `num_queries = 40`
 //! - `proof_of_work_bits = 8`
-//! - Sécurité conjecturée: log_blowup × num_queries + pow_bits = 2×40 + 8 = 88 bits
-//!   (conservateur ; la sécurité réelle est plus élevée avec le field size)
+//! - Security conjectured: log_blowup × num_queries + pow_bits = 2×40 + 8 = 88 bits
+//!   (conservateur ; the security real is plus high with the field size)
 //!
 //! ## Types
 //!
-//! La stack complète est :
+//! La stack completee is :
 //! ```text
 //! Goldilocks → Poseidon2 (width=8, HL constants) → PaddingFreeSponge
 //!   → TruncatedPermutation → MerkleTreeMmcs → ExtensionMmcs → TwoAdicFriPcs → StarkConfig
@@ -80,14 +80,14 @@ pub type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 /// Fiat-Shamir challenger: duplex sponge, width=8, rate=4
 pub type MyChallenger = DuplexChallenger<Val, Perm, 8, 4>;
 
-/// Configuration STARK complète pour TSN
+/// Configuration STARK completee for TSN
 pub type TsnStarkConfig = StarkConfig<MyPcs, Challenge, MyChallenger>;
 
 // =============================================================================
 // Construction
 // =============================================================================
 
-/// Construit la permutation Poseidon2 width-8 Goldilocks avec les constantes Horizen Labs.
+/// Construit the permutation Poseidon2 width-8 Goldilocks with the constantes Horizen Labs.
 fn make_perm() -> Perm {
     p3_poseidon2::Poseidon2::new(
         ExternalLayerConstants::<Goldilocks, 8>::new_from_saved_array(
@@ -98,25 +98,25 @@ fn make_perm() -> Perm {
     )
 }
 
-/// Construit la configuration STARK Plonky3 pour TSN.
+/// Construit the configuration STARK Plonky3 for TSN.
 ///
-/// Paramètres FRI :
-/// - `log_blowup = 2` (blowup factor 4, pour ~128 bits de sécurité)
+/// Parameters FRI :
+/// - `log_blowup = 2` (blowup factor 4, for ~128 bits de security)
 /// - `num_queries = 40`
 /// - `query_proof_of_work_bits = 8`
 /// - `commit_proof_of_work_bits = 0`
-/// - `log_final_poly_len = 0` (polynôme final de degré 1)
+/// - `log_final_poly_len = 0` (polynomial final de degree 1)
 ///
-/// La sécurité conjecturée (ethSTARK) est :
+/// La security conjectured (ethSTARK) is :
 ///   log_blowup × num_queries + query_pow_bits = 2 × 40 + 8 = 88 bits
 ///
-/// Combinée avec la taille du field Goldilocks (64 bits), cela fournit
-/// une sécurité largement suffisante pour un système post-quantique.
+/// Combined with the size of the field Goldilocks (64 bits), cela provides
+/// a security largement suffisante for a system post-quantique.
 pub fn build_stark_config() -> TsnStarkConfig {
     // 1. Permutation Poseidon2
     let perm = make_perm();
 
-    // 2. Hash (sponge) et compression (truncated permutation)
+    // 2. Hash (sponge) and compression (truncated permutation)
     let hash = PaddingFreeSponge::new(perm.clone());
     let compress = TruncatedPermutation::new(perm.clone());
 
@@ -156,6 +156,6 @@ mod tests {
     #[test]
     fn test_build_stark_config() {
         let _config = build_stark_config();
-        // Si on arrive ici, la construction est correcte
+        // Si on arrive ici, the construction is correcte
     }
 }

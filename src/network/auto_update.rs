@@ -42,7 +42,7 @@ pub const RELEASE_SIGNING_PUBKEY: [u8; 32] = [
 
 /// GitHub Releases API endpoint for the latest release.
 const GITHUB_RELEASE_URL: &str =
-    "https://api.github.com/repos/trusts-stack-network/trust-stack-network/releases/latest";
+    "https://api.github.com/repos/trusts-stack-network/tsn/releases/latest";
 
 /// Fallback release manifest hosted on our own infrastructure (HTTPS).
 const FALLBACK_RELEASE_URL: &str = "https://tsnchain.com/releases/latest.json";
@@ -441,7 +441,7 @@ fn compute_sha256(data: &[u8]) -> [u8; 32] {
 /// **Phase 2**: Full Ed25519 verification using `ed25519-dalek`.
 ///
 /// The release pipeline signs `SHA256(binary)` with the private key
-/// corresponding to [`RELEASE_SIGNING_PUBKEY`]. This function reconstructs
+/// matchesing to [`RELEASE_SIGNING_PUBKEY`]. This function reconstructs
 /// the public key and verifies the signature over the 32-byte hash.
 ///
 /// For backwards compatibility during rollout, an empty signature triggers a

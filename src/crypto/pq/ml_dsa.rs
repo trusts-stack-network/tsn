@@ -1,7 +1,7 @@
 //! ML-DSA-65 (FIPS 204) — LEGACY
 //!
-//! Conservé uniquement pour la migration depuis l'ancienne version de TSN.
-//! Ne pas utiliser pour les nouvelles clés.
+//! Preserved only for the migration from l'ancienne version de TSN.
+//! Ne pas utiliser for the news keys.
 
 use crate::crypto::pq::Error;
 use fips204::ml_dsa_65 as ml_impl;

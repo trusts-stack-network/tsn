@@ -442,7 +442,7 @@ where
         // ══════════════════════════════════════════════════════
         // Constraint 8: Nullifier public value consistency
         // When a row is a nullifier hash, its output must match the
-        // corresponding public nullifier value.
+        // matchesing public nullifier value.
         // ══════════════════════════════════════════════════════
         // This is enforced by the prover setting trace values correctly,
         // and the FRI commitment ensures integrity. The public values

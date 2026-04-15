@@ -1,26 +1,26 @@
-//! Pool de mémoire optimisé pour les validations cryptographiques
+//! Pool de memory optimized for the validations cryptographiques
 //!
-//! Gère des buffers réutilisables pour éviter les allocations répétées
-//! dans les hot paths de validation de signatures et preuves ZK.
+//! Handles of buffers reusable for avoidr the allocations repeateds
+//! in the hot paths de validation de signatures and preuves ZK.
 //!
-//! Basé sur des techniques de memory pooling pour réduire la pression
-//! sur l'allocateur et améliorer les performances des validations crypto.
+//! Based sur of techniques de memory pooling for reduce the pression
+//! sur l'allocateur and improve the performances of validations crypto.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use std::fmt;
 
-/// Taille par défaut des buffers dans le pool (32KB)
+/// Size by default of buffers in the pool (32KB)
 pub const DEFAULT_BUFFER_SIZE: usize = 32 * 1024;
 
-/// Nombre maximum de buffers dans le pool
+/// Maximum number of buffers in the pool
 pub const MAX_POOL_SIZE: usize = 128;
 
-/// Durée de vie maximale d'un buffer dans le pool (5 minutes)
+/// Duration de vie maximale d'un buffer in the pool (5 minutes)
 pub const MAX_BUFFER_AGE: Duration = Duration::from_secs(300);
 
-/// Buffer poolé avec métadonnées de gestion
+/// Buffer pooled with metadata de gestion
 #[derive(Debug)]
 pub struct PooledBuffer {
     data: Vec<u8>,
@@ -30,7 +30,7 @@ pub struct PooledBuffer {
 }
 
 impl PooledBuffer {
-    /// Crée un nouveau buffer poolé
+    /// Creates a new buffer pooled
     fn new(size: usize) -> Self {
         let now = Instant::now();
         Self {
@@ -41,43 +41,43 @@ impl PooledBuffer {
         }
     }
 
-    /// Retourne une référence mutable aux données
+    /// Returns a reference mutable aux data
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.last_used = Instant::now();
         self.usage_count += 1;
         &mut self.data
     }
 
-    /// Retourne une référence aux données
+    /// Returns a reference aux data
     pub fn as_slice(&self) -> &[u8] {
         &self.data
     }
 
-    /// Retourne la taille du buffer
+    /// Returns the size of the buffer
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
-    /// Vérifie si le buffer est vide
+    /// Checks if the buffer is vide
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 
-    /// Efface le contenu du buffer (sécurité)
+    /// Efface the contenu of the buffer (security)
     pub fn clear(&mut self) {
-        // Effacement sécurisé des données sensibles
+        // Effacement secure of data sensibles
         for byte in &mut self.data {
             *byte = 0;
         }
         self.last_used = Instant::now();
     }
 
-    /// Vérifie si le buffer est trop ancien
+    /// Checks if the buffer is trop ancien
     fn is_expired(&self) -> bool {
         self.created_at.elapsed() > MAX_BUFFER_AGE
     }
 
-    /// Retourne les statistiques d'utilisation
+    /// Returns the statistics d'utilisation
     pub fn usage_stats(&self) -> (Duration, u64) {
         (self.created_at.elapsed(), self.usage_count)
     }
@@ -85,12 +85,12 @@ impl PooledBuffer {
 
 impl Drop for PooledBuffer {
     fn drop(&mut self) {
-        // Effacement sécurisé lors de la destruction
+        // Effacement secure during the destruction
         self.clear();
     }
 }
 
-/// Pool de buffers pour optimiser les allocations mémoire
+/// Pool de buffers for optimiser the allocations memory
 pub struct MemoryPool {
     buffers: VecDeque<PooledBuffer>,
     buffer_size: usize,
@@ -107,7 +107,7 @@ struct PoolStats {
 }
 
 impl MemoryPool {
-    /// Crée un nouveau pool de mémoire
+    /// Creates a new pool de memory
     pub fn new(buffer_size: usize, max_size: usize) -> Self {
         Self {
             buffers: VecDeque::with_capacity(max_size),
@@ -117,34 +117,34 @@ impl MemoryPool {
         }
     }
 
-    /// Obtient un buffer du pool ou en crée un nouveau
+    /// Gets a buffer from the pool or creates a new one
     pub fn get_buffer(&mut self) -> PooledBuffer {
         self.stats.total_allocations += 1;
 
-        // Nettoie les buffers expirés
+        // Clean up the buffers expireds
         self.cleanup_expired();
 
-        // Essaie de réutiliser un buffer existant
+        // Essaie de reuse a buffer existant
         if let Some(mut buffer) = self.buffers.pop_front() {
-            buffer.clear(); // Sécurité : efface les données précédentes
+            buffer.clear(); // Security : efface les data previouss
             self.stats.cache_hits += 1;
             buffer
         } else {
-            // Crée un nouveau buffer
+            // Creates a nouveau buffer
             self.stats.cache_misses += 1;
             PooledBuffer::new(self.buffer_size)
         }
     }
 
-    /// Retourne un buffer au pool
+    /// Returns a buffer at the pool
     pub fn return_buffer(&mut self, buffer: PooledBuffer) {
         if self.buffers.len() < self.max_size && !buffer.is_expired() {
             self.buffers.push_back(buffer);
         }
-        // Sinon le buffer sera détruit automatiquement
+        // Otherwise the buffer will be destroyed automatically
     }
 
-    /// Nettoie les buffers expirés
+    /// Cleans up the buffers expireds
     fn cleanup_expired(&mut self) {
         let initial_len = self.buffers.len();
         self.buffers.retain(|buffer| !buffer.is_expired());
@@ -152,7 +152,7 @@ impl MemoryPool {
         self.stats.expired_buffers += removed as u64;
     }
 
-    /// Retourne les statistiques du pool
+    /// Returns the statistics of the pool
     pub fn stats(&self) -> PoolStatsSummary {
         PoolStatsSummary {
             total_allocations: self.stats.total_allocations,
@@ -170,13 +170,13 @@ impl MemoryPool {
         }
     }
 
-    /// Vide complètement le pool
+    /// Vide completeely the pool
     pub fn clear(&mut self) {
         self.buffers.clear();
     }
 }
 
-/// Résumé des statistiques du pool
+/// Summary of statistics of the pool
 #[derive(Debug, Clone)]
 pub struct PoolStatsSummary {
     pub total_allocations: u64,
@@ -203,7 +203,7 @@ impl fmt::Display for PoolStatsSummary {
     }
 }
 
-/// Gestionnaire global de pools de mémoire thread-safe
+/// Manager global de pools de memory thread-safe
 pub struct MemoryPoolManager {
     signature_pool: Arc<Mutex<MemoryPool>>,
     proof_pool: Arc<Mutex<MemoryPool>>,
@@ -220,7 +220,7 @@ struct GlobalStats {
 }
 
 impl MemoryPoolManager {
-    /// Crée un nouveau gestionnaire de pools
+    /// Creates a new manager of pools
     pub fn new() -> Self {
         Self {
             signature_pool: Arc::new(Mutex::new(MemoryPool::new(DEFAULT_BUFFER_SIZE, MAX_POOL_SIZE))),
@@ -230,7 +230,7 @@ impl MemoryPoolManager {
         }
     }
 
-    /// Obtient un buffer pour la validation de signatures
+    /// Gets a buffer for signature validation
     pub fn get_signature_buffer(&self) -> Result<PooledBuffer, String> {
         let mut pool = self.signature_pool.lock().map_err(|_| "Pool lock failed")?;
         let buffer = pool.get_buffer();
@@ -243,14 +243,14 @@ impl MemoryPoolManager {
         Ok(buffer)
     }
 
-    /// Retourne un buffer de signature au pool
+    /// Returns a buffer de signature at the pool
     pub fn return_signature_buffer(&self, buffer: PooledBuffer) -> Result<(), String> {
         let mut pool = self.signature_pool.lock().map_err(|_| "Pool lock failed")?;
         pool.return_buffer(buffer);
         Ok(())
     }
 
-    /// Obtient un buffer pour la validation de preuves ZK
+    /// Gets a buffer for ZK proof validation
     pub fn get_proof_buffer(&self) -> Result<PooledBuffer, String> {
         let mut pool = self.proof_pool.lock().map_err(|_| "Pool lock failed")?;
         let buffer = pool.get_buffer();
@@ -263,14 +263,14 @@ impl MemoryPoolManager {
         Ok(buffer)
     }
 
-    /// Retourne un buffer de preuve au pool
+    /// Returns a buffer de preuve at the pool
     pub fn return_proof_buffer(&self, buffer: PooledBuffer) -> Result<(), String> {
         let mut pool = self.proof_pool.lock().map_err(|_| "Pool lock failed")?;
         pool.return_buffer(buffer);
         Ok(())
     }
 
-    /// Obtient un buffer pour les opérations de hash
+    /// Gets a buffer for hash operations
     pub fn get_hash_buffer(&self) -> Result<PooledBuffer, String> {
         let mut pool = self.hash_pool.lock().map_err(|_| "Pool lock failed")?;
         let buffer = pool.get_buffer();
@@ -283,14 +283,14 @@ impl MemoryPoolManager {
         Ok(buffer)
     }
 
-    /// Retourne un buffer de hash au pool
+    /// Returns a buffer de hash at the pool
     pub fn return_hash_buffer(&self, buffer: PooledBuffer) -> Result<(), String> {
         let mut pool = self.hash_pool.lock().map_err(|_| "Pool lock failed")?;
         pool.return_buffer(buffer);
         Ok(())
     }
 
-    /// Retourne un résumé des statistiques globales
+    /// Returns a summary of statistics globales
     pub fn summary(&self) -> Result<MemoryPoolSummary, String> {
         let sig_stats = {
             let pool = self.signature_pool.lock().map_err(|_| "Pool lock failed")?;
@@ -318,7 +318,7 @@ impl MemoryPoolManager {
         })
     }
 
-    /// Nettoie tous les pools
+    /// Cleans all pools
     pub fn cleanup(&self) -> Result<(), String> {
         {
             let mut pool = self.signature_pool.lock().map_err(|_| "Pool lock failed")?;
@@ -342,7 +342,7 @@ impl Default for MemoryPoolManager {
     }
 }
 
-/// Résumé complet des pools de mémoire
+/// Summary complete of pools de memory
 #[derive(Debug, Clone)]
 pub struct MemoryPoolSummary {
     pub signature_pool: PoolStatsSummary,
@@ -364,12 +364,12 @@ impl fmt::Display for MemoryPoolSummary {
     }
 }
 
-// Instance globale du gestionnaire de pools
+// Global instance of the manager of pools
 lazy_static::lazy_static! {
     static ref GLOBAL_POOL_MANAGER: MemoryPoolManager = MemoryPoolManager::new();
 }
 
-/// Accès à l'instance globale du gestionnaire de pools
+/// Access to the global pool manager instance
 pub fn global_pool_manager() -> &'static MemoryPoolManager {
     &GLOBAL_POOL_MANAGER
 }
@@ -398,14 +398,14 @@ mod tests {
     fn test_memory_pool_reuse() {
         let mut pool = MemoryPool::new(1024, 10);
         
-        // Obtient un buffer
+        // Gets a buffer
         let buffer1 = pool.get_buffer();
         assert_eq!(buffer1.len(), 1024);
         
-        // Le retourne au pool
+        // Le returns at the pool
         pool.return_buffer(buffer1);
         
-        // Obtient un nouveau buffer (devrait être réutilisé)
+        // Gets a nouveau buffer (should be reused)
         let buffer2 = pool.get_buffer();
         assert_eq!(buffer2.len(), 1024);
         
@@ -422,13 +422,13 @@ mod tests {
         
         let mut handles = vec![];
         
-        // Lance plusieurs threads qui utilisent les pools
+        // Lance multiple threads that utilisent the pools
         for _ in 0..4 {
             let manager_clone = Arc::clone(&manager_arc);
             let handle = thread::spawn(move || {
                 for _ in 0..10 {
                     if let Ok(buffer) = manager_clone.get_signature_buffer() {
-                        // Simule une utilisation
+                        // Simulate a utilisation
                         thread::sleep(Duration::from_millis(1));
                         let _ = manager_clone.return_signature_buffer(buffer);
                     }
@@ -437,12 +437,12 @@ mod tests {
             handles.push(handle);
         }
         
-        // Attend que tous les threads terminent
+        // Attend que all threads terminent
         for handle in handles {
             handle.join().unwrap();
         }
         
-        // Vérifie les statistiques
+        // Verify the statistics
         let summary = manager_arc.summary().unwrap();
         assert!(summary.total_operations > 0);
     }
@@ -451,13 +451,13 @@ mod tests {
     fn test_buffer_expiration() {
         let mut pool = MemoryPool::new(1024, 10);
         
-        // Crée un buffer avec un âge artificiel
+        // Creates a buffer with a age artificiel
         let mut buffer = PooledBuffer::new(1024);
         buffer.created_at = Instant::now() - Duration::from_secs(400); // Plus ancien que MAX_BUFFER_AGE
         
         pool.return_buffer(buffer);
         
-        // Force le nettoyage
+        // Force the cleanup
         pool.cleanup_expired();
         
         let stats = pool.stats();

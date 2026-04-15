@@ -68,3 +68,10 @@ circuits/**/*.wasm
 /bin/
 __pycache__/
 *.pyc
+
+# Snapshots and backups
+manifest-*.json
+snapshot-*.json.gz
+snapshots/
+*.bak-*
+wallet.json.bak*

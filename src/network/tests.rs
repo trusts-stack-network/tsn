@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use log::{info, warn};
 use std::collections::HashSet;
 
-// Tests pour le réseau P2P
+// P2P network tests
 #[tokio::test]
 async fn test_discover_nodes() {
     let nodes = discover_nodes().await;
@@ -40,20 +40,20 @@ async fn test_network() {
                         if rate_limiter.allow_request() {
                             tokio::spawn(async move {
                                 handshake(&mut stream).await.unwrap();
-                                // Traitement des requêtes
+                                // Request processing
                             });
                         } else {
-                            // Refus de la requête due à rate limiting
+                            // Request refused due to rate limiting
                             stream.shutdown().await.unwrap();
                         }
                     }
                     Err(e) => {
-                        warn!("Erreur d'acceptation de requête: {}", e);
+                        warn!("Error d'acceptation de request: {}", e);
                     }
                 }
             }
             _ = interval(Duration::from_secs(60)) => {
-                // Mise à jour des seed nodes
+                // Seed node update
                 nodes = discover_nodes().await;
             }
         }

@@ -1,7 +1,7 @@
-//! Tests unitaires exhaustifs pour le wallet ZK Halo2
+//! Tests unitaires exhaustifs for the wallet ZK Halo2
 //! 
-//! Couvre la génération de preuves, la mise en cache, la vérification et les cas d'erreur.
-//! Inclut des tests de performance pour mesurer la latence de génération des preuves ZK.
+//! Couvre the generation de preuves, the mise in cache, the verification and the cas d'error.
+//! Inclut of tests de performance for mesurer the latence de generation of preuves ZK.
 
 use super::zk_wallet::*;
 use crate::crypto::{
@@ -22,20 +22,20 @@ use std::collections::HashMap;
 mod tests {
     use super::*;
 
-    /// Génère un wallet de test avec des paramètres déterministes
+    /// Generates a wallet de test with parameters deterministics
     fn create_test_wallet() -> ZkWallet {
         let mut rng = StdRng::seed_from_u64(42);
         ZkWallet::new(&mut rng)
     }
 
-    /// Génère des paramètres de vérification de test
+    /// Generates of parameters de verification de test
     fn create_test_verifying_params() -> CircomVerifyingParams {
-        // En pratique, ces paramètres seraient chargés depuis un fichier
-        // Pour les tests, on utilise des paramètres factices
+        // En pratique, ces parameters seraient loadeds from a file
+        // Pour the tests, on utilise of parameters factices
         CircomVerifyingParams::default()
     }
 
-    /// Génère une note de test
+    /// Generates a note de test
     fn create_test_note(value: u64, rng: &mut StdRng) -> Note {
         let mut pk_bytes = [0u8; 32];
         rng.fill_bytes(&mut pk_bytes);
@@ -51,7 +51,7 @@ mod tests {
     fn test_wallet_creation() {
         let wallet = create_test_wallet();
         
-        // Vérifier que le wallet a été initialisé correctement
+        // Verify que the wallet a been initialized correctly
         assert!(!wallet.viewing_key.is_empty());
         assert!(!wallet.spending_key.is_empty());
         assert_eq!(wallet.notes.len(), 0);
@@ -63,16 +63,16 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(123);
         let mut wallet = create_test_wallet();
         
-        // Générer une note
+        // Generate a note
         let value = 1000u64;
         let note = wallet.generate_note(value, &mut rng).unwrap();
         
-        // Vérifier les propriétés de la note
+        // Verify the properties de the note
         assert_eq!(note.value, value);
         assert_ne!(note.pk_hash, [0u8; 32]);
         assert_ne!(note.randomness, [0u8; 32]);
         
-        // Vérifier que la note a été ajoutée au wallet
+        // Verify que the note a been addede at the wallet
         assert_eq!(wallet.notes.len(), 1);
         assert!(wallet.notes.contains(&note));
     }
@@ -82,21 +82,21 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(456);
         let mut wallet = create_test_wallet();
         
-        // Générer et ajouter une note
+        // Generate and add a note
         let value = 2000u64;
         let note = wallet.generate_note(value, &mut rng).unwrap();
         
-        // Dépenser la note
+        // Spendingr the note
         let nullifier = wallet.spend_note(&note, &mut rng).unwrap();
         
-        // Vérifier que le nullifier a été généré
+        // Verify que the nullifier a been generated
         assert_ne!(nullifier.hash, [0u8; 32]);
         
-        // Vérifier que le nullifier a été ajouté au wallet
+        // Verify que the nullifier a been added at the wallet
         assert_eq!(wallet.nullifiers.len(), 1);
         assert!(wallet.nullifiers.contains(&nullifier));
         
-        // Vérifier qu'on ne peut pas dépenser la même note deux fois
+        // Verify qu'on not can pas spendingr the same note deux fois
         let result = wallet.spend_note(&note, &mut rng);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ZkWalletError::NoteAlreadySpent));
@@ -108,17 +108,17 @@ mod tests {
         let mut wallet = create_test_wallet();
         let verifying_params = create_test_verifying_params();
         
-        // Générer une note et la dépenser
+        // Generate a note and the spendingr
         let note = wallet.generate_note(1500, &mut rng).unwrap();
         let nullifier = wallet.spend_note(&note, &mut rng).unwrap();
         
-        // Créer un arbre de Merkle avec la note
+        // Create a arbre de Merkle with the note
         let mut merkle_tree = MerkleTree::new();
         let commitment = commit_to_note(note.value, &note.pk_hash, &Fr::from(1u64));
         merkle_tree.insert(commitment.hash);
         let merkle_root = merkle_tree.root();
         
-        // Générer une preuve de dépense
+        // Generate a preuve de spending
         let value_commitment = commit_to_value(note.value, &mut rng);
         let proof = wallet.generate_spend_proof(
             &note,
@@ -128,11 +128,11 @@ mod tests {
             &mut rng,
         ).unwrap();
         
-        // Vérifier que la preuve a été générée
+        // Verify que the preuve a been generatede
         assert!(!proof.proof_bytes.is_empty());
         
-        // Vérifier que la preuve est valide (simulation)
-        // En pratique, on utiliserait les vrais paramètres de vérification
+        // Verify que the preuve is valid (simulation)
+        // En pratique, on utiliserait the vrais parameters de verification
         assert!(proof.proof_bytes.len() > 0);
     }
 
@@ -141,18 +141,18 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(101112);
         let mut wallet = create_test_wallet();
         
-        // Générer une nouvelle note
+        // Generate a new note
         let note = wallet.generate_note(3000, &mut rng).unwrap();
         let value_commitment = commit_to_value(note.value, &mut rng);
         
-        // Générer une preuve de sortie
+        // Generate a preuve de sortie
         let proof = wallet.generate_output_proof(
             &note,
             &value_commitment,
             &mut rng,
         ).unwrap();
         
-        // Vérifier que la preuve a été générée
+        // Verify que the preuve a been generatede
         assert!(!proof.proof_bytes.is_empty());
         assert!(proof.proof_bytes.len() > 0);
     }
@@ -162,27 +162,27 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(131415);
         let mut wallet = create_test_wallet();
         
-        // Générer une note
+        // Generate a note
         let note = wallet.generate_note(500, &mut rng).unwrap();
         let value_commitment = commit_to_value(note.value, &mut rng);
         
-        // Générer une preuve et mesurer le temps
+        // Generate a preuve and mesurer the temps
         let start = Instant::now();
         let proof1 = wallet.generate_output_proof(&note, &value_commitment, &mut rng).unwrap();
         let first_duration = start.elapsed();
         
-        // Générer la même preuve à nouveau (devrait utiliser le cache)
+        // Generate the same preuve to nouveau (should utiliser the cache)
         let start = Instant::now();
         let proof2 = wallet.generate_output_proof(&note, &value_commitment, &mut rng).unwrap();
         let second_duration = start.elapsed();
         
-        // Vérifier que les preuves sont identiques
+        // Verify que the preuves are identiques
         assert_eq!(proof1.proof_bytes, proof2.proof_bytes);
         
-        // Le cache devrait rendre la deuxième génération plus rapide
-        // (En pratique, avec de vraies preuves ZK)
-        println!("Première génération: {:?}", first_duration);
-        println!("Deuxième génération (cache): {:?}", second_duration);
+        // Le cache should rendre the second generation plus rapide
+        // (En pratique, with de vraies preuves ZK)
+        println!("First generation: {:?}", first_duration);
+        println!("Second generation (cache): {:?}", second_duration);
     }
 
     #[test]
@@ -190,10 +190,10 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(161718);
         let mut wallet = create_test_wallet();
         
-        // Créer une note qui n'appartient pas au wallet
+        // Create a note that n'appartient pas at the wallet
         let foreign_note = create_test_note(1000, &mut rng);
         
-        // Essayer de dépenser une note étrangère
+        // Essayer de spendingr a note strange
         let result = wallet.spend_note(&foreign_note, &mut rng);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ZkWalletError::NoteNotOwned));
@@ -204,7 +204,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(192021);
         let mut wallet = create_test_wallet();
         
-        // Essayer de créer une note de valeur zéro
+        // Essayer de create a note de valeur zero
         let result = wallet.generate_note(0, &mut rng);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ZkWalletError::InvalidValue));
@@ -218,19 +218,19 @@ mod tests {
         // Balance initiale
         assert_eq!(wallet.get_balance(), 0);
         
-        // Ajouter des notes
+        // Ajouter of notes
         wallet.generate_note(1000, &mut rng).unwrap();
         wallet.generate_note(2000, &mut rng).unwrap();
         wallet.generate_note(500, &mut rng).unwrap();
         
-        // Vérifier la balance
+        // Verify the balance
         assert_eq!(wallet.get_balance(), 3500);
         
-        // Dépenser une note
+        // Spendingr a note
         let note = wallet.notes.iter().find(|n| n.value == 1000).unwrap().clone();
         wallet.spend_note(&note, &mut rng).unwrap();
         
-        // Vérifier la balance après dépense
+        // Verify the balance after spending
         assert_eq!(wallet.get_balance(), 2500);
     }
 
@@ -239,7 +239,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(252627);
         let wallet = create_test_wallet();
         
-        // Créer une note
+        // Create a note
         let value = 1234u64;
         let mut pk_bytes = [0u8; 32];
         rng.fill_bytes(&mut pk_bytes);
@@ -248,10 +248,10 @@ mod tests {
         let mut randomness = [0u8; 32];
         rng.fill_bytes(&mut randomness);
         
-        // Chiffrer la note
+        // Chiffrer the note
         let encrypted = encrypt_note_pq(value, &pk_hash, &randomness);
         
-        // Déchiffrer la note
+        // Decrypt the note
         let decrypted = decrypt_note_pq(&encrypted, &pk_hash);
         assert!(decrypted.is_some());
         
@@ -269,14 +269,14 @@ mod tests {
         let wallet = Arc::new(Mutex::new(create_test_wallet()));
         let mut handles = vec![];
         
-        // Lancer plusieurs threads générant des preuves en parallèle
+        // Start multiple threads generating of preuves in parallel
         for i in 0..4 {
             let wallet_clone = Arc::clone(&wallet);
             let handle = thread::spawn(move || {
                 let mut rng = StdRng::seed_from_u64(1000 + i);
                 let mut wallet_guard = wallet_clone.lock().unwrap();
                 
-                // Générer une note et une preuve
+                // Generate a note and a preuve
                 let note = wallet_guard.generate_note(100 * (i + 1), &mut rng).unwrap();
                 let value_commitment = commit_to_value(note.value, &mut rng);
                 
@@ -286,17 +286,17 @@ mod tests {
             handles.push(handle);
         }
         
-        // Attendre que tous les threads se terminent
+        // Wait que all threads se terminent
         for handle in handles {
             handle.join().unwrap();
         }
         
-        // Vérifier que toutes les notes ont été ajoutées
+        // Verify que all notes ont been addedes
         let wallet_guard = wallet.lock().unwrap();
         assert_eq!(wallet_guard.notes.len(), 4);
     }
 
-    /// Tests de performance pour mesurer la latence de génération des preuves ZK
+    /// Tests de performance for mesurer the latence de generation of preuves ZK
     #[test]
     fn test_proof_generation_performance() {
         let mut rng = StdRng::seed_from_u64(282930);
@@ -307,7 +307,7 @@ mod tests {
         
         println!("=== Tests de Performance ZK ===");
         
-        // Test de génération de preuves de sortie
+        // Test de generation de preuves de sortie
         for i in 0..NUM_ITERATIONS {
             let note = wallet.generate_note(1000 + i as u64, &mut rng).unwrap();
             let value_commitment = commit_to_value(note.value, &mut rng);
@@ -317,10 +317,10 @@ mod tests {
             let duration = start.elapsed();
             
             durations.push(duration);
-            println!("Preuve {} générée en {:?}", i + 1, duration);
+            println!("Preuve {} generatede en {:?}", i + 1, duration);
         }
         
-        // Calculer les statistiques
+        // Calculer the statistics
         let total_time: Duration = durations.iter().sum();
         let avg_time = total_time / NUM_ITERATIONS as u32;
         let min_time = durations.iter().min().unwrap();
@@ -332,9 +332,9 @@ mod tests {
         println!("Temps maximum: {:?}", max_time);
         println!("Temps total: {:?}", total_time);
         
-        // Assertions de performance (ajustables selon les besoins)
-        assert!(avg_time < Duration::from_secs(5), "Génération de preuve trop lente");
-        assert!(max_time < Duration::from_secs(10), "Pic de latence trop élevé");
+        // Assertions de performance (ajustables selon the besoins)
+        assert!(avg_time < Duration::from_secs(5), "Generation de preuve trop lente");
+        assert!(max_time < Duration::from_secs(10), "Pic de latence trop high");
     }
 
     #[test]
@@ -342,21 +342,21 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(313233);
         let mut wallet = create_test_wallet();
         
-        // Générer plusieurs notes et preuves pour tester l'usage mémoire
+        // Generate multiple notes and preuves for tester l'usage memory
         const NUM_NOTES: usize = 100;
         
         for i in 0..NUM_NOTES {
             let note = wallet.generate_note(100 + i as u64, &mut rng).unwrap();
             let value_commitment = commit_to_value(note.value, &mut rng);
             
-            // Générer une preuve
+            // Generate a preuve
             let _proof = wallet.generate_output_proof(&note, &value_commitment, &mut rng).unwrap();
             
-            // Vérifier que le wallet ne grandit pas de manière excessive
+            // Verify que the wallet not grandit pas de manner excessive
             assert!(wallet.notes.len() <= NUM_NOTES);
         }
         
-        println!("Généré {} notes et preuves avec succès", NUM_NOTES);
+        println!("Generated {} notes et preuves avec success", NUM_NOTES);
     }
 
     #[test]
@@ -365,16 +365,16 @@ mod tests {
         let mut wallet = create_test_wallet();
         let verifying_params = create_test_verifying_params();
         
-        // Test avec une note de valeur maximale
+        // Test with a note de valeur maximale
         let max_value = u64::MAX;
         let result = wallet.generate_note(max_value, &mut rng);
-        // Selon l'implémentation, cela pourrait être valide ou non
+        // Selon l'implementation, cela pourrait be valid or non
         println!("Note de valeur maximale: {:?}", result.is_ok());
         
-        // Test avec des paramètres de vérification invalides
-        // (En pratique, on testerait avec de vrais paramètres corrompus)
+        // Test with parameters de verification invalids
+        // (En pratique, on testerait with de vrais parameters corrompus)
         
-        // Test de robustesse avec des données aléatoires
+        // Test de robustesse with data random
         let note = wallet.generate_note(1000, &mut rng).unwrap();
         let value_commitment = commit_to_value(note.value, &mut rng);
         
@@ -386,14 +386,14 @@ mod tests {
     fn test_wallet_serialization() {
         let wallet = create_test_wallet();
         
-        // Test de sérialisation/désérialisation du wallet
-        // (Nécessiterait l'implémentation de Serialize/Deserialize)
+        // Test de serialization/deserialization of the wallet
+        // (Requiresrait l'implementation de Serialize/Deserialize)
         
-        // Pour l'instant, on teste que les composants clés ne sont pas vides
+        // Pour l'instant, on teste que the composants keys not are pas vides
         assert!(!wallet.viewing_key.is_empty());
         assert!(!wallet.spending_key.is_empty());
         
-        // Test de persistance des notes et nullifiers
+        // Test de persistance of notes and nullifiers
         assert_eq!(wallet.notes.len(), 0);
         assert_eq!(wallet.nullifiers.len(), 0);
     }
@@ -403,28 +403,28 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(373839);
         let mut wallet = create_test_wallet();
         
-        // Test de tous les types d'erreurs possibles
+        // Test all possible error types
         
-        // 1. Note de valeur invalide
+        // 1. Note de valeur invalid
         let result = wallet.generate_note(0, &mut rng);
         assert!(matches!(result.unwrap_err(), ZkWalletError::InvalidValue));
         
-        // 2. Note non possédée
+        // 2. Note not owned
         let foreign_note = create_test_note(1000, &mut rng);
         let result = wallet.spend_note(&foreign_note, &mut rng);
         assert!(matches!(result.unwrap_err(), ZkWalletError::NoteNotOwned));
         
-        // 3. Double dépense
+        // 3. Double spending
         let note = wallet.generate_note(1000, &mut rng).unwrap();
         wallet.spend_note(&note, &mut rng).unwrap();
         let result = wallet.spend_note(&note, &mut rng);
         assert!(matches!(result.unwrap_err(), ZkWalletError::NoteAlreadySpent));
         
-        println!("Tous les cas d'erreur testés avec succès");
+        println!("Tous les cas d'error tested avec success");
     }
 }
 
-/// Tests d'intégration pour le wallet ZK
+/// Tests d'integration for the wallet ZK
 #[cfg(test)]
 mod integration_tests {
     use super::*;
@@ -435,28 +435,28 @@ mod integration_tests {
         let mut sender_wallet = create_test_wallet();
         let mut receiver_wallet = create_test_wallet();
         
-        // 1. Le sender génère une note
+        // 1. The sender generates a note
         let initial_value = 5000u64;
         let sender_note = sender_wallet.generate_note(initial_value, &mut rng).unwrap();
         
-        // 2. Le sender crée une transaction pour envoyer de l'argent
+        // 2. Le sender creates a transaction for envoyer de l'argent
         let transfer_amount = 2000u64;
         let change_amount = initial_value - transfer_amount;
         
-        // 3. Le sender dépense sa note originale
+        // 3. The sender spends their original note
         let nullifier = sender_wallet.spend_note(&sender_note, &mut rng).unwrap();
         
-        // 4. Créer une note pour le receiver
+        // 4. Create a note for the receiver
         let receiver_note = receiver_wallet.generate_note(transfer_amount, &mut rng).unwrap();
         
-        // 5. Créer une note de change pour le sender
+        // 5. Create a note de change for the sender
         let change_note = sender_wallet.generate_note(change_amount, &mut rng).unwrap();
         
-        // Vérifier les balances finales
+        // Verify the balances finales
         assert_eq!(sender_wallet.get_balance(), change_amount);
         assert_eq!(receiver_wallet.get_balance(), transfer_amount);
         
-        println!("Transaction complète réussie: {} -> {} (change: {})", 
+        println!("Transaction completee successful: {} -> {} (change: {})", 
                 initial_value, transfer_amount, change_amount);
     }
 
@@ -465,7 +465,7 @@ mod integration_tests {
         let mut rng = StdRng::seed_from_u64(434445);
         let mut wallet = create_test_wallet();
         
-        // Créer plusieurs notes d'entrée
+        // Create multiple notes d'entry
         let note1 = wallet.generate_note(1000, &mut rng).unwrap();
         let note2 = wallet.generate_note(1500, &mut rng).unwrap();
         let note3 = wallet.generate_note(2000, &mut rng).unwrap();
@@ -473,22 +473,22 @@ mod integration_tests {
         let total_input = 4500u64;
         assert_eq!(wallet.get_balance(), total_input);
         
-        // Dépenser toutes les notes
+        // Spendingr all notes
         wallet.spend_note(&note1, &mut rng).unwrap();
         wallet.spend_note(&note2, &mut rng).unwrap();
         wallet.spend_note(&note3, &mut rng).unwrap();
         
-        // Créer une nouvelle note avec la valeur totale
+        // Create a new note with the valeur totale
         let consolidated_note = wallet.generate_note(total_input, &mut rng).unwrap();
         
         assert_eq!(wallet.get_balance(), total_input);
         assert_eq!(wallet.nullifiers.len(), 3);
         
-        println!("Consolidation de {} notes réussie", 3);
+        println!("Consolidation de {} notes successful", 3);
     }
 }
 
-/// Benchmarks pour mesurer les performances
+/// Benchmarks for mesurer the performances
 #[cfg(test)]
 mod benchmarks {
     use super::*;
@@ -509,10 +509,10 @@ mod benchmarks {
         let duration = start.elapsed();
         let avg_per_note = duration / ITERATIONS as u32;
         
-        println!("Génération de {} notes en {:?}", ITERATIONS, duration);
+        println!("Generation de {} notes en {:?}", ITERATIONS, duration);
         println!("Temps moyen par note: {:?}", avg_per_note);
         
-        assert!(avg_per_note < Duration::from_millis(10), "Génération de note trop lente");
+        assert!(avg_per_note < Duration::from_millis(10), "Generation de note trop lente");
     }
 
     #[test]
@@ -534,10 +534,10 @@ mod benchmarks {
         
         let avg_per_proof = total_duration / ITERATIONS as u32;
         
-        println!("Génération de {} preuves en {:?}", ITERATIONS, total_duration);
+        println!("Generation de {} preuves en {:?}", ITERATIONS, total_duration);
         println!("Temps moyen par preuve: {:?}", avg_per_proof);
         
-        // Les preuves ZK peuvent être lentes, ajuster selon les besoins
-        assert!(avg_per_proof < Duration::from_secs(30), "Génération de preuve trop lente");
+        // Les preuves ZK peuvent be lentes, ajuster selon the besoins
+        assert!(avg_per_proof < Duration::from_secs(30), "Generation de preuve trop lente");
     }
 }

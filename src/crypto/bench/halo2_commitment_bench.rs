@@ -1,14 +1,14 @@
-//! Benchmarks pour les circuits ZK de TSN
+//! Benchmarks for the circuits ZK de TSN
 //! 
-//! Compare les performances entre:
+//! Compare the performances entre:
 //! - Arkworks Groth16 (zk-SNARKs classiques sur BN254)
 //! - Plonky2 STARKs (post-quantique, FRI-based)
 //! 
-//! Contexte de sécurité:
+//! Contexte de security:
 //! - Groth16: 128-bit security via courbe BN254 (non post-quantique)
 //! - Plonky2: 128-bit post-quantum security via FRI + Poseidon2
 //! 
-//! Références:
+//! References:
 //! - Groth16: https://eprint.iacr.org/2016/260
 //! - Plonky2: https://github.com/mir-protocol/plonky2
 //! - FRI: https://eccc.weizmann.ac.il/report/2017/134/
@@ -24,16 +24,16 @@ use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use plonky2::plonk::proof::ProofWithPublicInputs;
 use std::time::{Duration, Instant};
 
-/// Type aliases pour Plonky2
+/// Type aliases for Plonky2
 type F = GoldilocksField;
 const D: usize = 2;
 type C = PoseidonGoldilocksConfig;
 
-/// Configuration des benchmarks
+/// Configuration of benchmarks
 const SAMPLE_SIZE: usize = 10;
 const WARMUP_ITERATIONS: usize = 3;
 
-/// Résultat d'un benchmark
+/// Result d'un benchmark
 #[derive(Debug, Clone)]
 pub struct BenchmarkResult {
     pub name: String,
@@ -64,7 +64,7 @@ impl BenchmarkResult {
         }
     }
     
-    /// Affiche les résultats formatés
+    /// Display formatted results
     pub fn print(&self) {
         println!("┌─────────────────────────────────────────────────────────────┐");
         println!("│ Benchmark: {:<48} │", self.name);
@@ -81,7 +81,7 @@ impl BenchmarkResult {
     }
 }
 
-/// Benchmark runner simple (sans criterion pour éviter les dépendances supplémentaires)
+/// Simple benchmark runner (without criterion to avoid additional dependencies)
 pub struct BenchmarkRunner {
     results: Vec<BenchmarkResult>,
 }
@@ -91,7 +91,7 @@ impl BenchmarkRunner {
         Self { results: Vec::new() }
     }
     
-    /// Exécute un benchmark
+    /// Executes a benchmark
     pub fn bench<F: FnMut()>(&mut self, name: &str, mut f: F) -> BenchmarkResult {
         // Warmup
         for _ in 0..WARMUP_ITERATIONS {
@@ -112,7 +112,7 @@ impl BenchmarkRunner {
         result
     }
     
-    /// Affiche tous les résultats
+    /// Display all results
     pub fn print_all(&self) {
         println!("\n");
         println!("╔═══════════════════════════════════════════════════════════════╗");
@@ -124,7 +124,7 @@ impl BenchmarkRunner {
     }
 }
 
-/// Circuit simple pour Plonky2: commitment = value + blinder
+/// Circuit simple for Plonky2: commitment = value + blinder
 fn build_plonky2_commitment_circuit() -> (CircuitData<F, C, D>, VerifierCircuitData<F, C, D>) {
     let config = CircuitConfig::standard_recursion_config();
     let mut builder = CircuitBuilder::<F, D>::new(config);
@@ -144,7 +144,7 @@ fn build_plonky2_commitment_circuit() -> (CircuitData<F, C, D>, VerifierCircuitD
     (circuit_data, verifier_data)
 }
 
-/// Génère une preuve Plonky2
+/// Generates a preuve Plonky2
 fn prove_plonky2_commitment(
     circuit_data: &CircuitData<F, C, D>,
     value: F,
@@ -152,7 +152,7 @@ fn prove_plonky2_commitment(
 ) -> (ProofWithPublicInputs<F, C, D>, Duration) {
     let mut pw = PartialWitness::new();
     
-    let value_target = circuit_data.prover_only.public_inputs[0]; // Simplifié
+    let value_target = circuit_data.prover_only.public_inputs[0]; // Simplified
     let blinder_target = circuit_data.prover_only.public_inputs[0];
     
     pw.set_target(value_target, value);
@@ -168,7 +168,7 @@ fn prove_plonky2_commitment(
     (proof, elapsed)
 }
 
-/// Vérifie une preuve Plonky2
+/// Verifies a preuve Plonky2
 fn verify_plonky2_commitment(
     verifier_data: &VerifierCircuitData<F, C, D>,
     proof: &ProofWithPublicInputs<F, C, D>,
@@ -207,11 +207,11 @@ pub fn bench_plonky2_verification() -> BenchmarkResult {
 
 /// Benchmark: Groth16 proof generation (via arkworks)
 pub fn bench_groth16_generation() -> BenchmarkResult {
-    // Note: Ceci est un placeholder - Groth16 nécessite un circuit R1CS complet
-    // En pratique, on utiliserait ark-circom ou un circuit R1CS défini
+    // Note: Ceci is a placeholder - Groth16 requires a circuit R1CS complete
+    // En pratique, on utiliserait ark-circom or a circuit R1CS defined
     let mut runner = BenchmarkRunner::new();
     runner.bench("Groth16 commitment generation (arkworks)", || {
-        // Simulation d'opération cryptographique
+        // Simulation d'operation cryptographique
         let mut accumulator = 0u64;
         for i in 0..1000 {
             accumulator = accumulator.wrapping_add(i * i);
@@ -220,7 +220,7 @@ pub fn bench_groth16_generation() -> BenchmarkResult {
     })
 }
 
-/// Benchmark: Comparaison mémoire
+/// Benchmark: Comparison memory
 pub fn bench_memory_comparison() -> Vec<BenchmarkResult> {
     let mut results = Vec::new();
     
@@ -238,7 +238,7 @@ pub fn bench_memory_comparison() -> Vec<BenchmarkResult> {
     results
 }
 
-/// Exécute tous les benchmarks
+/// Executes all benchmarks
 pub fn run_all_benchmarks() -> Vec<BenchmarkResult> {
     let mut all_results = Vec::new();
     
@@ -257,7 +257,7 @@ pub fn run_all_benchmarks() -> Vec<BenchmarkResult> {
     // Memory benchmarks
     all_results.extend(bench_memory_comparison());
     
-    // Affiche les résultats
+    // Display results
     let runner = BenchmarkRunner { results: all_results.clone() };
     runner.print_all();
     

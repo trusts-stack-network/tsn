@@ -1,76 +1,76 @@
-//! Vérification batch optimisée des signatures SLH-DSA — Version avec rayon
+//! Verification batch optimized of signatures SLH-DSA — Version with rayon
 //!
-//! Cette version améliore l'implémentation existante en ajoutant :
-//! - Support optionnel de rayon pour le parallélisme optimal
-//! - Fallback gracieux vers std::thread si rayon n'est pas disponible
-//! - Optimisations de performance pour les gros batches
-//! - Métriques détaillées de performance
+//! This version improves l'implementation existante in additionant :
+//! - Support optionnel de rayon for the parallelism optimal
+//! - Fallback gracieux vers std::thread if rayon n'est pas available
+//! - Optimisations de performance for the gros batches
+//! - Metrics detailed de performance
 //!
-//! Sécurité :
-//! - Constant-time : aucune branche sur les données secrètes
-//! - Early abort : arrêt dès la première signature invalide (optimisation)
-//! - Memory safety : zeroize des buffers temporaires
-//! - Work-stealing : rayon optimise automatiquement la charge
+//! Security :
+//! - Constant-time : no branche on the data secret
+//! - Early abort : shutdown from the first signature invalid (optimisation)
+//! - Memory safety : zeroize of buffers temporarys
+//! - Work-stealing : rayon optimise automatically the charge
 //!
 //! Performances attendues :
 //! - Avec rayon : O(N/cores) × temps_verification_unitaire + overhead minimal
 //! - Sans rayon : O(N/cores) × temps_verification_unitaire + overhead threads
-//! - Speedup théorique : ~cores × 0.9 (rayon est plus efficace que std::thread)
+//! - Speedup theoretical : ~cores × 0.9 (rayon is plus efficace que std::thread)
 //!
-//! Références :
-//! - FIPS 205 (2024) — pas de spécification batch, implémentation TSN
-//! - "Batch Verification of SPHINCS+" (non publié, design TSN)
+//! References :
+//! - FIPS 205 (2024) — pas de specification batch, implementation TSN
+//! - "Batch Verification of SPHINCS+" (non published, design TSN)
 //! - Rayon documentation : https://docs.rs/rayon/
 
 use super::slh_dsa::{PublicKey, Signature};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// Résultat de vérification batch avec métriques étendues
+/// Batch verification result with extended metrics
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchVerificationResultOptimized {
-    /// Toutes les signatures sont valides
+    /// Toutes the signatures are valids
     pub all_valid: bool,
-    /// Indices des signatures invalides (si any)
+    /// Indices of signatures invalids (si any)
     pub invalid_indices: Vec<usize>,
-    /// Nombre total de signatures vérifiées
+    /// Number total de signatures verifiedes
     pub total_count: usize,
-    /// Temps de vérification en microsecondes
+    /// Temps de verification in microsecondes
     pub verification_time_us: u64,
-    /// Méthode utilisée pour la vérification
+    /// Method used for the verification
     pub method_used: VerificationMethod,
-    /// Nombre de threads utilisés
+    /// Number de threads used
     pub threads_used: usize,
-    /// Efficacité du parallélisme (0.0-1.0)
+    /// Efficiency of the parallelism (0.0-1.0)
     pub parallelism_efficiency: f64,
 }
 
-/// Méthode de vérification utilisée
+/// Method de verification used
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerificationMethod {
-    /// Vérification séquentielle
+    /// Verification sequential
     Sequential,
-    /// Parallélisme avec std::thread
+    /// Parallelism with std::thread
     StdThread,
-    /// Parallélisme avec rayon (optimal)
+    /// Parallelism with rayon (optimal)
     Rayon,
 }
 
-/// Entrée pour la vérification batch (réutilise le type existant)
+/// Entry for the verification batch (reuses the type existant)
 pub use super::slh_dsa_batch::BatchVerificationEntry;
 
-/// Configuration de la vérification batch optimisée
+/// Configuration de the verification batch optimized
 #[derive(Debug, Clone)]
 pub struct BatchVerificationConfigOptimized {
-    /// Utiliser le parallélisme (si disponible)
+    /// Utiliser the parallelism (si available)
     pub use_parallel: bool,
-    /// Arrêt anticipé à la première erreur
+    /// Stopping anticipated to the first error
     pub early_abort: bool,
-    /// Taille de chunk pour le parallélisme
+    /// Size de chunk for the parallelism
     pub chunk_size: Option<usize>,
-    /// Forcer l'utilisation de std::thread même si rayon est disponible
+    /// Forcer l'utilisation de std::thread same if rayon is available
     pub force_std_thread: bool,
-    /// Seuil minimum pour activer le parallélisme
+    /// Seuil minimum for enable the parallelism
     pub parallel_threshold: usize,
 }
 
@@ -79,31 +79,31 @@ impl Default for BatchVerificationConfigOptimized {
         Self {
             use_parallel: true,
             early_abort: true,
-            chunk_size: None, // Auto-détection
+            chunk_size: None, // Auto-detection
             force_std_thread: false,
-            parallel_threshold: 4, // Parallélisme seulement si >= 4 signatures
+            parallel_threshold: 4, // Parallelism onlyment si >= 4 signatures
         }
     }
 }
 
-/// Vérification batch optimisée des signatures SLH-DSA
+/// Verification batch optimized of signatures SLH-DSA
 ///
-/// Cette fonction choisit automatiquement la meilleure stratégie :
-/// 1. Si rayon disponible et non forcé std::thread → utilise rayon
-/// 2. Sinon si parallélisme demandé → utilise std::thread
-/// 3. Sinon → vérification séquentielle
+/// This fonction choisit automatically the meilleure strategy :
+/// 1. If rayon available and not forced std::thread → use rayon
+/// 2. Otherwise if parallelism requested → use std::thread
+/// 3. Otherwise → sequential verification
 ///
 /// # Arguments
-/// * `entries` - Slice des entrées (clé publique, message, signature)
-/// * `config` - Configuration de vérification optimisée
+/// * `entries` - Slice of entries (key public, message, signature)
+/// * `config` - Configuration de verification optimized
 ///
 /// # Retour
-/// * `BatchVerificationResultOptimized` avec métriques détaillées
+/// * `BatchVerificationResultOptimized` with metrics detailed
 ///
-/// # Sécurité
-/// - Constant-time : pas de branche sur le contenu des signatures
-/// - Early abort : optimisation performance sans leak d'information
-/// - Zeroize : nettoyage des buffers temporaires (via rayon ou std)
+/// # Security
+/// - Constant-time : pas de branche on the contenu of signatures
+/// - Early abort : optimisation performance without leak d'information
+/// - Zeroize : cleanup of buffers temporarys (via rayon or std)
 ///
 /// # Exemple
 /// ```rust
@@ -128,7 +128,7 @@ impl Default for BatchVerificationConfigOptimized {
 ///
 /// let result = verify_batch_optimized(&entries, &BatchVerificationConfigOptimized::default());
 /// assert!(result.all_valid);
-/// println!("Méthode utilisée : {:?}", result.method_used);
+/// println!("Method used : {:?}", result.method_used);
 /// ```
 pub fn verify_batch_optimized(
     entries: &[BatchVerificationEntry],
@@ -148,10 +148,10 @@ pub fn verify_batch_optimized(
         };
     }
 
-    // Choisir la stratégie de vérification
+    // Choisir the strategy de verification
     let (method, threads_used) = choose_verification_strategy(entries.len(), config);
     
-    // Détection automatique de la taille de chunk
+    // Detection automatique de the size de chunk
     let chunk_size = config.chunk_size.unwrap_or_else(|| {
         calculate_optimal_chunk_size(entries.len(), threads_used)
     });
@@ -164,7 +164,7 @@ pub fn verify_batch_optimized(
             }
             #[cfg(not(feature = "rayon"))]
             {
-                // Fallback si rayon n'est pas compilé
+                // Fallback if rayon n'est pas compiled
                 verify_batch_std_thread(entries, config.early_abort, chunk_size, threads_used)
             }
         },
@@ -179,7 +179,7 @@ pub fn verify_batch_optimized(
     let all_valid = invalid_indices.is_empty();
     let verification_time_us = start_time.elapsed().as_micros() as u64;
     
-    // Calcul de l'efficacité du parallélisme (estimation)
+    // Calculation de efficiency of the parallelism (estimation)
     let parallelism_efficiency = calculate_parallelism_efficiency(
         entries.len(),
         threads_used,
@@ -198,7 +198,7 @@ pub fn verify_batch_optimized(
     }
 }
 
-/// Choisit la stratégie de vérification optimale
+/// Choisit the strategy de verification optimale
 fn choose_verification_strategy(
     entry_count: usize,
     config: &BatchVerificationConfigOptimized,
@@ -215,7 +215,7 @@ fn choose_verification_strategy(
         return (VerificationMethod::StdThread, available_threads);
     }
 
-    // Préférer rayon si disponible
+    // Prefer rayon if available
     #[cfg(feature = "rayon")]
     {
         (VerificationMethod::Rayon, available_threads)
@@ -226,21 +226,21 @@ fn choose_verification_strategy(
     }
 }
 
-/// Calcule la taille de chunk optimale
+/// Calculates the size de chunk optimale
 fn calculate_optimal_chunk_size(entry_count: usize, thread_count: usize) -> usize {
     if thread_count <= 1 {
         return entry_count;
     }
 
-    // Heuristique : au moins 2 chunks par thread pour équilibrer la charge
+    // Heuristique : at the moins 2 chunks par thread for balance the charge
     let min_chunk_size = 1;
     let max_chunk_size = entry_count / (thread_count * 2).max(1);
     
-    // Chunk size optimal : entre 8 et 64 signatures par chunk
+    // Chunk size optimal : entre 8 and 64 signatures par chunk
     std::cmp::max(min_chunk_size, std::cmp::min(max_chunk_size, 32))
 }
 
-/// Vérification séquentielle (réutilise l'implémentation existante)
+/// Verification sequential (reuses l'implementation existante)
 fn verify_batch_sequential(
     entries: &[BatchVerificationEntry],
     early_abort: bool,
@@ -262,7 +262,7 @@ fn verify_batch_sequential(
     invalid_indices
 }
 
-/// Vérification avec std::thread (version améliorée)
+/// Verification with std::thread (version improved)
 fn verify_batch_std_thread(
     entries: &[BatchVerificationEntry],
     early_abort: bool,
@@ -283,7 +283,7 @@ fn verify_batch_std_thread(
     let chunks: Vec<_> = entries.chunks(chunk_size).enumerate().collect();
     let actual_threads = std::cmp::min(max_threads, chunks.len());
     
-    // Distribuer les chunks entre les threads
+    // Distribuer the chunks between threads
     for thread_id in 0..actual_threads {
         let thread_chunks: Vec<_> = chunks
             .iter()
@@ -298,7 +298,7 @@ fn verify_batch_std_thread(
         let thread_invalid_indices = Arc::clone(&invalid_indices);
         let thread_abort_flag = Arc::clone(&abort_flag);
         
-        // Copier les données pour le thread
+        // Copier the data for the thread
         let thread_data: Vec<(usize, Vec<(PublicKey, Vec<u8>, Signature)>)> = thread_chunks
             .into_iter()
             .map(|(chunk_idx, chunk)| {
@@ -351,7 +351,7 @@ fn verify_batch_std_thread(
         handles.push(handle);
     }
     
-    // Attendre tous les threads
+    // Wait all threads
     for handle in handles {
         let _ = handle.join();
     }
@@ -361,7 +361,7 @@ fn verify_batch_std_thread(
     result
 }
 
-/// Vérification avec rayon (si feature activée)
+/// Verification with rayon (si feature enabled)
 #[cfg(feature = "rayon")]
 fn verify_batch_rayon(
     entries: &[BatchVerificationEntry],
@@ -371,9 +371,9 @@ fn verify_batch_rayon(
     use rayon::prelude::*;
     
     if early_abort {
-        // Avec early abort, on ne peut pas utiliser rayon efficacement
-        // car il n'y a pas de moyen standard d'arrêter tous les threads
-        // On utilise find_any pour arrêter dès qu'on trouve une erreur
+        // Avec early abort, on not can pas utiliser rayon efficacement
+        // car il n'y a pas de moyen standard d'shutdowner all threads
+        // We use find_any to stop as soon as we find an error
         if let Some((index, _)) = entries
             .par_iter()
             .enumerate()
@@ -384,7 +384,7 @@ fn verify_batch_rayon(
             Vec::new()
         }
     } else {
-        // Sans early abort, on peut utiliser rayon de manière optimale
+        // Sans early abort, on can utiliser rayon de manner optimale
         entries
             .par_chunks(chunk_size)
             .enumerate()
@@ -406,7 +406,7 @@ fn verify_batch_rayon(
     }
 }
 
-/// Calcule l'efficacité du parallélisme (estimation heuristique)
+/// Calculationates efficiency of the parallelism (estimation heuristique)
 fn calculate_parallelism_efficiency(
     entry_count: usize,
     threads_used: usize,
@@ -417,7 +417,7 @@ fn calculate_parallelism_efficiency(
         return 1.0;
     }
 
-    // Estimation du temps séquentiel (approximation)
+    // Estimation of the temps sequential (approximation)
     // SLH-DSA verification ~= 1ms par signature (estimation conservative)
     let estimated_sequential_time_us = entry_count as u64 * 1000;
     
@@ -430,7 +430,7 @@ fn calculate_parallelism_efficiency(
     
     let efficiency = (actual_speedup / theoretical_speedup).min(1.0);
     
-    // Ajustement selon la méthode
+    // Ajustement selon the method
     match method {
         VerificationMethod::Rayon => efficiency,
         VerificationMethod::StdThread => efficiency * 0.9, // Overhead threads std
@@ -438,29 +438,29 @@ fn calculate_parallelism_efficiency(
     }
 }
 
-/// API de convenance : vérification batch simple avec optimisations
+/// API de convenance : verification batch simple with optimisations
 ///
-/// Utilise la configuration par défaut optimisée et retourne seulement le booléen.
+/// Utilise the configuration by default optimized and returns onlyment the boolean.
 ///
 /// # Arguments
-/// * `entries` - Slice des entrées à vérifier
+/// * `entries` - Slice of entries to verify
 ///
 /// # Retour
-/// * `true` si toutes les signatures sont valides, `false` sinon
+/// * `true` if all signatures are valids, `false` sinon
 pub fn verify_batch_simple_optimized(entries: &[BatchVerificationEntry]) -> bool {
     verify_batch_optimized(entries, &BatchVerificationConfigOptimized::default()).all_valid
 }
 
-/// Benchmark comparatif : séquentiel vs parallèle vs rayon
+/// Benchmark comparatif : sequential vs parallel vs rayon
 ///
-/// Utile pour optimiser la configuration sur différentes architectures.
+/// Utile for optimiser the configuration sur different architectures.
 ///
 /// # Arguments
-/// * `entries` - Entrées de test
-/// * `iterations` - Nombre d'itérations pour la moyenne
+/// * `entries` - Entries de test
+/// * `iterations` - Number d'iterations for the moyenne
 ///
 /// # Retour
-/// * `(sequential_stats, parallel_stats, rayon_stats)` avec métriques
+/// * `(sequential_stats, parallel_stats, rayon_stats)` with metrics
 pub fn benchmark_all_methods(
     entries: &[BatchVerificationEntry],
     iterations: usize,
@@ -478,7 +478,7 @@ pub fn benchmark_all_methods(
         return (empty_result.clone(), empty_result.clone(), Some(empty_result));
     }
 
-    // Benchmark séquentiel
+    // Benchmark sequential
     let config_seq = BatchVerificationConfigOptimized {
         use_parallel: false,
         early_abort: false,
@@ -530,7 +530,7 @@ pub fn benchmark_all_methods(
         ),
     };
 
-    // Benchmark rayon (si disponible)
+    // Benchmark rayon (si available)
     #[cfg(feature = "rayon")]
     let rayon_result = {
         let config_rayon = BatchVerificationConfigOptimized {
@@ -583,7 +583,7 @@ mod tests {
 
         for i in 0..count {
             let (sk, pk) = SecretKey::generate_rng(&mut rng);
-            let msg = format!("message de test TSN optimisé #{}", i).into_bytes();
+            let msg = format!("message de test TSN optimized #{}", i).into_bytes();
             let sig = sk.sign(&msg);
 
             secret_keys.push(sk);
@@ -619,7 +619,7 @@ mod tests {
         assert!(result.all_valid);
         assert_eq!(result.total_count, 1);
         assert!(result.invalid_indices.is_empty());
-        // Avec 1 signature, devrait utiliser séquentiel
+        // Avec 1 signature, should utiliser sequential
         assert_eq!(result.method_used, VerificationMethod::Sequential);
     }
 
@@ -639,13 +639,13 @@ mod tests {
         assert!(result.all_valid);
         assert_eq!(result.total_count, 10);
         assert!(result.invalid_indices.is_empty());
-        // Avec 10 signatures, devrait utiliser parallélisme
+        // Avec 10 signatures, should utiliser parallelism
         assert!(matches!(result.method_used, VerificationMethod::StdThread | VerificationMethod::Rayon));
     }
 
     #[test]
     fn test_method_selection() {
-        // Test avec peu de signatures → séquentiel
+        // Test with peu de signatures → sequential
         let config_small = BatchVerificationConfigOptimized {
             parallel_threshold: 5,
             ..Default::default()
@@ -653,7 +653,7 @@ mod tests {
         let (method, _) = choose_verification_strategy(3, &config_small);
         assert_eq!(method, VerificationMethod::Sequential);
 
-        // Test avec beaucoup de signatures → parallèle
+        // Test with beaucoup de signatures → parallel
         let config_large = BatchVerificationConfigOptimized::default();
         let (method, _) = choose_verification_strategy(100, &config_large);
         assert!(matches!(method, VerificationMethod::StdThread | VerificationMethod::Rayon));
@@ -669,15 +669,15 @@ mod tests {
 
     #[test]
     fn test_chunk_size_calculation() {
-        // Test avec 1 thread
+        // Test with 1 thread
         let chunk_size = calculate_optimal_chunk_size(100, 1);
         assert_eq!(chunk_size, 100);
 
-        // Test avec plusieurs threads
+        // Test with multiple threads
         let chunk_size = calculate_optimal_chunk_size(100, 4);
         assert!(chunk_size >= 1 && chunk_size <= 32);
 
-        // Test avec beaucoup de threads
+        // Test with beaucoup de threads
         let chunk_size = calculate_optimal_chunk_size(1000, 16);
         assert!(chunk_size >= 1 && chunk_size <= 32);
     }

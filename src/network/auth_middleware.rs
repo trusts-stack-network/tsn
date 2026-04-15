@@ -1,9 +1,9 @@
-//! Middleware d'authentification par API keys pour l'API REST TSN
+//! API key authentication middleware for the TSN REST API
 //!
 //! Supporte :
-//! - API keys avec permissions (read, write, admin)
-//! - Rate limiting par clé API
-//! - Extraction depuis header X-API-Key ou query param ?api_key=
+//! - API keys with permissions (read, write, admin)
+//! - Rate limiting par key API
+//! - Extraction from X-API-Key header or ?api_key= query param
 
 use axum::{
     body::Body,
@@ -22,38 +22,38 @@ use tracing::{debug, info, warn};
 
 use crate::rpc::auth::{ApiKey, ApiKeyManager, Permission};
 
-/// Paramètres de requête pour l'authentification par query string
+/// Request parameters for query string authentication
 #[derive(Debug, Deserialize)]
 pub struct AuthQuery {
     #[serde(rename = "api_key")]
     api_key: Option<String>,
 }
 
-/// État de l'authentification extrait de la requête
+/// Authentication state extracted from the request
 #[derive(Debug, Clone)]
 pub struct AuthContext {
-    /// Clé API utilisée (None si pas d'authentification)
+    /// API key used (None if not authenticated)
     pub api_key: Option<ApiKey>,
     /// Permissions effectives
     pub permissions: Vec<Permission>,
-    /// Est-ce une requête authentifiée ?
+    /// Is this an authenticated request?
     pub is_authenticated: bool,
-    /// Est-ce un admin ?
+    /// Is this an admin?
     pub is_admin: bool,
 }
 
 impl AuthContext {
-    /// Crée un contexte anonyme (pas d'authentification)
+    /// Creates a contexte anonyme (pas d'authentification)
     pub fn anonymous() -> Self {
         Self {
             api_key: None,
-            permissions: vec![Permission::Read], // Les anonymes ont lecture seule
+            permissions: vec![Permission::Read], // Les anonymes ont lecture only
             is_authenticated: false,
             is_admin: false,
         }
     }
 
-    /// Crée un contexte à partir d'une clé API valide
+    /// Creates a context from a valid API key
     pub fn from_api_key(key: ApiKey) -> Self {
         let is_admin = key.permissions.contains(&Permission::Admin);
         Self {
@@ -64,39 +64,39 @@ impl AuthContext {
         }
     }
 
-    /// Vérifie si le contexte a une permission donnée
+    /// Checks if the context has a given permission
     pub fn has_permission(&self, perm: Permission) -> bool {
         self.permissions.contains(&perm) || self.is_admin
     }
 
-    /// Vérifie si le contexte peut lire
+    /// Checks if the context can read
     pub fn can_read(&self) -> bool {
         self.has_permission(Permission::Read)
     }
 
-    /// Vérifie si le contexte peut écrire
+    /// Checks if the context can write
     pub fn can_write(&self) -> bool {
         self.has_permission(Permission::Write)
     }
 
-    /// Vérifie si le contexte est admin
+    /// Checks if the context is admin
     pub fn is_admin_only(&self) -> bool {
         self.has_permission(Permission::Admin)
     }
 }
 
-/// État partagé pour le middleware d'authentification
+/// Shared state for the authentication middleware
 pub struct AuthMiddlewareState {
-    /// Gestionnaire de clés API
+    /// Gestionnaire de keys API
     pub key_manager: Arc<RwLock<ApiKeyManager>>,
-    /// Rate limiting par clé API: (key_id, bucket)
+    /// Rate limiting par key API: (key_id, bucket)
     pub rate_buckets: Arc<RwLock<HashMap<String, RateBucket>>>,
-    /// Configuration du rate limiting
+    /// Rate limiting configuration
     pub rate_config: RateLimitConfig,
 }
 
 impl AuthMiddlewareState {
-    /// Crée un nouvel état d'authentification
+    /// Creates a new state d'authentification
     pub fn new(key_manager: ApiKeyManager, rate_config: RateLimitConfig) -> Self {
         Self {
             key_manager: Arc::new(RwLock::new(key_manager)),
@@ -105,37 +105,37 @@ impl AuthMiddlewareState {
         }
     }
 
-    /// Crée un état avec des clés par défaut (pour les tests)
+    /// Creates a state with default keys (for testing)
     pub fn with_default_keys() -> Self {
         let mut manager = ApiKeyManager::new();
         
-        // Clé read-only par défaut
+        // Key read-only by default
         let _ = manager.create_key("default-read", vec![Permission::Read]);
         
-        // Clé write par défaut (à changer en production)
+        // Default write key (change in production)
         let _ = manager.create_key("default-write", vec![Permission::Read, Permission::Write]);
         
-        // Clé admin par défaut (à changer absolument en production)
+        // Default admin key (must change in production)
         let _ = manager.create_key("default-admin", vec![Permission::Read, Permission::Write, Permission::Admin]);
 
         Self::new(manager, RateLimitConfig::default())
     }
 }
 
-/// Configuration du rate limiting
+/// Rate limiting configuration
 #[derive(Debug, Clone, Copy)]
 pub struct RateLimitConfig {
-    /// Requêtes par seconde pour les clés anonymes
+    /// Requests per second for anonymous keys
     pub anon_rps: u64,
-    /// Burst pour les clés anonymes
+    /// Burst for anonymous keys
     pub anon_burst: u32,
-    /// Requêtes par seconde pour les clés authentifiées
+    /// Requests per second for authenticated keys
     pub auth_rps: u64,
-    /// Burst pour les clés authentifiées
+    /// Burst for authenticated keys
     pub auth_burst: u32,
-    /// Requêtes par seconde pour les admins
+    /// Requests per second for admins
     pub admin_rps: u64,
-    /// Burst pour les admins
+    /// Burst for admins
     pub admin_burst: u32,
 }
 
@@ -152,7 +152,7 @@ impl Default for RateLimitConfig {
     }
 }
 
-/// Bucket de rate limiting pour une clé
+/// Rate limiting bucket for a key
 #[derive(Debug)]
 struct RateBucket {
     tokens: f64,
@@ -188,14 +188,14 @@ impl RateBucket {
     }
 }
 
-/// Réponse d'erreur d'authentification
+/// Response d'error d'authentification
 #[derive(Serialize)]
 struct AuthErrorResponse {
     error: String,
     code: u16,
 }
 
-/// Erreurs d'authentification
+/// Authentication errors
 #[derive(Debug)]
 pub enum AuthError {
     MissingApiKey,
@@ -228,16 +228,16 @@ impl IntoResponse for AuthError {
     }
 }
 
-/// Extrait la clé API de la requête (header ou query param)
+/// Extracts the API key from the request (header or query param)
 fn extract_api_key(req: &Request) -> Option<String> {
-    // 1. Essayer le header X-API-Key
+    // 1. Try the X-API-Key header
     if let Some(header) = req.headers().get("X-API-Key") {
         if let Ok(key) = header.to_str() {
             return Some(key.to_string());
         }
     }
 
-    // 2. Essayer le header Authorization: Bearer <key>
+    // 2. Try the Authorization: Bearer <key> header
     if let Some(header) = req.headers().get(header::AUTHORIZATION) {
         if let Ok(auth) = header.to_str() {
             if auth.starts_with("Bearer ") {
@@ -255,10 +255,10 @@ pub async fn auth_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
-    // Extraire la clé API
+    // Extract the API key
     let api_key_str = extract_api_key(&req);
 
-    // Construire le contexte d'authentification
+    // Build the authentication context
     let auth_context = if let Some(key_str) = api_key_str {
         let manager = state.key_manager.read().await;
         
@@ -273,11 +273,11 @@ pub async fn auth_middleware(
             }
         }
     } else {
-        // Pas de clé API = accès anonyme
+        // Pas de key API = access anonyme
         AuthContext::anonymous()
     };
 
-    // Vérifier le rate limiting
+    // Check rate limiting
     let rate_limit_key = auth_context
         .api_key
         .as_ref()
@@ -304,14 +304,14 @@ pub async fn auth_middleware(
         }
     }
 
-    // Ajouter le contexte d'authentification aux extensions de la requête
+    // Add authentication context to request extensions
     let mut req = req;
     req.extensions_mut().insert(auth_context);
 
     Ok(next.run(req).await)
 }
 
-/// Middleware qui requiert une permission spécifique
+/// Middleware that requires a specific permission
 pub async fn require_permission(
     req: Request,
     next: Next,
@@ -330,7 +330,7 @@ pub async fn require_permission(
     Ok(next.run(req).await)
 }
 
-/// Middleware qui requiert l'authentification
+/// Middleware that requires authentication
 pub async fn require_auth(
     req: Request,
     next: Next,
@@ -348,7 +348,7 @@ pub async fn require_auth(
     Ok(next.run(req).await)
 }
 
-/// Middleware qui requiert les droits admin
+/// Middleware that requires admin rights
 pub async fn require_admin(
     req: Request,
     next: Next,
@@ -366,7 +366,7 @@ pub async fn require_admin(
     Ok(next.run(req).await)
 }
 
-/// Extension trait pour extraire le contexte d'authentification
+/// Extension trait for extracting the authentication context
 pub trait AuthExt {
     fn auth_context(&self) -> AuthContext;
 }

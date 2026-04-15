@@ -1,16 +1,16 @@
-//! Opérations cryptographiques sécurisées contre les side-channels
+//! Operations cryptographiques secure contre the side-channels
 //! 
-//! Ce module implémente:
+//! This module implements:
 //! - Comparaison constant-time
-//! - Masquage de mémoire
-//! - Génération sécurisée de nonces
+//! - Masquage de memory
+//! - Generation secure de nonces
 
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use rand::{RngCore, CryptoRng, Error as RandError};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Erreurs cryptographiques
+/// Cryptographic errors
 #[derive(Debug, Clone, PartialEq)]
 pub enum CryptoError {
     InvalidInput(&'static str),
@@ -19,7 +19,7 @@ pub enum CryptoError {
     nonceReuseDetected,
 }
 
-/// Clé symétrique sécurisée (effacée automatiquement)
+/// Key symetric secure (erased automatically)
 #[derive(Clone)]
 pub struct SecretKey {
     bytes: Box<[u8]>,
@@ -31,8 +31,8 @@ impl SecretKey {
             return Err(CryptoError::InvalidInput("Invalid key size"));
         }
         let mut bytes = vec![0u8; size].into_boxed_slice();
-        // Note: Dans une vraie implémentation, remplir avec RNG ici
-        // Pour les tests, on laisse à 0 mais on documente
+        // Note: In a real implementation, fill with RNG here
+        // For tests, we leave at 0 but document it
         Ok(Self { bytes })
     }
     
@@ -45,7 +45,7 @@ impl SecretKey {
         Ok(Self { bytes })
     }
     
-    /// Comparaison constant-time - CRITIQUE pour prévenir les timing attacks
+    /// Comparison constant-time - CRITIQUE for prevent the timing attacks
     pub fn ct_eq(&self, other: &Self) -> bool {
         if self.bytes.len() != other.bytes.len() {
             return false;
@@ -53,9 +53,9 @@ impl SecretKey {
         self.bytes.as_ref().ct_eq(other.bytes.as_ref()).into()
     }
     
-    /// XOR constant-time avec masque (protection contre cache attacks)
+    /// XOR constant-time with masque (protection contre cache attacks)
     pub fn xor_mask(&mut self, mask: &[u8]) -> Result<(), CryptoError> {
         if mask.len() != self.bytes.len() {
             return Err(CryptoError::InvalidInput("Mask size mismatch"));
         }
-        // Accès séquentiel uniquement - pas d'indexation par valeur
+        // Sequential access only - no value indexing

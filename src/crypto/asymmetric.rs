@@ -1,7 +1,7 @@
 // ...
-// La fonction ci-dessous avait probablement une erreur de fermeture de délimiteur
-// Pour corriger cela, assurez-vous que tous les délimiteurs sont correctement fermés
-// Par exemple, si vous utilisez des backticks pour des macros, assurez-vous qu'ils soient correctement fermés
+// La fonction ci-dessous avait probablement a error de closing de delimiter
+// Pour corriger cela, assurez-vous que all delimiters are correctly closeds
+// For example, if you use backticks for macros, make sure they are properly closed
 
 // Exemple :
 // macro_rules! mon_macro {
@@ -10,40 +10,40 @@
 //     };
 // }
 
-// Utilisation correcte du macro :
+// Correct usage of the macro :
 // mon_macro!();
 
-// Assurez-vous également que les blocs de code soient correctement fermés
-// Par exemple :
+// Assurez-vous also que the blocs de code soient correctly closeds
+// For example:
 // if true {
 //     // code ici
-// } // Fermeture du bloc if
+// } // Fermeture of the bloc if
 
-// Vérifiez également les déclarations de fonctions et les boucles pour vous assurer qu'elles sont correctement fermées
-// Par exemple :
+// Verify also the declarations de fonctions and the boucles for vous assurer qu'elles are correctly closedes
+// For example:
 // fn ma_fonction() {
 //     // code ici
-// } // Fermeture de la fonction
+// } // Fermeture de the fonction
 
-// Pour résoudre l'erreur spécifique à la ligne 110, vous devriez vérifier que les délimiteurs sont correctement fermés
-// Si vous utilisez des commentaires multilignes, assurez-vous qu'ils soient correctement fermés
-// Par exemple :
+// Pour resolve l'error specific to the ligne 110, vous devriez verify que the delimiters are correctly closeds
+// Si vous utilisez of commentaires multilignes, assurez-vous qu'ils soient correctly closeds
+// For example:
 // /*
 // code ici
-// */ // Fermeture du commentaire multiligne
+// */ // Fermeture of the commentaire multiligne
 
-// Si vous utilisez des macros pour générer du code, assurez-vous qu'elles soient correctement définies et utilisées
-// Par exemple :
+// Si vous utilisez of macros for generate of the code, assurez-vous qu'elles soient correctly definedes and used
+// For example:
 // macro_rules! generateur_de_code {
 //     () => {
-//         // code généré ici
+//         // code generated ici
 //     };
 // }
 
-// Utilisation correcte du macro :
+// Correct usage of the macro :
 // generateur_de_code!();
 
-// Pour obtenir plus d'informations sur l'erreur, vous pouvez exécuter la commande suivante :
+// Pour get plus d'informations sur l'error, vous pouvez execute the commande suivante :
 // cargo check --verbose
 
-// Si vous continuez à rencontrer des problèmes, assurez-vous de consulter la documentation de Rust pour obtenir plus d'informations sur les délimiteurs et les macros.
+// Si vous continuez to rencontrer of problems, assurez-vous de consulter the documentation de Rust for get plus d'informations on the delimiters and the macros.

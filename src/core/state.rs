@@ -752,7 +752,7 @@ impl ShieldedState {
                 migration_hash: None,
             }
         } else {
-            // V1+V2 mode: calculer le migration_hash pour vérification ultérieure
+            // V1+V2 mode: calculate migration_hash for subsequent verification
             let v1_root = self.commitment_tree.root();
             let v2_root = self.commitment_tree_pq.root();
             let height = self.commitment_tree_pq.size();
@@ -768,7 +768,7 @@ impl ShieldedState {
     }
 
     /// Restore full state from a snapshot (V1 + V2 trees + nullifiers).
-    /// Vérifie le migration_hash si disponible dans le snapshot.
+    /// Verifies migration_hash if available in the snapshot.
     pub fn restore_pq_from_snapshot(&mut self, snapshot: StateSnapshotPQ) {
         self.commitment_tree_pq = CommitmentTreePQ::from_snapshot(snapshot.tree_snapshot);
         self.nullifier_set = snapshot.nullifiers.into_iter().map(Nullifier).collect();
@@ -779,7 +779,7 @@ impl ShieldedState {
             self.commitment_tree = v1_tree;
             self.skip_v1_tree = false; // V1 tree present — consensus requires it
 
-            // Vérifier le migration_hash si présent dans le checkpoint
+            // Verify migration_hash if present in the checkpoint
             if snapshot.migration_hash.is_some() {
                 let v1_root = self.commitment_tree.root();
                 let v2_root = self.commitment_tree_pq.root();
@@ -788,12 +788,12 @@ impl ShieldedState {
                 if let Some(expected) = &snapshot.migration_hash {
                     if &check != expected {
                         tracing::error!(
-                            "Migration hash invalide lors de la restauration! attendu={}, calculé={}",
+                            "Migration hash invalid lors de la restauration! attendu={}, calculationated={}",
                             hex::encode(expected),
                             hex::encode(check)
                         );
                     } else {
-                        tracing::info!("Migration hash vérifié avec succès");
+                        tracing::info!("Migration hash verified successfully");
                     }
                 }
             }
@@ -805,10 +805,10 @@ impl ShieldedState {
             tracing::warn!("V2-only snapshot: V1 tree absent, skipping V1 validation (node cannot mine reliably)");
             self.skip_v1_tree = true;
 
-            // Pour un snapshot V2-only, vérifier le migration_hash contre le checkpoint si disponible
+            // For a V2-only snapshot, verify migration_hash against the checkpoint if available
             if let Some(ref expected) = snapshot.migration_hash {
                 tracing::warn!(
-                    "Snapshot V2-only avec migration_hash présent ({}), vérification différée au prochain checkpoint V1+V2",
+                    "Snapshot V2-only avec migration_hash present ({}), verification deferred au prochain checkpoint V1+V2",
                     hex::encode(expected)
                 );
             }
@@ -834,14 +834,14 @@ pub struct StateSnapshotPQ {
     #[serde(default)]
     pub v1_tree: Option<CommitmentTree>,
     /// Hash de migration: SHA-256(v1_root || v2_root || height).
-    /// Permet de vérifier l'intégrité lors de la restauration.
+    /// Allows verifying integrity during restoration.
     #[serde(default)]
     pub migration_hash: Option<[u8; 32]>,
 }
 
 impl StateSnapshotPQ {
-    /// Calcule le hash de migration: SHA-256(v1_root || v2_root || height).
-    /// Utilisé pour vérifier l'intégrité entre les arbres V1 et V2 lors d'un checkpoint.
+    /// Calculates the migration hash: SHA-256(v1_root || v2_root || height).
+    /// Used to verify integrity between V1 and V2 trees during a checkpoint.
     pub fn compute_migration_hash(v1_root: &[u8; 32], v2_root: &[u8; 32], height: u64) -> [u8; 32] {
         use sha2::{Sha256, Digest};
         let mut hasher = Sha256::new();
@@ -854,14 +854,14 @@ impl StateSnapshotPQ {
         hash
     }
 
-    /// Vérifie le migration_hash si présent.
-    /// Retourne Ok(()) si le hash est absent ou valide, Err sinon.
+    /// Verifies migration_hash if present.
+    /// Returns Ok(()) if the hash is absent or valid, Err otherwise.
     pub fn verify_migration_hash(&self, v1_root: &[u8; 32], v2_root: &[u8; 32], height: u64) -> Result<(), String> {
         if let Some(expected) = &self.migration_hash {
             let computed = Self::compute_migration_hash(v1_root, v2_root, height);
             if &computed != expected {
                 return Err(format!(
-                    "Migration hash invalide: attendu {}, calculé {}",
+                    "Migration hash invalid: attendu {}, calculationated {}",
                     hex::encode(expected),
                     hex::encode(computed)
                 ));

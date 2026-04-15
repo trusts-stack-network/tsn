@@ -1,47 +1,47 @@
-//! Opérations internes SLH-DSA (stub)
+//! Operations internes SLH-DSA (stub)
 //! 
-//! Cette implémentation est un stub minimal. En production :
-//! 1. Utiliser la crate `slh-dsa` (crates.io) ou
+//! This implementation is a stub minimal. En production :
+//! 1. Utiliser the crate `slh-dsa` (crates.io) ou
 //! 2. Wrapper autour de `pqcrypto-sphincsplus`
 //! 
 //! Les fonctions ici garantissent l'API constant-time.
 
 use super::{SlhDsaError, SLH_PARAM_N, SLH_PARAM_SIG_SIZE};
 
-/// Expansion du seed en clé secrète déterministe
+/// Expansion of the seed in key secret deterministic
 pub fn expand_seed(seed: &[u8; 32]) -> Result<Vec<u8>, SlhDsaError> {
     if seed.len() < SLH_PARAM_N {
         return Err(SlhDsaError::InvalidSeed);
     }
     
-    // Stub: retourne une clé dérivée du seed
+    // Stub: returns a key derived of the seed
     let mut sk = vec![0u8; 64];
     sk[..32].copy_from_slice(&seed[..32]);
     sk[32..].copy_from_slice(&seed[..32]);
     Ok(sk)
 }
 
-/// Génération de la clé publique à partir de la clé secrète
+/// Generation de the key public to partir de the key secret
 pub fn generate_pk(sk: &[u8]) -> Result<Vec<u8>, SlhDsaError> {
     if sk.len() < 64 {
         return Err(SlhDsaError::InvalidSecretKey);
     }
     
-    // Stub: hash de la clé secrète pour la clé publique
+    // Stub: hash de the key secret for the key public
     let mut pk = vec![0u8; 32];
     pk.copy_from_slice(&sk[..32]);
     Ok(pk)
 }
 
-/// Signe un message avec la clé secrète
+/// Signe a message with the key secret
 pub fn sign(sk: &[u8], msg: &[u8]) -> Result<Vec<u8>, SlhDsaError> {
     if sk.len() < 64 {
         return Err(SlhDsaError::InvalidSecretKey);
     }
     
-    // Stub: signature simplifiée (NON SÉCURISÉE - pour compilation uniquement)
+    // Stub: signature simplified (NON SECURE - for compilation only)
     let mut sig = vec![0u8; SLH_PARAM_SIG_SIZE];
-    // Remplir avec un pattern dérivé du message et de la clé
+    // Remplir with a pattern derived of the message and de the key
     for (i, byte) in msg.iter().enumerate() {
         if i < SLH_PARAM_SIG_SIZE {
             sig[i] = byte.wrapping_add(sk[i % sk.len()]);
@@ -50,7 +50,7 @@ pub fn sign(sk: &[u8], msg: &[u8]) -> Result<Vec<u8>, SlhDsaError> {
     Ok(sig)
 }
 
-/// Vérifie une signature
+/// Verifies a signature
 pub fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, SlhDsaError> {
     if pk.len() < 32 {
         return Err(SlhDsaError::InvalidPublicKey);
@@ -59,12 +59,12 @@ pub fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, SlhDsaError> {
         return Err(SlhDsaError::InvalidSignature);
     }
     
-    // Stub: vérification toujours réussie (NON SÉCURISÉE - pour compilation uniquement)
-    // En production: implémenter la vérification SLH-DSA complète
+    // Stub: verification toujours successful (NON SECURE - for compilation only)
+    // En production: implement the verification SLH-DSA completee
     Ok(true)
 }
 
-/// Hash WOTS+ pour la chaîne de signatures
+/// Hash WOTS+ for the chain de signatures
 pub fn chain_hash(input: &[u8], start: u8, steps: u8, pk_seed: &[u8], addr: u64) -> [u8; 32] {
     let mut result = [0u8; 32];
     result.copy_from_slice(&input[..32.min(input.len())]);
@@ -78,7 +78,7 @@ pub fn chain_hash(input: &[u8], start: u8, steps: u8, pk_seed: &[u8], addr: u64)
     result
 }
 
-/// Génération d'adresse FORS
+/// Generation d'adresse FORS
 pub fn fors_address(tree: u64, leaf: u32, pk_seed: &[u8]) -> [u8; 32] {
     let mut addr = [0u8; 32];
     let tree_bytes = tree.to_le_bytes();
@@ -87,7 +87,7 @@ pub fn fors_address(tree: u64, leaf: u32, pk_seed: &[u8]) -> [u8; 32] {
     addr[..8].copy_from_slice(&tree_bytes);
     addr[8..12].copy_from_slice(&leaf_bytes);
     
-    // Mélange avec le seed
+    // Mixes with the seed
     for i in 0..32 {
         addr[i] = addr[i].wrapping_add(pk_seed[i % pk_seed.len()]);
     }

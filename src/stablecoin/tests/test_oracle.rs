@@ -64,7 +64,7 @@ fn test_submit_price_multiple_oracles() {
 fn test_submit_price_stale() {
     let mut mgr = testnet_oracle();
     let price = oracle_price(1, 95_000_000, 1_500_000, 100);
-    // Prix soumis à t=100, vérifié à t=100+3601 > max_age 3600
+    // Prix soumis to t=100, verified to t=100+3601 > max_age 3600
     assert!(matches!(
         mgr.submit_price(price, 3702),
         Err(StablecoinError::OraclePriceStale { .. })
@@ -81,7 +81,7 @@ fn test_submit_price_zero_values() {
     ));
 }
 
-// === Tests Agrégation ===
+// === Tests Aggregation ===
 
 #[test]
 fn test_aggregate_single_oracle_testnet() {
@@ -99,7 +99,7 @@ fn test_aggregate_single_oracle_testnet() {
 #[test]
 fn test_aggregate_quorum_not_met() {
     let mut mgr = multi_oracle();
-    // Seulement 2 oracles soumis, quorum = 3
+    // Only 2 oracles submitted, quorum = 3
     let p1 = oracle_price(0, 95_000_000, 1_500_000, 1000);
     let p2 = oracle_price(1, 95_000_000, 1_500_000, 1000);
     mgr.submit_price(p1, 1000).unwrap();
@@ -114,7 +114,7 @@ fn test_aggregate_quorum_not_met() {
 #[test]
 fn test_aggregate_median_3_oracles() {
     let mut mgr = multi_oracle();
-    // Trois prix différents
+    // Trois prix different
     let p1 = oracle_price(0, 94_000_000, 1_500_000, 1000); // 62_666_666
     let p2 = oracle_price(1, 95_000_000, 1_500_000, 1000); // 63_333_333
     let p3 = oracle_price(2, 96_000_000, 1_500_000, 1000); // 64_000_000
@@ -123,7 +123,7 @@ fn test_aggregate_median_3_oracles() {
     mgr.submit_price(p3, 1000).unwrap();
 
     let agg = mgr.aggregate_prices(1000).unwrap();
-    // Médiane = 63_333_333
+    // Median = 63_333_333
     assert_eq!(agg.tsn_per_xau, 63_333_333);
     assert_eq!(agg.oracle_count, 3);
     assert_eq!(agg.confidence, PriceConfidence::Medium);
@@ -142,7 +142,7 @@ fn test_aggregate_median_4_oracles() {
     mgr.submit_price(p4, 1000).unwrap();
 
     let agg = mgr.aggregate_prices(1000).unwrap();
-    // Médiane de 4 = (63_333_333 + 64_000_000) / 2 = 63_666_666
+    // Median de 4 = (63_333_333 + 64_000_000) / 2 = 63_666_666
     assert_eq!(agg.oracle_count, 4);
     assert_eq!(agg.confidence, PriceConfidence::High);
 }
@@ -150,10 +150,10 @@ fn test_aggregate_median_4_oracles() {
 #[test]
 fn test_aggregate_deviation_too_high() {
     let mut mgr = multi_oracle();
-    // Un oracle donne un prix très différent (>10% déviation)
+    // Un oracle donne a prix very different (>10% deviation)
     let p1 = oracle_price(0, 95_000_000, 1_500_000, 1000);  // 63.33
     let p2 = oracle_price(1, 95_000_000, 1_500_000, 1000);  // 63.33
-    let p3 = oracle_price(2, 130_000_000, 1_500_000, 1000); // 86.67 (37% de dév)
+    let p3 = oracle_price(2, 130_000_000, 1_500_000, 1000); // 86.67 (37% deviation)
     mgr.submit_price(p1, 1000).unwrap();
     mgr.submit_price(p2, 1000).unwrap();
     mgr.submit_price(p3, 1000).unwrap();
@@ -170,9 +170,9 @@ fn test_aggregate_deviation_too_high() {
 fn test_twap_basic() {
     let mut mgr = testnet_oracle();
 
-    // Soumettre plusieurs prix à des moments différents
+    // Soumettre multiple prix to of moments different
     for i in 0..5 {
-        let xau = 95_000_000 + i * 500_000; // Légère variation
+        let xau = 95_000_000 + i * 500_000; // Light variation
         let price = oracle_price(1, xau, 1_500_000, 1000 + i * 60);
         mgr.submit_price(price, 1000 + i * 60).unwrap();
         mgr.aggregate_prices(1000 + i * 60).unwrap();
@@ -181,7 +181,7 @@ fn test_twap_basic() {
     let twap = mgr.calculate_twap();
     assert!(twap.is_some());
     let twap_val = twap.unwrap();
-    // Le TWAP devrait être entre le min et le max des prix
+    // Le TWAP should be between the min and the max of prix
     assert!(twap_val > 63_000_000);
     assert!(twap_val < 65_000_000);
 }
@@ -271,7 +271,7 @@ fn test_unauthorized_oracle_rejected() {
     let authorized_id = [1u8; 32];
     mgr.register_oracle(authorized_id);
 
-    // Soumission par un oracle non autorisé
+    // Soumission par a oracle non authorized
     let price = oracle_price(42, 95_000_000, 1_500_000, 1000);
     assert!(matches!(
         mgr.submit_price(price, 1000),
@@ -294,7 +294,7 @@ fn test_oracle_circuit_breaker() {
     mgr.submit_price(p3, 1000).unwrap();
     mgr.aggregate_prices(1000).unwrap();
 
-    // Deuxième prix: variation de 30% (> 25% circuit breaker)
+    // Second prix: variation de 30% (> 25% circuit breaker)
     let p1 = oracle_price(0, 130_000_000, 1_500_000, 1100);
     let p2 = oracle_price(1, 130_000_000, 1_500_000, 1100);
     let p3 = oracle_price(2, 130_000_000, 1_500_000, 1100);

@@ -1,12 +1,12 @@
-//! Benchmarks pour les circuits ZK de TSN
+//! Benchmarks for the circuits ZK de TSN
 //! 
-//! Ce module fournit des benchmarks comparatifs entre:
-//! - Plonky2 STARKs (système ZK principal de TSN, post-quantique)
-//! - Legacy Groth16 (via arkworks, pour référence)
+//! This module provides benchmarks comparatifs entre:
+//! - Plonky2 STARKs (system ZK principal de TSN, post-quantique)
+//! - Legacy Groth16 (via arkworks, for reference)
 //! 
-//! Contexte de sécurité:
-//! - Tous les benchmarks utilisent des paramètres 128-bit security
-//! - Les benchmarks sont conçus pour être reproductibles
+//! Contexte de security:
+//! - Tous the benchmarks utilisent of parameters 128-bit security
+//! - Les benchmarks are designed for be reproductibles
 //! 
 //! Usage:
 //! ```bash
@@ -19,23 +19,23 @@ pub mod plonky2_bench;
 pub mod memory_bench;
 pub mod halo2_plonky2_comparison;
 
-// Re-exports pour utilisation externe
+// Re-exports for utilisation externe
 pub use halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner, run_all_benchmarks};
 pub use plonky2_bench::run_plonky2_benchmarks;
 pub use memory_bench::run_memory_benchmarks;
 pub use halo2_plonky2_comparison::run_comparison;
 
-/// Exécute la suite complète de benchmarks
+/// Executes the suite completee de benchmarks
 /// 
-/// Cette fonction est le point d'entrée principal pour tous les benchmarks ZK.
+/// This fonction is the point d'entry principal for all benchmarks ZK.
 /// Elle mesure:
-/// - Temps de génération de preuve
-/// - Temps de vérification
-/// - Consommation mémoire
-/// - Scaling avec la taille du circuit
+/// - Temps de generation de preuve
+/// - Temps de verification
+/// - Consommation memory
+/// - Scaling with the size of the circuit
 /// 
 /// # Returns
-/// Une liste de tous les résultats de benchmarks
+/// Une liste de all results de benchmarks
 /// 
 /// # Example
 /// ```
@@ -57,7 +57,7 @@ pub fn run_full_benchmark_suite() -> Vec<BenchmarkResult> {
     // Benchmarks Plonky2
     all_results.extend(run_plonky2_benchmarks());
     
-    // Benchmarks mémoire
+    // Benchmarks memory
     all_results.extend(run_memory_benchmarks());
     
     // Comparaison
@@ -75,7 +75,7 @@ mod tests {
     
     #[test]
     fn test_full_suite() {
-        // Test que la suite complète s'exécute sans paniquer
+        // Test que the suite completee runs without paniquer
         let results = run_full_benchmark_suite();
         assert!(!results.is_empty());
     }

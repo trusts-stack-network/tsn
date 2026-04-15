@@ -466,6 +466,68 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_roundtrip_root() {
+        // Build a tree with 10 leaves
+        let mut tree = CommitmentTreePQ::new();
+        for i in 0..10u8 {
+            let mut bytes = [0u8; 32];
+            bytes[0] = i;
+            tree.append(&NoteCommitmentPQ::from_bytes(bytes));
+        }
+        let root_before = tree.root();
+        let size_before = tree.size();
+
+        // Snapshot and restore
+        let snapshot = tree.snapshot();
+        let restored = CommitmentTreePQ::from_snapshot(snapshot);
+
+        // Root and size must match exactly
+        assert_eq!(restored.size(), size_before, "Size mismatch after snapshot restore");
+        assert_eq!(restored.root(), root_before, "Root mismatch after snapshot restore");
+
+        // Now append MORE leaves to both trees and verify they stay in sync
+        let mut tree2 = restored;
+        for i in 10..20u8 {
+            let mut bytes = [0u8; 32];
+            bytes[0] = i;
+            tree.append(&NoteCommitmentPQ::from_bytes(bytes));
+            tree2.append(&NoteCommitmentPQ::from_bytes(bytes));
+        }
+        assert_eq!(tree.size(), tree2.size(), "Size diverged after appending post-restore");
+        assert_eq!(tree.root(), tree2.root(), "Root diverged after appending post-restore");
+    }
+
+    #[test]
+    fn test_snapshot_json_roundtrip_root() {
+        // Build a tree with 10 leaves
+        let mut tree = CommitmentTreePQ::new();
+        for i in 0..10u8 {
+            let mut bytes = [0u8; 32];
+            bytes[0] = i;
+            tree.append(&NoteCommitmentPQ::from_bytes(bytes));
+        }
+        let root_before = tree.root();
+
+        // Snapshot → JSON → deserialize → restore (simulates network transfer)
+        let snapshot = tree.snapshot();
+        let json = serde_json::to_vec(&snapshot).expect("serialize");
+        let deserialized: CommitmentTreeSnapshot = serde_json::from_slice(&json).expect("deserialize");
+        let restored = CommitmentTreePQ::from_snapshot(deserialized);
+
+        assert_eq!(restored.root(), root_before, "Root mismatch after JSON round-trip");
+
+        // Append more and compare
+        let mut tree2 = restored;
+        for i in 10..15u8 {
+            let mut bytes = [0u8; 32];
+            bytes[0] = i;
+            tree.append(&NoteCommitmentPQ::from_bytes(bytes));
+            tree2.append(&NoteCommitmentPQ::from_bytes(bytes));
+        }
+        assert_eq!(tree.root(), tree2.root(), "Root diverged after JSON round-trip + append");
+    }
+
+    #[test]
     fn test_multiple_commitments() {
         let mut tree = CommitmentTreePQ::new();
 

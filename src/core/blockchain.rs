@@ -1,6 +1,6 @@
 //! Shielded blockchain implementation.
 //!
-//! The blockchain manages the chain of shielded blocks, the commitment tree,
+//! The blockchain handles the chain of shielded blocks, the commitment tree,
 //! and the nullifier set. All transaction data is private - only fees and
 //! roots are visible.
 
@@ -28,7 +28,7 @@ use super::transaction::{CoinbaseTransaction, ShieldedTransaction, ShieldedTrans
 /// Use `crate::config::block_reward_at_height(h)` for halving-aware reward.
 pub const BLOCK_REWARD: u64 = 50_000_000_000; // 50 coins with 9 decimal places
 
-/// The shielded blockchain - manages chain, commitment tree, and nullifier set.
+/// The shielded blockchain - handles chain, commitment tree, and nullifier set.
 pub struct ShieldedBlockchain {
     /// Recent blocks LRU cache (max 1000 entries). Older blocks are loaded from DB.
     /// Previously was an unbounded HashMap that grew indefinitely → OOM risk.
@@ -161,7 +161,7 @@ impl ShieldedBlockchain {
             tracing::info!("Loading blockchain from disk (height: {})", height);
 
             let mut blocks = LruCache::new(NonZeroUsize::new(1000).unwrap());
-            let height_index;
+            let mut height_index;
             let mut state = ShieldedState::new();
 
             // Try to load state snapshot for fast startup
@@ -421,6 +421,43 @@ impl ShieldedBlockchain {
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
 
+            // v2.1.5b: Startup sanity check — detect corrupted chain state.
+            // After a broken snapshot restore, cumulative_work may be wildly wrong
+            // (e.g. 151M instead of 870B at height 25000). This causes all incoming
+            // blocks to be rejected as LESS_WORK, creating an infinite sync loop.
+            // Detection: if height > 1000 and cumulative_work < height * GENESIS_DIFFICULTY,
+            // the chain data is corrupted and must be reset.
+            // v2.1.5b: Startup sanity check — detect corrupted chain state.
+            let (final_height, final_work, final_fsb, final_finalized, final_cp_height, final_cp_hash) =
+                if height > 1000 && fast_sync_base > 0 {
+                    let min_expected_work = (height as u128) * (crate::config::GENESIS_DIFFICULTY as u128);
+                    if cumulative_work < min_expected_work {
+                        tracing::error!(
+                            "STARTUP_SANITY: cumulative_work={} far below minimum {} for height {}. \
+                             Chain data is corrupted (broken snapshot). Auto-resetting.",
+                            cumulative_work, min_expected_work, height
+                        );
+                        // Clear all stale data
+                        let _ = db.clear_blocks();
+                        let _ = db.set_metadata("height", "0");
+                        let _ = db.set_metadata("cumulative_work", "0");
+                        let _ = db.set_metadata("fast_sync_base_height", "0");
+                        let _ = db.clear_state_snapshot();
+                        let _ = db.save_cumulative_work(0, 0);
+                        // Reset in-memory state
+                        let mut reset_index = Vec::new();
+                        reset_index.push([0u8; 32]);
+                        height_index = reset_index;
+                        state = ShieldedState::new();
+                        tracing::info!("STARTUP_SANITY: Reset to height 0, will fast-sync on next cycle");
+                        (0u64, 0u128, 0u64, 0u64, 0u64, None)
+                    } else {
+                        (height, cumulative_work, fast_sync_base, height.saturating_sub(crate::config::MAX_REORG_DEPTH).max(cp_height), cp_height, cp_hash)
+                    }
+                } else {
+                    (height, cumulative_work, fast_sync_base, height.saturating_sub(crate::config::MAX_REORG_DEPTH).max(cp_height), cp_height, cp_hash)
+                };
+
             Ok(Self {
                 blocks,
                 height_index,
@@ -430,14 +467,14 @@ impl ShieldedBlockchain {
                 orphans: HashMap::new(),
                 verifying_params: None,
                 assume_valid_height,
-                last_checkpoint_height: cp_height,
-                last_checkpoint_hash: cp_hash,
-                cumulative_work,
-                fast_sync_base_height: fast_sync_base,
+                last_checkpoint_height: final_cp_height,
+                last_checkpoint_hash: final_cp_hash,
+                cumulative_work: final_work,
+                fast_sync_base_height: final_fsb,
                 fast_sync_commitment_offset,
                 prev_block_states: std::collections::VecDeque::new(),
-                canonical_height: height,
-                finalized_height: height.saturating_sub(crate::config::MAX_REORG_DEPTH).max(cp_height),
+                canonical_height: final_height,
+                finalized_height: final_finalized,
             })
         } else {
             // Create a fresh chain with a dummy genesis
@@ -569,6 +606,12 @@ impl ShieldedBlockchain {
             let _ = db.set_metadata("cumulative_work", "0");
             let _ = db.set_metadata("fast_sync_base_height", "0");
             let _ = db.clear_state_snapshot();
+            // v2.1.5b: Clear stale blocks from DB to prevent poisoned work calculations.
+            // Without this, old fork blocks remain and calculate_chain_work() uses their
+            // low work values, causing all new blocks to be rejected as LESS_WORK.
+            if let Err(e) = db.clear_blocks() {
+                tracing::error!("RESYNC: failed to clear blocks from DB: {}", e);
+            }
         }
         tracing::info!("RESYNC: Chain reset to height 0, ready for snapshot sync");
     }
@@ -799,15 +842,28 @@ impl ShieldedBlockchain {
             }
         }
 
-        // Slow path: Determine replay start, use fast-sync snapshot if available
+        // Slow path: Determine replay start, use DB snapshot if available
+        // v2.1.3 FIX: Use snap_height (actual snapshot height) not fast_sync_base_height.
+        // The DB snapshot is updated every 10 blocks and can be much newer than fast_sync_base.
+        // Using fast_sync_base caused blocks between fast_sync_base and snap_height to be
+        // applied TWICE, doubling commitment tree entries and corrupting the root.
         let (mut new_state, replay_from) =
             if self.fast_sync_base_height > 0 && target_height >= self.fast_sync_base_height {
                 let snapshot_state = if let Some(ref db) = self.db {
                     match db.load_state_snapshot() {
-                        Ok(Some((snapshot, _snap_height))) => {
-                            let mut s = ShieldedState::new();
-                            s.restore_pq_from_snapshot(snapshot);
-                            Some(s)
+                        Ok(Some((snapshot, snap_height))) => {
+                            if snap_height <= target_height {
+                                let mut s = ShieldedState::new();
+                                s.restore_pq_from_snapshot(snapshot);
+                                Some((s, snap_height))
+                            } else {
+                                // Snapshot is NEWER than rollback target — can't use it
+                                tracing::warn!(
+                                    "Rollback: DB snapshot at height {} > target {}, replaying from genesis",
+                                    snap_height, target_height
+                                );
+                                None
+                            }
                         }
                         _ => None,
                     }
@@ -815,15 +871,16 @@ impl ShieldedBlockchain {
                     None
                 };
 
-                if let Some(state) = snapshot_state {
+                if let Some((state, snap_height)) = snapshot_state {
                     tracing::info!(
-                        "Rollback: using fast-sync snapshot at height {}, replaying {} blocks",
-                        self.fast_sync_base_height,
-                        target_height.saturating_sub(self.fast_sync_base_height)
+                        "Rollback: using DB snapshot at height {}, replaying {} blocks to target {}",
+                        snap_height,
+                        target_height.saturating_sub(snap_height),
+                        target_height
                     );
-                    (state, self.fast_sync_base_height + 1)
+                    (state, snap_height + 1)
                 } else {
-                    tracing::warn!("Rollback: no snapshot in DB, replaying from genesis");
+                    tracing::warn!("Rollback: no usable snapshot, replaying from genesis");
                     (ShieldedState::new(), 0)
                 }
             } else {
@@ -969,6 +1026,11 @@ impl ShieldedBlockchain {
     /// Get the latest block.
     pub fn latest_block(&self) -> ShieldedBlock {
         self.get_block(&self.latest_hash()).expect("latest block must exist")
+    }
+
+    /// Compute the current state root from the accumulated state.
+    pub fn state_root(&self) -> [u8; 32] {
+        self.state.compute_state_root()
     }
 
     /// Get a block by hash. Checks in-memory cache first, falls back to DB.
@@ -1188,13 +1250,11 @@ impl ShieldedBlockchain {
 
         // Verify commitment root matches expected
         let mut temp_state = self.state.snapshot();
-        tracing::debug!(
-            "SYNC_DEBUG: VALIDATE_BLOCK h={} state_v1_skip={} state_v1_count={} state_pq_count={}",
-            block.coinbase.height,
-            temp_state.is_v1_tree_skipped(),
-            temp_state.commitment_count(),
-            temp_state.commitment_tree_pq().size(),
-        );
+        let pre_pq_size = temp_state.commitment_tree_pq().size();
+        let pre_pq_root = hex::encode(&temp_state.commitment_root()[..8]);
+        let pre_v1_skip = temp_state.is_v1_tree_skipped();
+        let pre_commit_count = temp_state.commitment_count();
+
         for tx in &block.transactions {
             temp_state.apply_transaction(tx);
         }
@@ -1203,22 +1263,36 @@ impl ShieldedBlockchain {
         }
         temp_state.apply_coinbase(&block.coinbase);
 
-        // v2.0.9: Commitment root validation — WARN on mismatch but don't reject yet.
-        // After fast-sync/snapshot restore, Merkle trees can diverge between nodes.
-        // We log at WARN level to track how often this happens. Once we confirm
-        // tree determinism is fixed (no mismatches in logs), we'll re-enable hard reject.
-        // TODO: Fix tree determinism after snapshot restore to re-enable hard reject.
+        // Commitment root validation — instrumented for diagnosis.
+        // Soft check: WARN on mismatch, accept block. Will be hardened once
+        // tree determinism is proven stable across all nodes.
         {
             let computed = temp_state.commitment_root();
             let expected = block.header.commitment_root;
             if computed != expected {
+                let post_pq_size = temp_state.commitment_tree_pq().size();
+                let txs_v1 = block.transactions.len();
+                let txs_v2 = block.transactions_v2.len();
+                let coinbase_commitments = if block.coinbase.has_dev_fee() { 2 } else { 1 };
+                let expected_insertions = txs_v1 + txs_v2 + coinbase_commitments;
+                let actual_insertions = post_pq_size - pre_pq_size;
                 tracing::warn!(
-                    "COMMITMENT_ROOT_MISMATCH at height {} — computed={}, expected={}, v1_skip={}, pq_count={}. Block accepted (soft check). Fix tree determinism to harden.",
+                    "COMMITMENT_ROOT_MISMATCH h={} computed={} expected={} \
+                     pre_pq=[size={},root={}] post_pq=[size={}] \
+                     v1_skip={} commit_count={} \
+                     txs_v1={} txs_v2={} coinbase_commits={} \
+                     expected_inserts={} actual_inserts={} \
+                     fast_sync_base={} fast_sync_offset={}",
                     block.coinbase.height,
                     hex::encode(&computed[..8]),
                     hex::encode(&expected[..8]),
-                    temp_state.is_v1_tree_skipped(),
-                    temp_state.commitment_tree_pq().size(),
+                    pre_pq_size, pre_pq_root,
+                    post_pq_size,
+                    pre_v1_skip, pre_commit_count,
+                    txs_v1, txs_v2, coinbase_commitments,
+                    expected_insertions, actual_insertions,
+                    self.fast_sync_base_height,
+                    self.fast_sync_commitment_offset,
                 );
             }
         }
@@ -1571,9 +1645,9 @@ impl ShieldedBlockchain {
         );
 
         if should_reorg {
-            tracing::warn!(
-                "SYNC_DEBUG: ACCEPT REORG block={} height={} fork_work={} local_work={}",
-                block_hash_hex, block_height, fork_work, self.cumulative_work
+            tracing::info!(
+                "Reorg accepted: height={} fork_work={} local_work={}",
+                block_height, fork_work, self.cumulative_work
             );
             self.reorganize_to_block(block)?;
             self.process_orphans()?;
@@ -1749,10 +1823,17 @@ impl ShieldedBlockchain {
             }
         }
 
-        tracing::warn!(
-            "SYNC_DEBUG: PROCESS_ORPHANS_DONE promoted={} remaining_orphans={} height={}",
-            promoted, self.orphans.len(), self.height()
-        );
+        if promoted > 0 {
+            tracing::info!(
+                "Orphan promotion: {} blocks promoted, {} remaining, height={}",
+                promoted, self.orphans.len(), self.height()
+            );
+        } else {
+            tracing::debug!(
+                "PROCESS_ORPHANS: 0 promoted, {} remaining, height={}",
+                self.orphans.len(), self.height()
+            );
+        }
         Ok(())
     }
 
@@ -1821,7 +1902,20 @@ impl ShieldedBlockchain {
                 prev_hash = block.header.prev_hash;
                 fork_blocks.push(block);
             } else {
-                // Can't trace back further — if we're post fast-sync, the reorg is too deep
+                // Can't trace back further — if we're post fast-sync, the reorg is too deep.
+                // v2.1.5b: If fast_sync_base > 0, we're in the blind zone where blocks
+                // don't exist in RAM/DB. Instead of returning an error (which causes an
+                // infinite sync loop), reset the chain for a fresh sync. This handles both
+                // broken snapshot restores AND nodes that mined on a fork after a bad restore.
+                if self.fast_sync_base_height > 0 {
+                    tracing::error!(
+                        "REORG_BLIND_ZONE: can't find block {} in RAM or DB. \
+                         fast_sync_base={}, local_height={}. Resetting for fresh sync.",
+                        hex::encode(prev_hash), self.fast_sync_base_height, self.canonical_height
+                    );
+                    self.reset_for_snapshot_resync();
+                    return Err(BlockchainError::InvalidPrevHash);
+                }
                 tracing::warn!(
                     "Reorg too deep: can't find block {} in RAM or DB (fast_sync_base={})",
                     hex::encode(prev_hash), self.fast_sync_base_height
@@ -1932,6 +2026,7 @@ impl ShieldedBlockchain {
                 self.canonical_height = self.height_index.len() as u64 - 1;
                 self.difficulty = new_difficulty;
                 self.cumulative_work = running_work;
+                self.prev_block_states.clear(); // v2.1.3: invalidate stale fork cache
                 self.persist_reorg()?;
                 self.update_finalization();
                 return Ok(());
@@ -2021,6 +2116,13 @@ impl ShieldedBlockchain {
 
         self.persist_reorg()?;
         self.update_finalization();
+
+        // v2.1.3 FIX: Clear prev_block_states after reorg.
+        // The cached states belong to the OLD fork's chain and are invalid for
+        // the new canonical chain. If a subsequent rollback uses a stale entry,
+        // the commitment tree will be from the wrong fork → COMMITMENT_ROOT_MISMATCH.
+        // New blocks will repopulate the cache via insert_block_internal.
+        self.prev_block_states.clear();
 
         tracing::info!("Reorg complete: new height {} (lru_purged={})", self.height(), lru_before);
         Ok(())
@@ -2154,6 +2256,7 @@ impl ShieldedBlockchain {
 
         // Calculate commitment root after applying transactions
         let mut temp_state = self.state.snapshot();
+        let miner_pre_pq = temp_state.commitment_tree_pq().size();
         for tx in &transactions {
             temp_state.apply_transaction(tx);
         }
@@ -2162,6 +2265,13 @@ impl ShieldedBlockchain {
         }
         temp_state.apply_coinbase(&coinbase);
         let commitment_root = temp_state.commitment_root();
+        let miner_post_pq = temp_state.commitment_tree_pq().size();
+        tracing::debug!(
+            "Block template: h={} pq_tree=[{} -> {}] root={} fast_sync_base={} fast_sync_offset={}",
+            self.height() + 1, miner_pre_pq, miner_post_pq,
+            hex::encode(&commitment_root[..8]),
+            self.fast_sync_base_height, self.fast_sync_commitment_offset,
+        );
 
         // Nullifier root (simplified - just hash the count for now)
         let nullifier_root = {
@@ -2367,7 +2477,13 @@ impl ShieldedBlockchain {
         self.canonical_height = height;
 
         // Update checkpoint and finalization
-        self.last_checkpoint_height = height;
+        // v2.1.3 FIX: Do NOT set last_checkpoint_height to snapshot height.
+        // Snapshot imports are NOT the same as hardcoded checkpoints — they come from
+        // peers and are not permanently trusted. Setting checkpoint = snapshot height
+        // causes update_finalization to set finalized_height = snapshot height, which
+        // blocks ALL reorgs (even depth=1) near the tip → triggers catastrophic wipe.
+        // Only hardcoded checkpoints should advance last_checkpoint_height.
+        // self.last_checkpoint_height = height;  // REMOVED — was the root cause
         self.last_checkpoint_hash = Some(block_hash);
         // Set finalization based on imported height (same logic as open() and update_finalization)
         self.finalized_height = if height > crate::config::MAX_REORG_DEPTH {
@@ -2389,6 +2505,9 @@ impl ShieldedBlockchain {
             let _ = db.set_metadata("latest_hash", &hex::encode(block_hash));
             let _ = db.set_metadata("fast_sync_base_height", &height.to_string());
             let _ = db.set_metadata("fast_sync_commitment_offset", &self.fast_sync_commitment_offset.to_string());
+            // v2.1.4: Write block_hash into block_heights tree so get_height() returns the
+            // correct height after a restore-snapshot CLI import (not just in-memory fast-sync).
+            let _ = db.save_height_entry(height, &block_hash);
             let _ = db.flush();
         }
 

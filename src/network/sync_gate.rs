@@ -11,39 +11,39 @@ const STALE_BLOCK_THRESHOLD: u64 = 3;
 /// Tip announcements expire after this many seconds
 const TIP_EXPIRY_SECS: u64 = 120;
 
-/// Statut de minage retourné par le sync gate.
+/// Statut de minage returned par the sync gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MiningStatus {
-    /// Le noeud est synchronisé, le minage est autorisé.
+    /// Le node is synchronized, the minage is authorized.
     CanMine,
-    /// Le noeud est en retard par rapport au réseau.
+    /// Le node is in retard par rapport at the network.
     BehindNetwork {
         local_height: u64,
         network_tip: u64,
         gap: u64,
     },
-    /// Aucun tip réseau connu (pas de peers).
+    /// No known network tip (no peers).
     NoNetworkTips,
 }
 
 impl MiningStatus {
-    /// Retourne true si le minage est autorisé.
+    /// Returns true if the minage is authorized.
     pub fn is_allowed(&self) -> bool {
         matches!(self, MiningStatus::CanMine | MiningStatus::NoNetworkTips)
     }
 
-    /// Retourne un message lisible décrivant le statut de minage.
+    /// Returns a message lisible describing the statut de minage.
     pub fn mining_status_message(&self) -> String {
         match self {
-            MiningStatus::CanMine => "Minage autorisé: noeud synchronisé avec le réseau".to_string(),
+            MiningStatus::CanMine => "Minage authorized: node synchronized avec le network".to_string(),
             MiningStatus::BehindNetwork { local_height, network_tip, gap } => {
                 format!(
-                    "Minage suspendu: noeud en retard de {} blocs (local: {}, réseau: {})",
+                    "Minage suspendu: node en retard de {} blocs (local: {}, network: {})",
                     gap, local_height, network_tip
                 )
             }
             MiningStatus::NoNetworkTips => {
-                "Minage autorisé: aucun peer connu, fonctionnement en mode solo".to_string()
+                "Minage authorized: no peer connu, fonctionnement en mode solo".to_string()
             }
         }
     }
@@ -93,8 +93,8 @@ impl SyncGate {
             .unwrap_or(0)
     }
 
-    /// Retourne le statut de minage détaillé.
-    /// Logue un WARNING si le noeud est en retard.
+    /// Returns the statut de minage detailed.
+    /// Logue a WARNING if the node is in retard.
     pub fn mining_status(&self, local_height: u64) -> MiningStatus {
         let net_tip = self.network_tip_height();
         if net_tip == 0 {
@@ -105,7 +105,7 @@ impl SyncGate {
         } else {
             let gap = net_tip - local_height;
             warn!(
-                "Minage suspendu: noeud en retard de {} blocs (local: {}, réseau: {})",
+                "Minage suspendu: node en retard de {} blocs (local: {}, network: {})",
                 gap, local_height, net_tip
             );
             MiningStatus::BehindNetwork {
@@ -117,7 +117,7 @@ impl SyncGate {
     }
 
     /// Check if local node is synced enough to mine.
-    /// Rétrocompatible: retourne un bool (true = minage autorisé).
+    /// Backward compatible: returns a bool (true = mining authorized).
     pub fn can_mine(&self, local_height: u64) -> bool {
         self.mining_status(local_height).is_allowed()
     }

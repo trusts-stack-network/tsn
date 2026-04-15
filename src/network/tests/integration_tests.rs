@@ -1,6 +1,6 @@
-//! Tests d'intégration pour le module réseau TSN
+//! Tests d'integration for the module network TSN
 //! 
-//! Tests des interactions entre composants, scénarios réels et workflows complets.
+//! Tests of interactions entre composants, scenarios real and workflows completes.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::{timeout, sleep};
@@ -19,7 +19,7 @@ async fn test_complete_handshake_workflow() {
         .unwrap()
         .as_nanos() as u64;
     
-    // Nœud A initie le handshake
+    // Node A initie the handshake
     let node_a_id = [1u8; 32];
     let node_b_id = [2u8; 32];
     
@@ -38,7 +38,7 @@ async fn test_complete_handshake_workflow() {
     let msg_a = TsnMessage::Handshake(handshake_a.clone());
     let encoded_a = encode_message(&msg_a).expect("Encoding should succeed");
     
-    // Nœud B reçoit et traite le handshake
+    // Node B receives and processes the handshake
     let mut buf_a = BytesMut::from(encoded_a.as_ref());
     let (decoded_a, _) = decode_message(&mut buf_a)
         .expect("Decoding should succeed")
@@ -50,7 +50,7 @@ async fn test_complete_handshake_workflow() {
             assert_eq!(received_handshake.version, ProtocolVersion(1, 0));
             assert_eq!(received_handshake.capabilities.len(), 3);
             
-            // Nœud B répond avec HandshakeAck
+            // Node B responds with HandshakeAck
             let ack_b = TsnMessage::HandshakeAck {
                 accepted: true,
                 timestamp_ns: current_time + 1_000_000, // 1ms plus tard
@@ -59,7 +59,7 @@ async fn test_complete_handshake_workflow() {
             
             let encoded_b = encode_message(&ack_b).expect("Encoding should succeed");
             
-            // Nœud A reçoit l'ACK
+            // Node A receives l'ACK
             let mut buf_b = BytesMut::from(encoded_b.as_ref());
             let (decoded_b, _) = decode_message(&mut buf_b)
                 .expect("Decoding should succeed")
@@ -70,7 +70,7 @@ async fn test_complete_handshake_workflow() {
                     assert!(accepted);
                     assert_eq!(your_node_id, node_a_id);
                     
-                    println!("Handshake workflow complet réussi");
+                    println!("Handshake workflow complete successful");
                 }
                 _ => panic!("Expected HandshakeAck"),
             }
@@ -79,7 +79,7 @@ async fn test_complete_handshake_workflow() {
     }
 }
 
-/// Test: handshake rejeté avec raison
+/// Test: handshake rejected with raison
 #[tokio::test]
 async fn test_handshake_rejection_workflow() {
     let current_time = SystemTime::now()
@@ -87,9 +87,9 @@ async fn test_handshake_rejection_workflow() {
         .unwrap()
         .as_nanos() as u64;
     
-    // Nœud avec version incompatible
+    // Node with version incompatible
     let incompatible_handshake = HandshakeData {
-        version: ProtocolVersion(2, 0), // Version future non supportée
+        version: ProtocolVersion(2, 0), // Version future non supported
         timestamp_ns: current_time,
         capabilities: vec![],
         node_id: [3u8; 32],
@@ -106,7 +106,7 @@ async fn test_handshake_rejection_workflow() {
     
     match decoded {
         TsnMessage::Handshake(handshake) => {
-            // Simule la logique de validation
+            // Simulate the logique de validation
             let is_version_compatible = handshake.version.0 == 1;
             
             let response = TsnMessage::HandshakeAck {
@@ -123,8 +123,8 @@ async fn test_handshake_rejection_workflow() {
             
             match decoded_response {
                 TsnMessage::HandshakeAck { accepted, .. } => {
-                    assert!(!accepted, "Handshake avec version incompatible devrait être rejeté");
-                    println!("Handshake correctement rejeté pour version incompatible");
+                    assert!(!accepted, "Handshake avec version incompatible should be rejected");
+                    println!("Handshake correctly rejected pour version incompatible");
                 }
                 _ => panic!("Expected HandshakeAck"),
             }
@@ -133,7 +133,7 @@ async fn test_handshake_rejection_workflow() {
     }
 }
 
-/// Test: négociation de capabilities
+/// Test: negotiation de capabilities
 #[tokio::test]
 async fn test_capability_negotiation() {
     let current_time = SystemTime::now()
@@ -141,7 +141,7 @@ async fn test_capability_negotiation() {
         .unwrap()
         .as_nanos() as u64;
     
-    // Nœud A avec capabilities étendues
+    // Node A with extended capabilities
     let handshake_a = HandshakeData {
         version: ProtocolVersion(1, 0),
         timestamp_ns: current_time,
@@ -156,7 +156,7 @@ async fn test_capability_negotiation() {
         listen_port: 9333,
     };
     
-    // Nœud B avec capabilities limitées
+    // Node B with capabilities limited
     let handshake_b = HandshakeData {
         version: ProtocolVersion(1, 0),
         timestamp_ns: current_time + 1_000_000,
@@ -168,14 +168,14 @@ async fn test_capability_negotiation() {
         listen_port: 9334,
     };
     
-    // Simule la négociation
+    // Simulate the negotiation
     let common_capabilities = find_common_capabilities(&handshake_a.capabilities, &handshake_b.capabilities);
     
     assert!(common_capabilities.contains(&Capability::Forwarding));
     assert!(!common_capabilities.contains(&Capability::HighBandwidth));
     assert!(!common_capabilities.contains(&Capability::LowLatency));
     
-    // Le MaxPeers devrait être le minimum
+    // Le MaxPeers should be the minimum
     let max_peers_a = handshake_a.capabilities.iter()
         .find_map(|c| if let Capability::MaxPeers(n) = c { Some(*n) } else { None })
         .unwrap_or(0);
@@ -186,10 +186,10 @@ async fn test_capability_negotiation() {
     let negotiated_max_peers = max_peers_a.min(max_peers_b);
     assert_eq!(negotiated_max_peers, 50);
     
-    println!("Négociation de capabilities réussie: {} capabilities communes", common_capabilities.len());
+    println!("Negotiation de capabilities successful: {} capabilities communes", common_capabilities.len());
 }
 
-/// Fonction utilitaire pour trouver les capabilities communes
+/// Fonction utilitaire for trouver the capabilities communes
 fn find_common_capabilities(caps_a: &[Capability], caps_b: &[Capability]) -> Vec<Capability> {
     let mut common = Vec::new();
     
@@ -216,8 +216,8 @@ fn find_common_capabilities(caps_a: &[Capability], caps_b: &[Capability]) -> Vec
                 }
             }
             Capability::MaxPeers(_) => {
-                // MaxPeers est toujours compatible, on prend le minimum
-                // (géré séparément dans le test)
+                // MaxPeers is toujours compatible, on prend the minimum
+                // (managed separately in the test)
             }
         }
     }
@@ -244,11 +244,11 @@ async fn test_handshake_timeout() {
     let msg = TsnMessage::Handshake(handshake);
     let encoded = encode_message(&msg).expect("Encoding should succeed");
     
-    // Simule un timeout de handshake
+    // Simulate a timeout de handshake
     let handshake_timeout = Duration::from_millis(100);
     
     let result = timeout(handshake_timeout, async {
-        // Simule une opération qui prend trop de temps
+        // Simulate a operation that prend trop de temps
         sleep(Duration::from_millis(200)).await;
         
         let mut buf = BytesMut::from(encoded.as_ref());
@@ -256,14 +256,14 @@ async fn test_handshake_timeout() {
     }).await;
     
     match result {
-        Ok(_) => panic!("Handshake devrait avoir timeout"),
+        Ok(_) => panic!("Handshake should avoir timeout"),
         Err(_) => {
-            println!("Timeout de handshake correctement détecté");
+            println!("Timeout de handshake correctly detected");
         }
     }
 }
 
-/// Test: gestion de multiples handshakes simultanés
+/// Test: gestion de multiples handshakes simultaneouss
 #[tokio::test]
 async fn test_concurrent_handshakes() {
     let current_time = SystemTime::now()
@@ -275,7 +275,7 @@ async fn test_concurrent_handshakes() {
     let mut handshake_tasks = Vec::new();
     
     for i in 0..num_peers {
-        let peer_time = current_time + (i as u64 * 1_000_000); // Décalage de 1ms
+        let peer_time = current_time + (i as u64 * 1_000_000); // Offset de 1ms
         
         let task = tokio::spawn(async move {
             let handshake = HandshakeData {
@@ -296,7 +296,7 @@ async fn test_concurrent_handshakes() {
             
             match decoded {
                 TsnMessage::Handshake(data) => {
-                    // Simule la réponse
+                    // Simulate the response
                     let response = TsnMessage::HandshakeAck {
                         accepted: true,
                         timestamp_ns: peer_time + 1_000_000,
@@ -304,7 +304,7 @@ async fn test_concurrent_handshakes() {
                     };
                     
                     let encoded_response = encode_message(&response).expect("Encoding should succeed");
-                    encoded_response.len() // Retourne la taille pour vérification
+                    encoded_response.len() // Return the size for verification
                 }
                 _ => panic!("Expected Handshake message"),
             }
@@ -313,7 +313,7 @@ async fn test_concurrent_handshakes() {
         handshake_tasks.push(task);
     }
     
-    // Attend que tous les handshakes se terminent
+    // Attend que all handshakes se terminent
     let results = futures::future::join_all(handshake_tasks).await;
     
     let mut successful_handshakes = 0;
@@ -330,10 +330,10 @@ async fn test_concurrent_handshakes() {
     }
     
     assert_eq!(successful_handshakes, num_peers);
-    println!("Tous les {} handshakes simultanés ont réussi", num_peers);
+    println!("Tous les {} handshakes simultaneouss ont successful", num_peers);
 }
 
-/// Test: séquence de messages complexe
+/// Test: sequence de messages complexe
 #[tokio::test]
 async fn test_complex_message_sequence() {
     let current_time = SystemTime::now()
@@ -344,7 +344,7 @@ async fn test_complex_message_sequence() {
     let node_a = [7u8; 32];
     let node_b = [8u8; 32];
     
-    // Séquence : A -> Handshake, B -> HandshakeAck, A -> HandshakeAck
+    // Sequence : A -> Handshake, B -> HandshakeAck, A -> HandshakeAck
     let messages = vec![
         TsnMessage::Handshake(HandshakeData {
             version: ProtocolVersion(1, 0),
@@ -371,7 +371,7 @@ async fn test_complex_message_sequence() {
         encoded_messages.push(encoded);
     }
     
-    // Traite la séquence
+    // Process the sequence
     for (i, encoded) in encoded_messages.iter().enumerate() {
         let mut buf = BytesMut::from(encoded.as_ref());
         let (decoded, _) = decode_message(&mut buf)
@@ -381,26 +381,26 @@ async fn test_complex_message_sequence() {
         match (i, &decoded) {
             (0, TsnMessage::Handshake(data)) => {
                 assert_eq!(data.node_id, node_a);
-                println!("Message 1: Handshake de A reçu");
+                println!("Message 1: Handshake de A received");
             }
             (1, TsnMessage::HandshakeAck { your_node_id, accepted, .. }) => {
                 assert_eq!(*your_node_id, node_a);
                 assert!(*accepted);
-                println!("Message 2: HandshakeAck de B reçu");
+                println!("Message 2: HandshakeAck de B received");
             }
             (2, TsnMessage::HandshakeAck { your_node_id, accepted, .. }) => {
                 assert_eq!(*your_node_id, node_b);
                 assert!(*accepted);
-                println!("Message 3: HandshakeAck de A reçu");
+                println!("Message 3: HandshakeAck de A received");
             }
             _ => panic!("Unexpected message type at position {}", i),
         }
     }
     
-    println!("Séquence de messages complexe traitée avec succès");
+    println!("Sequence de messages complexe processede avec success");
 }
 
-/// Test: récupération après erreur de réseau
+/// Test: retrieval after error de network
 #[tokio::test]
 async fn test_network_error_recovery() {
     let current_time = SystemTime::now()
@@ -419,30 +419,30 @@ async fn test_network_error_recovery() {
     let msg = TsnMessage::Handshake(handshake);
     let encoded = encode_message(&msg).expect("Encoding should succeed");
     
-    // Simule une erreur réseau (message corrompu)
+    // Simulate a network error (corrupted message)
     let mut corrupted = encoded.clone();
     if corrupted.len() > 10 {
         corrupted[5] ^= 0xFF; // Corrompt un byte
     }
     
-    // Première tentative avec message corrompu
+    // First attempt with message corrompu
     let mut buf_corrupted = BytesMut::from(corrupted.as_ref());
     let result_corrupted = decode_message(&mut buf_corrupted);
     
     match result_corrupted {
         Ok(None) => {
-            println!("Message corrompu correctement ignoré");
+            println!("Message corrupted correctly ignored");
         }
         Ok(Some(_)) => {
-            // Si le message est décodé malgré la corruption, vérifie l'intégrité
-            println!("Message décodé malgré la corruption (checksum manquant?)");
+            // Si the message is decoded despite the corruption, verifies l'integrity
+            println!("Message decoded despite la corruption (checksum missing?)");
         }
         Err(_) => {
-            println!("Erreur de décodage détectée pour message corrompu");
+            println!("Error de decoding detectede pour message corrupted");
         }
     }
     
-    // Deuxième tentative avec message correct (récupération)
+    // Second attempt with message correct (retrieval)
     let mut buf_correct = BytesMut::from(encoded.as_ref());
     let (decoded, _) = decode_message(&mut buf_correct)
         .expect("Decoding should succeed")
@@ -450,13 +450,13 @@ async fn test_network_error_recovery() {
     
     match decoded {
         TsnMessage::Handshake(_) => {
-            println!("Récupération après erreur réseau réussie");
+            println!("Retrieval after error network successful");
         }
         _ => panic!("Expected Handshake message"),
     }
 }
 
-/// Test: gestion de la congestion réseau
+/// Test: gestion de the congestion network
 #[tokio::test]
 async fn test_network_congestion_handling() {
     let current_time = SystemTime::now()
@@ -464,14 +464,14 @@ async fn test_network_congestion_handling() {
         .unwrap()
         .as_nanos() as u64;
     
-    // Simule une congestion avec beaucoup de messages
+    // Simulate a congestion with beaucoup de messages
     let num_messages = 1000;
     let mut messages = Vec::new();
     
     for i in 0..num_messages {
         let handshake = HandshakeData {
             version: ProtocolVersion(1, 0),
-            timestamp_ns: current_time + (i as u64 * 1_000), // 1µs d'écart
+            timestamp_ns: current_time + (i as u64 * 1_000), // 1µs gap
             capabilities: vec![Capability::Forwarding],
             node_id: [(i % 256) as u8; 32],
             listen_port: 9333,
@@ -481,7 +481,7 @@ async fn test_network_congestion_handling() {
         messages.push(msg);
     }
     
-    // Traite tous les messages avec timeout
+    // Processes all messages with timeout
     let processing_timeout = Duration::from_secs(5);
     
     let result = timeout(processing_timeout, async {
@@ -496,7 +496,7 @@ async fn test_network_congestion_handling() {
             
             processed += 1;
             
-            // Simule un petit délai de traitement
+            // Simulate a petit delay de processing
             if processed % 100 == 0 {
                 tokio::task::yield_now().await;
             }
@@ -508,7 +508,7 @@ async fn test_network_congestion_handling() {
     match result {
         Ok(processed) => {
             assert_eq!(processed, num_messages);
-            println!("Congestion réseau gérée: {} messages traités", processed);
+            println!("Congestion network managed: {} messages processeds", processed);
         }
         Err(_) => {
             panic!("Timeout lors du traitement de la congestion");
@@ -516,7 +516,7 @@ async fn test_network_congestion_handling() {
     }
 }
 
-/// Test: validation de l'ordre des messages
+/// Test: validation de l'ordre of messages
 #[tokio::test]
 async fn test_message_ordering() {
     let base_time = SystemTime::now()
@@ -524,7 +524,7 @@ async fn test_message_ordering() {
         .unwrap()
         .as_nanos() as u64;
     
-    // Crée des messages avec timestamps dans l'ordre
+    // Creates of messages with timestamps in l'ordre
     let ordered_messages = vec![
         (base_time + 1_000_000, [1u8; 32]),
         (base_time + 2_000_000, [2u8; 32]),
@@ -532,7 +532,7 @@ async fn test_message_ordering() {
         (base_time + 4_000_000, [4u8; 32]),
     ];
     
-    // Encode tous les messages
+    // Encode all messages
     let mut encoded_messages = Vec::new();
     for (timestamp, node_id) in &ordered_messages {
         let handshake = HandshakeData {
@@ -548,7 +548,7 @@ async fn test_message_ordering() {
         encoded_messages.push(encoded);
     }
     
-    // Traite les messages et vérifie l'ordre des timestamps
+    // Process the messages and verifies l'ordre of timestamps
     let mut previous_timestamp = 0u64;
     
     for (i, encoded) in encoded_messages.iter().enumerate() {
@@ -567,10 +567,10 @@ async fn test_message_ordering() {
         }
     }
     
-    println!("Ordre des messages validé pour {} messages", ordered_messages.len());
+    println!("Ordre des messages validated pour {} messages", ordered_messages.len());
 }
 
-/// Test: interopérabilité entre versions mineures
+/// Test: interoperability entre versions mineures
 #[tokio::test]
 async fn test_minor_version_interoperability() {
     let current_time = SystemTime::now()
@@ -604,8 +604,8 @@ async fn test_minor_version_interoperability() {
             
             match decoded_a {
                 TsnMessage::Handshake(data) => {
-                    // Simule la logique de compatibilité
-                    let is_compatible = version_a.0 == version_b.0; // Même major version
+                    // Simulate the logique de compatibility
+                    let is_compatible = version_a.0 == version_b.0; // Same major version
                     
                     let response = TsnMessage::HandshakeAck {
                         accepted: is_compatible,
@@ -621,7 +621,7 @@ async fn test_minor_version_interoperability() {
                     
                     match decoded_response {
                         TsnMessage::HandshakeAck { accepted, .. } => {
-                            assert!(accepted, "Versions {}.{} et {}.{} devraient être compatibles", 
+                            assert!(accepted, "Versions {}.{} et {}.{} devraient be compatibles", 
                                    version_a.0, version_a.1, version_b.0, version_b.1);
                         }
                         _ => panic!("Expected HandshakeAck"),
@@ -632,5 +632,5 @@ async fn test_minor_version_interoperability() {
         }
     }
     
-    println!("Interopérabilité entre versions mineures validée");
+    println!("Interoperability entre versions mineures validatede");
 }

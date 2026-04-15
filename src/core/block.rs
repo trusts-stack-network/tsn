@@ -40,7 +40,7 @@ pub struct BlockHeader {
     pub merkle_root: [u8; BLOCK_HASH_SIZE],
 
     /// Commitment tree root after applying this block.
-    /// Allows light clients to verify note existence.
+    /// Allows light clients to verify note existsnce.
     #[serde(with = "hex_array")]
     pub commitment_root: [u8; BLOCK_HASH_SIZE],
 

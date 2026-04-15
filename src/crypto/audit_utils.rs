@@ -1,10 +1,10 @@
-//! Utilitaires d'audit et détection de side channels
-//! À inclure dans le crate crypto existant
+//! Utilitaires d'audit and detection de side channels
+//! To be included in the existing crypto crate
 
 use core::ptr::{read_volatile, write_volatile};
 use subtle::ConstantTimeEq;
 
-/// Compare deux slices en temps constant (mitigation timing attacks)
+/// Compare deux slices in temps constant (mitigation timing attacks)
 pub fn ct_compare(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -12,19 +12,19 @@ pub fn ct_compare(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
-/// Zeroize sécurisé empêchant l'optimisation du compilateur
+/// Zeroize secure preventing l'optimisation of the compilateur
 pub fn secure_zero(buf: &mut [u8]) {
     for i in 0..buf.len() {
         unsafe {
             write_volatile(buf.as_mut_ptr().add(i), 0u8);
         }
     }
-    // Barrière mémoire pour empêcher le reordering
+    // Barrier memory for preventsr the reordering
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 }
 
-/// Détecte potentiellement une fuite via cache side channel
-/// en mesurant le temps d'accès mémoire
+/// Detects potentiellement a fuite via cache side channel
+/// in mesurant the temps d'access memory
 pub fn detect_cache_timing_leak<F, T>(f: F) -> (T, u64)
 where 
     F: FnOnce() -> T,
@@ -36,8 +36,8 @@ where
     (result, elapsed)
 }
 
-/// Vérifie que le temps d'exécution ne dépend pas des données secrètes
-/// Usage: statistical analysis sur plusieurs exécutions
+/// Verifies that the temps d'execution not depends pas of data secret
+/// Usage: statistical analysis sur multiple executions
 pub fn constant_time_check<F, G, T>(
     secret_gen: F,
     operation: G,
@@ -58,14 +58,14 @@ where
     timings
 }
 
-/// Validation canonique pour éviter les attaques par point non-canonique (Curve25519, etc.)
+/// Validation canonical for avoidr the attaques par point non-canonical (Curve25519, etc.)
 pub fn validate_canonical_point(point: &[u8; 32]) -> bool {
-    // Vérification que le point est canonique (pas de représentation alternative)
-    // Pour Curve25519: vérifier que le bit de poids fort est 0
+    // Verification que the point is canonical (pas de representation alternative)
+    // Pour Curve25519: verify que the bit de poids fort is 0
     point[31] & 0x80 == 0
 }
 
-/// Détection d'oracle de padding (PKCS#7)
+/// Detection d'oracle de padding (PKCS#7)
 pub fn padding_oracle_check(ciphertext: &[u8], block_size: usize) -> Result<bool, &'static str> {
     if ciphertext.len() % block_size != 0 {
         return Err("Invalid ciphertext length");
@@ -73,10 +73,10 @@ pub fn padding_oracle_check(ciphertext: &[u8], block_size: usize) -> Result<bool
     
     let last_byte = ciphertext.last().copied().unwrap_or(0) as usize;
     if last_byte == 0 || last_byte > block_size {
-        return Ok(false); // Padding invalide
+        return Ok(false); // Padding invalid
     }
     
-    // Vérification en temps constant recommandée dans l'implémentation réelle
+    // Verification in temps constant recommended in l'implementation real
     let padding_start = ciphertext.len() - last_byte;
     let valid = ciphertext[padding_start..].iter().all(|&b| b == last_byte as u8);
     

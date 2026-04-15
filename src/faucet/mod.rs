@@ -1073,7 +1073,7 @@ impl FaucetService {
         } else if tokens_collected >= 7 {
             format!("Great run! {} tokens collected!", tokens_collected)
         } else {
-            format!("Collected {} tokens!", tokens_collected)
+            format!("Collectiond {} tokens!", tokens_collected)
         };
 
         Ok((

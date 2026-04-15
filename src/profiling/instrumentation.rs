@@ -1,19 +1,19 @@
-//! Instrumentation des opérations critiques pour profiling
+//! Instrumentation of operations critiques for profiling
 //!
-//! Ce module fournit des wrappers pratiques pour profiler :
-//! - Opérations cryptographiques (sign, verify, hash)
-//! - Opérations base de données (read, write, scan)
-//! - Sérialisation/désérialisation
+//! This module provides wrappers pratiques for profiler :
+//! - Cryptographic operations (sign, verify, hash)
+//! - Database operations (read, write, scan)
+//! - Serialization/deserialization
 
 use super::metrics::{CRYPTO_METRICS, DB_METRICS, SERDE_METRICS};
 use super::{OperationCategory, OperationTimer};
 use std::time::Instant;
 
 // ============================================================================
-// Opérations Cryptographiques
+// Operations Cryptographiques
 // ============================================================================
 
-/// Profile une opération de signature ML-DSA-65
+/// Profile a operation de signature ML-DSA-65
 /// 
 /// # Exemple
 /// ```rust,ignore
@@ -33,13 +33,13 @@ where
         operation = "sign",
         context = %context,
         duration_ms = %duration.as_millis(),
-        "Signature crypto profilée"
+        "Signature crypto profiled"
     );
     
     result
 }
 
-/// Profile une opération de vérification de signature
+/// Profile a operation de verification de signature
 pub fn profile_crypto_verify<T, F>(context: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -52,13 +52,13 @@ where
         operation = "verify",
         context = %context,
         duration_ms = %duration.as_millis(),
-        "Vérification crypto profilée"
+        "Verification crypto profiled"
     );
     
     result
 }
 
-/// Profile une opération de vérification batch
+/// Profile a operation de verification batch
 pub fn profile_crypto_batch_verify<T, F>(batch_size: usize, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -71,13 +71,13 @@ where
         operation = "batch_verify",
         batch_size = %batch_size,
         duration_ms = %duration.as_millis(),
-        "Vérification batch profilée"
+        "Verification batch profiled"
     );
     
     result
 }
 
-/// Profile une opération de hachage
+/// Profile a operation de hachage
 pub fn profile_crypto_hash<T, F>(algorithm: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -90,13 +90,13 @@ where
         operation = "hash",
         algorithm = %algorithm,
         duration_ms = %duration.as_millis(),
-        "Hachage profilé"
+        "Hachage profiled"
     );
     
     result
 }
 
-/// Profile une opération de génération de preuve ZK
+/// Profile a operation de generation de preuve ZK
 pub fn profile_zk_proof_generate<T, F>(proof_type: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -109,13 +109,13 @@ where
         operation = "zk_proof_generate",
         proof_type = %proof_type,
         duration_ms = %duration.as_millis(),
-        "Génération de preuve ZK profilée"
+        "Generation de preuve ZK profiled"
     );
     
     result
 }
 
-/// Profile une opération de vérification de preuve ZK
+/// Profile a operation de verification de preuve ZK
 pub fn profile_zk_proof_verify<T, F>(proof_type: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -128,13 +128,13 @@ where
         operation = "zk_proof_verify",
         proof_type = %proof_type,
         duration_ms = %duration.as_millis(),
-        "Vérification de preuve ZK profilée"
+        "Verification de preuve ZK profiled"
     );
     
     result
 }
 
-/// Wrapper générique pour les opérations crypto
+/// Wrapper generic for the operations crypto
 pub fn profile_crypto_op<T, F>(operation: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -144,10 +144,10 @@ where
 }
 
 // ============================================================================
-// Opérations Base de Données
+// Operations Base de Data
 // ============================================================================
 
-/// Profile une opération de lecture DB
+/// Profile a operation de lecture DB
 pub fn profile_db_read<T, F>(table: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -162,13 +162,13 @@ where
         operation = "db_read",
         table = %table,
         duration_ms = %duration.as_millis(),
-        "Lecture DB profilée"
+        "Lecture DB profiled"
     );
     
     result
 }
 
-/// Profile une opération d'écriture DB
+/// Profile a operation d'writing DB
 pub fn profile_db_write<T, F>(table: &str, data_size: usize, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -184,13 +184,13 @@ where
         table = %table,
         data_size = %data_size,
         duration_ms = %duration.as_millis(),
-        "Écriture DB profilée"
+        "Writing DB profiled"
     );
     
     result
 }
 
-/// Profile une opération de scan DB (itération)
+/// Profile a operation de scan DB (iteration)
 pub fn profile_db_scan<T, F>(table: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -203,13 +203,13 @@ where
         operation = "db_scan",
         table = %table,
         duration_ms = %duration.as_millis(),
-        "Scan DB profilé"
+        "Scan DB profiled"
     );
     
     result
 }
 
-/// Profile une opération de suppression DB
+/// Profile a operation de deletion DB
 pub fn profile_db_delete<T, F>(table: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -222,13 +222,13 @@ where
         operation = "db_delete",
         table = %table,
         duration_ms = %duration.as_millis(),
-        "Suppression DB profilée"
+        "Deletion DB profiled"
     );
     
     result
 }
 
-/// Profile une opération batch DB
+/// Profile a operation batch DB
 pub fn profile_db_batch_write<T, F>(table: &str, item_count: usize, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -242,13 +242,13 @@ where
         table = %table,
         item_count = %item_count,
         duration_ms = %duration.as_millis(),
-        "Écriture batch DB profilée"
+        "Writing batch DB profiled"
     );
     
     result
 }
 
-/// Wrapper générique pour les opérations DB
+/// Wrapper generic for the operations DB
 pub fn profile_db_op<T, F>(operation: &str, table: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -258,10 +258,10 @@ where
 }
 
 // ============================================================================
-// Opérations de Sérialisation
+// Operations de Serialization
 // ============================================================================
 
-/// Profile une opération de sérialisation
+/// Profile a operation de serialization
 pub fn profile_serde_serialize<T, F>(type_name: &str, f: F) -> (T, usize)
 where
     F: FnOnce() -> (T, usize),
@@ -277,13 +277,13 @@ where
         type_name = %type_name,
         bytes = %bytes,
         duration_ms = %duration.as_millis(),
-        "Sérialisation profilée"
+        "Serialization profiled"
     );
     
     (result, bytes)
 }
 
-/// Profile une opération de désérialisation
+/// Profile a operation de deserialization
 pub fn profile_serde_deserialize<T, F>(type_name: &str, data_size: usize, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -299,13 +299,13 @@ where
         type_name = %type_name,
         data_size = %data_size,
         duration_ms = %duration.as_millis(),
-        "Désérialisation profilée"
+        "Deserialization profiled"
     );
     
     result
 }
 
-/// Wrapper générique pour les opérations de sérialisation
+/// Wrapper generic for the operations de serialization
 pub fn profile_serde_op<T, F>(operation: &str, type_name: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -318,7 +318,7 @@ where
 // Versions Async
 // ============================================================================
 
-/// Profile une opération crypto async
+/// Profile a operation crypto async
 pub async fn profile_crypto_op_async<T, F>(operation: &str, f: F) -> T
 where
     F: std::future::Future<Output = T>,
@@ -329,7 +329,7 @@ where
     result
 }
 
-/// Profile une opération DB async
+/// Profile a operation DB async
 pub async fn profile_db_op_async<T, F>(operation: &str, table: &str, f: F) -> T
 where
     F: std::future::Future<Output = T>,
@@ -340,7 +340,7 @@ where
     result
 }
 
-/// Profile une opération de sérialisation async
+/// Profile a operation de serialization async
 pub async fn profile_serde_op_async<T, F>(operation: &str, type_name: &str, f: F) -> T
 where
     F: std::future::Future<Output = T>,
@@ -352,10 +352,10 @@ where
 }
 
 // ============================================================================
-// Fonctions utilitaires pour les types spécifiques TSN
+// Fonctions utilitaires for the types specific TSN
 // ============================================================================
 
-/// Profile la sérialisation d'un bloc
+/// Profile the serialization d'un bloc
 pub fn profile_block_serialize<F>(f: F) -> Vec<u8>
 where
     F: FnOnce() -> Vec<u8>,
@@ -368,7 +368,7 @@ where
     result
 }
 
-/// Profile la désérialisation d'un bloc
+/// Profile the deserialization d'un bloc
 pub fn profile_block_deserialize<T, F>(data: &[u8], f: F) -> T
 where
     F: FnOnce() -> T,
@@ -376,7 +376,7 @@ where
     profile_serde_deserialize("ShieldedBlock", data.len(), f)
 }
 
-/// Profile la sérialisation d'une transaction
+/// Profile the serialization d'une transaction
 pub fn profile_tx_serialize<F>(f: F) -> Vec<u8>
 where
     F: FnOnce() -> Vec<u8>,
@@ -389,7 +389,7 @@ where
     result
 }
 
-/// Profile la désérialisation d'une transaction
+/// Profile the deserialization d'une transaction
 pub fn profile_tx_deserialize<T, F>(data: &[u8], f: F) -> T
 where
     F: FnOnce() -> T,
@@ -397,7 +397,7 @@ where
     profile_serde_deserialize("ShieldedTransaction", data.len(), f)
 }
 
-/// Profile la vérification d'une transaction complète
+/// Profile the verification d'une transaction completee
 pub fn profile_tx_verify<T, F>(f: F) -> T
 where
     F: FnOnce() -> T,
@@ -405,7 +405,7 @@ where
     profile_crypto_verify("transaction", f)
 }
 
-/// Profile la vérification d'un spend proof
+/// Profile the verification d'un spend proof
 pub fn profile_spend_proof_verify<T, F>(f: F) -> T
 where
     F: FnOnce() -> T,
@@ -413,7 +413,7 @@ where
     profile_zk_proof_verify("spend", f)
 }
 
-/// Profile la vérification d'un output proof
+/// Profile the verification d'un output proof
 pub fn profile_output_proof_verify<T, F>(f: F) -> T
 where
     F: FnOnce() -> T,

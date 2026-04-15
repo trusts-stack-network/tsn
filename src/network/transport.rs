@@ -1,7 +1,7 @@
-//! Transport réseau TCP/UDP pour TSN
+//! TCP/UDP network transport for TSN
 //!
-//! Implémente les sockets TCP/UDP avec gestion d'erreurs robuste,
-//! rate limiting, et support des connexions persistantes pour Kademlia DHT.
+//! Implements TCP/UDP sockets with robust error handling,
+//! rate limiting, and persistent connection support for Kademlia DHT.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -27,7 +27,7 @@ fn masked_addr(addr: &SocketAddr) -> String {
     format!("tcp:{:08x}", h.finish() as u32)
 }
 
-/// Configuration du transport réseau
+/// Network transport configuration
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
     pub tcp_listen_addr: SocketAddr,
@@ -53,7 +53,7 @@ impl Default for TransportConfig {
     }
 }
 
-/// Connexion TCP active avec buffer et rate limiting
+/// Active TCP connection with buffer and rate limiting
 #[derive(Debug)]
 struct TcpConnection {
     stream: TcpStream,
@@ -84,7 +84,7 @@ impl TcpConnection {
         match timeout(Duration::from_secs(10), self.stream.write_all(&encoded)).await {
             Ok(Ok(())) => {
                 self.last_activity = Instant::now();
-                trace!("Message TCP envoyé vers {}: {} bytes", masked_addr(&self.addr), encoded.len());
+                trace!("Message TCP sent vers {}: {} bytes", masked_addr(&self.addr), encoded.len());
                 Ok(())
             },
             Ok(Err(e)) => Err(NetworkError::Io(e)),
@@ -130,7 +130,7 @@ impl TcpConnection {
     }
 }
 
-/// Transport réseau principal
+/// Transport network principal
 pub struct NetworkTransport {
     config: TransportConfig,
     tcp_connections: Arc<RwLock<HashMap<SocketAddr, TcpConnection>>>,
@@ -153,7 +153,7 @@ impl NetworkTransport {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        info!("Démarrage transport réseau TCP:{} UDP:{}",
+        info!("Starting transport network TCP:{} UDP:{}",
               self.config.tcp_listen_addr, self.config.udp_listen_addr);
 
         let tcp_listener = Arc::new(TcpListener::bind(self.config.tcp_listen_addr).await?);
@@ -222,14 +222,14 @@ impl NetworkTransport {
 
             match timeout(self.config.udp_request_timeout, socket.send_to(&encoded, addr)).await {
                 Ok(Ok(bytes_sent)) => {
-                    trace!("Message UDP envoyé vers {}: {} bytes", addr, bytes_sent);
+                    trace!("Message UDP sent vers {}: {} bytes", addr, bytes_sent);
                     Ok(())
                 },
                 Ok(Err(e)) => Err(NetworkError::Io(e)),
                 Err(_) => Err(NetworkError::HandshakeTimeout),
             }
         } else {
-            Err(NetworkError::InvalidMessage("UDP socket non initialisé".to_string()))
+            Err(NetworkError::InvalidMessage("UDP socket non initialized".to_string()))
         }
     }
 
@@ -249,7 +249,7 @@ impl NetworkTransport {
     }
 
     async fn create_tcp_connection(&self, addr: SocketAddr, message: TsnMessage) -> Result<()> {
-        debug!("Création connexion TCP vers {}", masked_addr(&addr));
+        debug!("Creation connection TCP vers {}", masked_addr(&addr));
 
         let stream = match timeout(self.config.tcp_connect_timeout, TcpStream::connect(addr)).await {
             Ok(Ok(stream)) => stream,
@@ -263,13 +263,13 @@ impl NetworkTransport {
         {
             let mut connections = self.tcp_connections.write().await;
             if connections.len() >= self.config.max_tcp_connections {
-                warn!("Limite de connexions TCP atteinte, refuse {}", masked_addr(&addr));
-                return Err(NetworkError::RateLimited("Trop de connexions TCP".to_string()));
+                warn!("Limite de connections TCP atteinte, refuse {}", masked_addr(&addr));
+                return Err(NetworkError::RateLimited("Trop de connections TCP".to_string()));
             }
             connections.insert(addr, connection);
         }
 
-        debug!("Connexion TCP établie vers {}", masked_addr(&addr));
+        debug!("Connection TCP establishede vers {}", masked_addr(&addr));
         Ok(())
     }
 
@@ -277,12 +277,12 @@ impl NetworkTransport {
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
-                    debug!("Nouvelle connexion TCP depuis {}", masked_addr(&addr));
+                    debug!("Nouvelle connection TCP depuis {}", masked_addr(&addr));
 
                     {
                         let connections = self.tcp_connections.read().await;
                         if connections.len() >= self.config.max_tcp_connections {
-                            warn!("Limite de connexions TCP atteinte, refuse {}", masked_addr(&addr));
+                            warn!("Limite de connections TCP atteinte, refuse {}", masked_addr(&addr));
                             continue;
                         }
                     }
@@ -300,7 +300,7 @@ impl NetworkTransport {
                     });
                 },
                 Err(e) => {
-                    error!("Erreur acceptation TCP: {}", e);
+                    error!("TCP accept error: {}", e);
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
@@ -316,7 +316,7 @@ impl NetworkTransport {
                         match conn.read_messages().await {
                             Ok(messages) => messages,
                             Err(e) => {
-                                debug!("Erreur lecture TCP {}: {}", masked_addr(&addr), e);
+                                debug!("TCP read error {}: {}", masked_addr(&addr), e);
                                 connections.remove(&addr);
                                 break;
                             }
@@ -328,14 +328,14 @@ impl NetworkTransport {
 
             for message in messages {
                 if let Err(e) = self.message_tx.send((addr, message)) {
-                    error!("Erreur envoi message interne: {}", e);
+                    error!("Internal message send error: {}", e);
                 }
             }
 
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        debug!("Handler TCP terminé pour {}", masked_addr(&addr));
+        debug!("Handler TCP completed pour {}", masked_addr(&addr));
     }
 
     async fn udp_receive_loop(&self, socket: Arc<UdpSocket>) {
@@ -350,7 +350,7 @@ impl NetworkTransport {
                             .or_insert_with(|| Arc::new(RateLimiter::new(self.config.rate_limit.clone())));
 
                         if !limiter.check(&addr).await {
-                            trace!("Rate limit UDP dépassé pour {}", masked_addr(&addr));
+                            trace!("Rate limit UDP exceeded pour {}", masked_addr(&addr));
                             continue;
                         }
                     }
@@ -358,21 +358,21 @@ impl NetworkTransport {
                     let mut buf = BytesMut::from(&buffer[..len]);
                     match decode_message(&mut buf) {
                         Ok(Some((message, _))) => {
-                            trace!("Message UDP reçu de {}: {} bytes", masked_addr(&addr), len);
+                            trace!("Message UDP received de {}: {} bytes", masked_addr(&addr), len);
                             if let Err(e) = self.message_tx.send((addr, message)) {
-                                error!("Erreur envoi message UDP interne: {}", e);
+                                error!("Internal UDP message send error: {}", e);
                             }
                         },
                         Ok(None) => {
                             trace!("Message UDP incomplet de {}", masked_addr(&addr));
                         },
                         Err(e) => {
-                            warn!("Erreur décodage UDP de {}: {}", masked_addr(&addr), e);
+                            warn!("Error decoding UDP de {}: {}", masked_addr(&addr), e);
                         }
                     }
                 },
                 Err(e) => {
-                    error!("Erreur réception UDP: {}", e);
+                    error!("Error reception UDP: {}", e);
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
@@ -391,13 +391,13 @@ impl NetworkTransport {
                 connections.retain(|addr, conn| {
                     let active = conn.is_active();
                     if !active {
-                        debug!("Suppression connexion TCP inactive: {}", masked_addr(addr));
+                        debug!("Suppression connection TCP inactive: {}", masked_addr(addr));
                     }
                     active
                 });
                 let after_count = connections.len();
                 if before_count != after_count {
-                    info!("Nettoyage TCP: {} -> {} connexions", before_count, after_count);
+                    info!("Nettoyage TCP: {} -> {} connections", before_count, after_count);
                 }
             }
 
@@ -430,7 +430,7 @@ impl NetworkTransport {
     }
 }
 
-/// Statistiques du transport réseau
+/// Network transport statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportStats {
     pub tcp_connections: usize,

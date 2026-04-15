@@ -1,5 +1,5 @@
 //! Protocole de communication TSN
-//! Définition des messages et validation
+//! Message definition and validation
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
@@ -38,28 +38,28 @@ pub enum Capability {
 pub enum TsnMessage {
     /// Handshake initial
     Handshake(HandshakeData),
-    /// Acknowledgement du handshake
+    /// Handshake acknowledgement
     HandshakeAck {
         accepted: bool,
         timestamp_ns: u64,
         your_node_id: [u8; 32],
     },
-    /// Heartbeat avec timestamp TSN
+    /// Heartbeat with TSN timestamp
     Heartbeat {
         timestamp_ns: u64,
         sequence: u64,
     },
-    /// Déconnexion gracieuse
+    /// Disconnection gracieuse
     Disconnect {
         reason: String,
         timestamp_ns: u64,
     },
-    /// Échange de pairs (peer discovery)
+    /// Peer exchange (peer discovery)
     PeerExchange {
         peers: Vec<PeerInfo>,
         timestamp_ns: u64,
     },
-    /// Données applicatives avec priorité TSN
+    /// Application data with TSN priority
     Data {
         priority: u8,
         timestamp_ns: u64,
@@ -91,7 +91,7 @@ pub enum ProtocolError {
     InvalidPayloadLength(usize),
 }
 
-/// Encode un message TSN avec framing (length-prefixed)
+/// Encodes a TSN message with framing (length-prefixed)
 pub fn encode_message(msg: &TsnMessage) -> Result<Bytes> {
     let payload = bincode::serialize(msg)?;
     
@@ -107,26 +107,26 @@ pub fn encode_message(msg: &TsnMessage) -> Result<Bytes> {
     Ok(buf.freeze())
 }
 
-/// Décode un message TSN depuis un buffer
-/// Retourne Ok(Some(msg, consumed_bytes)) si un message complet est présent
-/// Retourne Ok(None) si besoin de plus de données
+/// Decodes a TSN message from a buffer
+/// Returns Ok(Some(msg, consumed_bytes)) if a complete message is present
+/// Returns Ok(None) if more data is needed
 pub fn decode_message(buf: &mut BytesMut) -> Result<Option<(TsnMessage, usize)>> {
     if buf.len() < PROTOCOL_MAGIC.len() + 4 {
         return Ok(None);
     }
     
-    // Vérification magic
+    // Verification magic
     let magic = &buf[..PROTOCOL_MAGIC.len()];
     if magic != PROTOCOL_MAGIC {
         buf.clear();
         return Err(ProtocolError::InvalidMagic.into());
     }
 
-    // Lecture de la taille du payload
+    // Read payload size
     let payload_len_bytes = &buf[PROTOCOL_MAGIC.len()..PROTOCOL_MAGIC.len() + 4];
     let payload_len = u32::from_le_bytes([payload_len_bytes[0], payload_len_bytes[1], payload_len_bytes[2], payload_len_bytes[3]]) as usize;
     
-    // Validation de la taille du payload
+    // Validate payload size
     if payload_len > MAX_MESSAGE_SIZE {
         buf.clear();
         return Err(ProtocolError::MessageTooLarge(payload_len, MAX_MESSAGE_SIZE).into());
@@ -137,31 +137,31 @@ pub fn decode_message(buf: &mut BytesMut) -> Result<Option<(TsnMessage, usize)>>
         return Err(ProtocolError::InvalidPayloadLength(0).into());
     }
     
-    // Vérification que nous avons assez de données
+    // Verification que nous avons enough of data
     let total_message_len = PROTOCOL_MAGIC.len() + 4 + payload_len;
     if buf.len() < total_message_len {
         return Ok(None);
     }
     
-    // Extraction du payload
+    // Extract payload
     let payload_start = PROTOCOL_MAGIC.len() + 4;
     let payload_end = payload_start + payload_len;
     let payload = &buf[payload_start..payload_end];
     
-    // Désérialisation du message
+    // Deserialize message
     let message = bincode::deserialize::<TsnMessage>(payload)
         .map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
     
-    // Validation du timestamp (optionnelle mais recommandée)
+    // Validate timestamp (optional but recommended)
     validate_message_timestamp(&message)?;
     
-    // Suppression des bytes consommés du buffer
+    // Delete consumed bytes from buffer
     buf.advance(total_message_len);
     
     Ok(Some((message, total_message_len)))
 }
 
-/// Valide le timestamp d'un message pour éviter les attaques par replay
+/// Validates a message timestamp to prevent replay attacks
 fn validate_message_timestamp(msg: &TsnMessage) -> Result<()> {
     let current_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -177,7 +177,7 @@ fn validate_message_timestamp(msg: &TsnMessage) -> Result<()> {
         TsnMessage::Data { timestamp_ns, .. } => *timestamp_ns,
     };
     
-    // Tolérance de 5 minutes pour tenir compte de la dérive d'horloge réseau
+    // 5 minute tolerance to account for network clock drift
     const MAX_DRIFT_NS: u64 = 5 * 60 * 1_000_000_000;
     
     let drift = if current_timestamp > message_timestamp {

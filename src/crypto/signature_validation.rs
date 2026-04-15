@@ -1,9 +1,9 @@
-//! Système de validation de signatures SLH-DSA pour TSN
+//! System de validation de signatures SLH-DSA for TSN
 //!
-//! Module de haut niveau pour la validation de signatures dans le contexte TSN.
-//! Intègre la validation batch, la mise en cache et les politiques de sécurité.
+//! Module de haut niveau for the validation de signatures in the contexte TSN.
+//! Integrates the validation batch, the mise in cache and the politiques de security.
 //!
-//! Références :
+//! References :
 //! - FIPS PUB 205 (2024) – https://doi.org/10.6028/NIST.FIPS.205
 //! - TSN Cryptographic Specification v1.0
 
@@ -15,26 +15,26 @@ use thiserror::Error;
 use super::signature_validator::{SignatureValidator, ValidationError, ValidationResult, ValidatorConfig};
 use super::pq::slh_dsa::{PK_BYTES, SIG_BYTES};
 
-/// Erreurs du système de validation
+/// Errors of the system de validation
 #[derive(Debug, Error)]
 pub enum ValidationSystemError {
-    #[error("Erreur de validation : {0}")]
+    #[error("Validation error : {0}")]
     Validation(#[from] ValidationError),
     
-    #[error("Cache plein : impossible d'ajouter de nouvelles entrées")]
+    #[error("Cache plein : unable d'add de news entries")]
     CacheFull,
     
-    #[error("Validation batch échouée : {failed}/{total} signatures invalides")]
+    #[error("Validation batch failed : {failed}/{total} signatures invalids")]
     BatchValidationFailed { failed: usize, total: usize },
     
-    #[error("Limite de débit dépassée : {current}/{limit} validations par seconde")]
+    #[error("Limite de throughput exceedede : {current}/{limit} validations par seconde")]
     RateLimitExceeded { current: u32, limit: u32 },
     
     #[error("Signature en liste noire : hash {hash}")]
     BlacklistedSignature { hash: String },
 }
 
-/// Entrée de cache pour les résultats de validation
+/// Entry de cache for the results de validation
 #[derive(Debug, Clone)]
 struct CacheEntry {
     result: ValidationResult,
@@ -42,20 +42,20 @@ struct CacheEntry {
     access_count: u32,
 }
 
-/// Configuration du système de validation
+/// Configuration of the system de validation
 #[derive(Debug, Clone)]
 pub struct ValidationSystemConfig {
-    /// Configuration du validateur sous-jacent
+    /// Configuration of the validateur sous-jacent
     pub validator_config: ValidatorConfig,
-    /// Taille maximale du cache (0 = pas de cache)
+    /// Size maximale of the cache (0 = pas de cache)
     pub cache_size: usize,
-    /// TTL des entrées de cache en secondes
+    /// TTL of entries de cache in secondes
     pub cache_ttl_seconds: u64,
-    /// Limite de débit (validations par seconde, 0 = pas de limite)
+    /// Limite de throughput (validations par seconde, 0 = pas de limite)
     pub rate_limit_per_second: u32,
-    /// Activer la validation batch
+    /// Activer the validation batch
     pub enable_batch_validation: bool,
-    /// Taille maximale des batches
+    /// Size maximale of batches
     pub max_batch_size: usize,
 }
 
@@ -72,7 +72,7 @@ impl Default for ValidationSystemConfig {
     }
 }
 
-/// Système de validation de signatures avec cache et rate limiting
+/// System de validation de signatures with cache and rate limiting
 pub struct ValidationSystem {
     validator: Arc<Mutex<SignatureValidator>>,
     config: ValidationSystemConfig,
@@ -81,7 +81,7 @@ pub struct ValidationSystem {
     blacklist: Arc<Mutex<HashSet<String>>>,
 }
 
-/// Rate limiter simple basé sur une fenêtre glissante
+/// Rate limiter simple based on a window glissante
 #[derive(Debug)]
 struct RateLimiter {
     requests: Vec<Instant>,
@@ -101,7 +101,7 @@ impl RateLimiter {
     fn check_rate_limit(&mut self) -> bool {
         let now = Instant::now();
         
-        // Nettoyer les anciennes requêtes
+        // Clean up the anciennes requests
         self.requests.retain(|&time| now.duration_since(time) < self.window);
         
         if self.requests.len() >= self.limit as usize {
@@ -116,12 +116,12 @@ impl RateLimiter {
 use std::collections::HashSet;
 
 impl ValidationSystem {
-    /// Crée un nouveau système de validation
+    /// Creates a new system de validation
     pub fn new() -> Self {
         Self::with_config(ValidationSystemConfig::default())
     }
 
-    /// Crée un nouveau système avec configuration personnalisée
+    /// Creates a new system with configuration custom
     pub fn with_config(config: ValidationSystemConfig) -> Self {
         let validator = SignatureValidator::with_config(config.validator_config.clone());
         let rate_limiter = if config.rate_limit_per_second > 0 {
@@ -139,14 +139,14 @@ impl ValidationSystem {
         }
     }
 
-    /// Valide une signature avec cache et rate limiting
+    /// Validates a signature with cache and rate limiting
     pub fn validate_signature(
         &self,
         message: &[u8],
         signature_bytes: &[u8],
         public_key_bytes: &[u8],
     ) -> Result<ValidationResult, ValidationSystemError> {
-        // Vérification du rate limit
+        // Verification of the rate limit
         {
             let mut limiter = self.rate_limiter.lock().unwrap();
             if !limiter.check_rate_limit() {
@@ -157,10 +157,10 @@ impl ValidationSystem {
             }
         }
 
-        // Calcul de la clé de cache
+        // Calcul de the key de cache
         let cache_key = self.compute_cache_key(message, signature_bytes, public_key_bytes);
 
-        // Vérification de la blacklist
+        // Verification de the blacklist
         {
             let blacklist = self.blacklist.lock().unwrap();
             if blacklist.contains(&cache_key) {
@@ -170,7 +170,7 @@ impl ValidationSystem {
             }
         }
 
-        // Vérification du cache
+        // Verification of the cache
         if self.config.cache_size > 0 {
             if let Some(cached_result) = self.check_cache(&cache_key) {
                 return Ok(cached_result);
@@ -183,7 +183,7 @@ impl ValidationSystem {
             validator.validate(message, signature_bytes, public_key_bytes)?
         };
 
-        // Mise en cache du résultat
+        // Mise in cache of the result
         if self.config.cache_size > 0 {
             self.cache_result(&cache_key, &result);
         }
@@ -223,7 +223,7 @@ impl ValidationSystem {
                 }
                 Err(e) => {
                     failed_count += 1;
-                    // Pour les erreurs de validation, on continue avec un résultat invalide
+                    // For validation errors, we continue with an invalid result
                     results.push(ValidationResult {
                         is_valid: false,
                         verification_time_us: 0,
@@ -234,7 +234,7 @@ impl ValidationSystem {
             }
         }
 
-        // Si trop d'échecs, on considère le batch comme échoué
+        // Si trop d'failures, on considers the batch like failed
         if failed_count > signatures.len() / 2 {
             return Err(ValidationSystemError::BatchValidationFailed {
                 failed: failed_count,
@@ -245,7 +245,7 @@ impl ValidationSystem {
         Ok(results)
     }
 
-    /// Ajoute une signature à la blacklist
+    /// Adds a signature to the blacklist
     pub fn blacklist_signature(&self, message: &[u8], signature_bytes: &[u8], public_key_bytes: &[u8]) {
         let cache_key = self.compute_cache_key(message, signature_bytes, public_key_bytes);
         
@@ -254,14 +254,14 @@ impl ValidationSystem {
             blacklist.insert(cache_key.clone());
         }
 
-        // Supprimer du cache si présent
+        // Delete of the cache if present
         {
             let mut cache = self.cache.lock().unwrap();
             cache.remove(&cache_key);
         }
     }
 
-    /// Nettoie le cache des entrées expirées
+    /// Cleans the cache of entries expireds
     pub fn cleanup_cache(&self) {
         if self.config.cache_size == 0 {
             return;
@@ -278,7 +278,7 @@ impl ValidationSystem {
         });
     }
 
-    /// Retourne les statistiques du système
+    /// Returns the statistics of the system
     pub fn get_statistics(&self) -> ValidationSystemStats {
         let validator_metrics = {
             let validator = self.validator.lock().unwrap();
@@ -290,7 +290,7 @@ impl ValidationSystem {
             CacheStats {
                 size: cache.len(),
                 max_size: self.config.cache_size,
-                hit_ratio: 0.0, // TODO: implémenter le tracking des hits/misses
+                hit_ratio: 0.0, // TODO: implement le tracking des hits/misses
             }
         };
 
@@ -306,7 +306,7 @@ impl ValidationSystem {
         }
     }
 
-    /// Remet à zéro toutes les statistiques
+    /// Remet to zero all statistics
     pub fn reset_statistics(&self) {
         {
             let mut validator = self.validator.lock().unwrap();
@@ -324,7 +324,7 @@ impl ValidationSystem {
         }
     }
 
-    /// Calcule une clé de cache pour une signature
+    /// Calculates a key de cache for a signature
     fn compute_cache_key(&self, message: &[u8], signature: &[u8], public_key: &[u8]) -> String {
         use sha2::{Sha256, Digest};
         
@@ -334,10 +334,10 @@ impl ValidationSystem {
         hasher.update(public_key);
         let hash = hasher.finalize();
         
-        hex::encode(&hash[..16]) // 32 caractères hex
+        hex::encode(&hash[..16]) // 32 hex characters
     }
 
-    /// Vérifie le cache pour une clé donnée
+    /// Verifies the cache for a key data
     fn check_cache(&self, cache_key: &str) -> Option<ValidationResult> {
         let mut cache = self.cache.lock().unwrap();
         
@@ -347,12 +347,12 @@ impl ValidationSystem {
                 .unwrap()
                 .as_secs();
 
-            // Vérifier l'expiration
+            // Verify l'expiration
             if now - entry.timestamp < self.config.cache_ttl_seconds {
                 entry.access_count += 1;
                 return Some(entry.result.clone());
             } else {
-                // Entrée expirée, la supprimer
+                // Entry expired, the delete
                 cache.remove(cache_key);
             }
         }
@@ -360,13 +360,13 @@ impl ValidationSystem {
         None
     }
 
-    /// Met en cache un résultat de validation
+    /// Met in cache a result de validation
     fn cache_result(&self, cache_key: &str, result: &ValidationResult) {
         let mut cache = self.cache.lock().unwrap();
         
-        // Vérifier la taille du cache
+        // Verify the size of the cache
         if cache.len() >= self.config.cache_size {
-            // Éviction LRU simple : supprimer l'entrée la plus ancienne
+            // Eviction LRU simple : delete l'entry the plus ancienne
             if let Some((oldest_key, _)) = cache.iter()
                 .min_by_key(|(_, entry)| entry.timestamp)
                 .map(|(k, v)| (k.clone(), v.timestamp)) {
@@ -387,7 +387,7 @@ impl ValidationSystem {
     }
 }
 
-/// Statistiques du cache
+/// Statistiques of the cache
 #[derive(Debug, Clone)]
 pub struct CacheStats {
     pub size: usize,
@@ -395,7 +395,7 @@ pub struct CacheStats {
     pub hit_ratio: f64,
 }
 
-/// Statistiques complètes du système de validation
+/// Statistiques completees of the system de validation
 #[derive(Debug, Clone)]
 pub struct ValidationSystemStats {
     pub validator_metrics: super::signature_validator::ValidatorMetrics,
@@ -448,14 +448,14 @@ mod tests {
         let message = b"Cached message";
         let signature = secret_key.sign(message);
 
-        // Première validation (mise en cache)
+        // First validation (mise in cache)
         let result1 = system.validate_signature(
             message,
             &signature.to_bytes(),
             &public_key.to_bytes(),
         ).unwrap();
 
-        // Deuxième validation (depuis le cache)
+        // Second validation (from cache)
         let result2 = system.validate_signature(
             message,
             &signature.to_bytes(),
@@ -499,7 +499,7 @@ mod tests {
         let message = b"Blacklisted message";
         let signature = secret_key.sign(message);
 
-        // Première validation réussie
+        // First validation successful
         let result = system.validate_signature(
             message,
             &signature.to_bytes(),
@@ -507,10 +507,10 @@ mod tests {
         ).unwrap();
         assert!(result.is_valid);
 
-        // Ajouter à la blacklist
+        // Add to blacklist
         system.blacklist_signature(message, &signature.to_bytes(), &public_key.to_bytes());
 
-        // Deuxième validation échoue (blacklistée)
+        // Second validation fails (blacklisted)
         let result = system.validate_signature(
             message,
             &signature.to_bytes(),
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn test_rate_limiting() {
         let config = ValidationSystemConfig {
-            rate_limit_per_second: 2, // Limite très basse pour le test
+            rate_limit_per_second: 2, // Very low limit for testing
             ..Default::default()
         };
         
@@ -535,7 +535,7 @@ mod tests {
         
         let (secret_key, public_key) = SecretKey::generate_rng(&mut rng);
 
-        // Première et deuxième validation OK
+        // First and second validation OK
         for i in 0..2 {
             let message = format!("Message {}", i).into_bytes();
             let signature = secret_key.sign(&message);
@@ -548,7 +548,7 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // Troisième validation devrait être rate-limitée
+        // Third validation should be rate-limited
         let message = b"Rate limited message";
         let signature = secret_key.sign(message);
         
@@ -591,7 +591,7 @@ mod tests {
     fn test_cache_cleanup() {
         let config = ValidationSystemConfig {
             cache_size: 10,
-            cache_ttl_seconds: 1, // TTL très court
+            cache_ttl_seconds: 1, // TTL very court
             ..Default::default()
         };
         
@@ -602,20 +602,20 @@ mod tests {
         let message = b"Expiring message";
         let signature = secret_key.sign(message);
 
-        // Validation et mise en cache
+        // Validation and mise in cache
         system.validate_signature(
             message,
             &signature.to_bytes(),
             &public_key.to_bytes(),
         ).unwrap();
 
-        // Attendre l'expiration
+        // Wait l'expiration
         std::thread::sleep(Duration::from_secs(2));
 
-        // Nettoyer le cache
+        // Nettoyer the cache
         system.cleanup_cache();
 
-        // Vérifier que le cache est vide
+        // Verify que the cache is vide
         let stats = system.get_statistics();
         assert_eq!(stats.cache_stats.size, 0);
     }

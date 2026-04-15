@@ -1,11 +1,11 @@
-//! Transport réseau TCP/UDP pour DHT Kademlia
+//! Transport network TCP/UDP for DHT Kademlia
 //! 
-//! Implémente le transport réseau réel pour les messages Kademlia avec :
-//! - Sockets UDP pour les requêtes courtes (PING, FIND_NODE)
-//! - Sockets TCP pour les transferts volumineux (STORE, réponses avec beaucoup de nœuds)
-//! - Rate limiting par peer pour éviter les attaques DoS
-//! - Retry automatique avec backoff exponentiel
-//! - Gestion robuste des timeouts et erreurs réseau
+//! Implements the transport network real for the messages Kademlia with :
+//! - Sockets UDP for the requests courtes (PING, FIND_NODE)
+//! - Sockets TCP for the transferts volumineux (STORE, responses with beaucoup de nodes)
+//! - Rate limiting par peer for avoidr the attaques DoS
+//! - Retry automatique with backoff exponentiel
+//! - Robust handling of timeouts and network errors
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -23,26 +23,26 @@ use super::kademlia_messages::{KademliaMessage, DhtError, RequestId};
 use super::rate_limiter::{RateLimiter, RateLimitConfig};
 use super::error::{NetworkError, Result};
 
-/// Configuration du transport Kademlia
+/// Configuration of the transport Kademlia
 #[derive(Debug, Clone)]
 pub struct KademliaTransportConfig {
-    /// Adresse d'écoute UDP pour les requêtes courtes
+    /// UDP listening address for short requests
     pub udp_listen_addr: SocketAddr,
-    /// Adresse d'écoute TCP pour les transferts volumineux
+    /// TCP listening address for large transfers
     pub tcp_listen_addr: SocketAddr,
-    /// Timeout pour les requêtes UDP
+    /// Timeout for the requests UDP
     pub udp_timeout: Duration,
-    /// Timeout pour les connexions TCP
+    /// Timeout for the connections TCP
     pub tcp_timeout: Duration,
-    /// Taille max des messages UDP (au-delà on passe en TCP)
+    /// Size max of messages UDP (beyond on passe in TCP)
     pub udp_max_size: usize,
-    /// Nombre max de connexions TCP simultanées
+    /// Maximum simultaneous TCP connections
     pub max_tcp_connections: usize,
-    /// Configuration du rate limiting
+    /// Rate limiting configuration
     pub rate_limit: RateLimitConfig,
-    /// Nombre max de tentatives de retry
+    /// Maximum retry attempts
     pub max_retries: usize,
-    /// Délai initial pour le backoff exponentiel
+    /// Delay initial for the backoff exponentiel
     pub initial_backoff: Duration,
 }
 
@@ -62,7 +62,7 @@ impl Default for KademliaTransportConfig {
     }
 }
 
-/// Statistiques du transport
+/// Statistiques of the transport
 #[derive(Debug, Default, Clone)]
 pub struct TransportStats {
     pub udp_messages_sent: u64,
@@ -75,7 +75,7 @@ pub struct TransportStats {
     pub active_tcp_connections: u64,
 }
 
-/// Connexion TCP active avec rate limiting
+/// Connection TCP active with rate limiting
 #[derive(Debug)]
 struct TcpConnection {
     stream: TcpStream,
@@ -96,7 +96,7 @@ impl TcpConnection {
         }
     }
 
-    /// Envoie un message via TCP avec rate limiting
+    /// Envoie a message via TCP with rate limiting
     async fn send_message(&mut self, message: &KademliaMessage) -> Result<()> {
         if !self.rate_limiter.check_rate_limit() {
             return Err(NetworkError::RateLimited(format!(\"TCP peer {}\", self.addr)));
@@ -104,19 +104,19 @@ impl TcpConnection {
 
         let encoded = encode_kademlia_message(message)?;
         
-        // Envoie la taille du message puis le message
+        // Envoie the size of the message puis the message
         self.stream.write_u32(encoded.len() as u32).await?;
         self.stream.write_all(&encoded).await?;
         self.stream.flush().await?;
         
         self.last_activity = Instant::now();
-        trace!(\"Message TCP envoyé vers {}: {} bytes\", self.addr, encoded.len());
+        trace!(\"Message TCP sent vers {}: {} bytes\", self.addr, encoded.len());
         Ok(())
     }
 
-    /// Lit un message depuis la connexion TCP
+    /// Lit a message from the connection TCP
     async fn read_message(&mut self) -> Result<Option<KademliaMessage>> {
-        // Lit la taille du message
+        // Lit the size of the message
         let message_size = match timeout(Duration::from_secs(30), self.stream.read_u32()).await {
             Ok(Ok(size)) => size as usize,
             Ok(Err(e)) => return Err(NetworkError::Io(e)),
@@ -127,24 +127,24 @@ impl TcpConnection {
             return Err(NetworkError::InvalidMessage(\"Message trop volumineux\".to_string()));
         }
 
-        // Lit le message complet
+        // Lit the message complet
         let mut message_buf = vec![0u8; message_size];
         self.stream.read_exact(&mut message_buf).await?;
 
         let message = decode_kademlia_message(&message_buf)?;
         self.last_activity = Instant::now();
         
-        trace!(\"Message TCP reçu de {}: {} bytes\", self.addr, message_size);
+        trace!(\"Message TCP received de {}: {} bytes\", self.addr, message_size);
         Ok(Some(message))
     }
 
-    /// Vérifie si la connexion est inactive
+    /// Checks if the connection is inactive
     fn is_stale(&self, max_idle: Duration) -> bool {
         self.last_activity.elapsed() > max_idle
     }
 }
 
-/// Transport réseau principal pour Kademlia
+/// Transport network principal for Kademlia
 pub struct KademliaTransport {
     config: KademliaTransportConfig,
     udp_socket: Arc<UdpSocket>,
@@ -152,7 +152,7 @@ pub struct KademliaTransport {
     tcp_listener: Option<TcpListener>,
     stats: Arc<RwLock<TransportStats>>,
     
-    // Channels pour les messages entrants
+    // Channels for the messages entrants
     message_tx: mpsc::UnboundedSender<(SocketAddr, KademliaMessage)>,
     message_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<(SocketAddr, KademliaMessage)>>>>,
     
@@ -161,14 +161,14 @@ pub struct KademliaTransport {
 }
 
 impl KademliaTransport {
-    /// Crée un nouveau transport Kademlia
+    /// Creates a new transport Kademlia
     pub async fn new(config: KademliaTransportConfig) -> Result<Self> {
         let udp_socket = UdpSocket::bind(config.udp_listen_addr).await?;
         let tcp_listener = TcpListener::bind(config.tcp_listen_addr).await?;
         
         let (message_tx, message_rx) = mpsc::unbounded_channel();
         
-        info!(\"Transport Kademlia initialisé - UDP: {}, TCP: {}\", 
+        info!(\"Kademlia transport initialized - UDP: {}, TCP: {}\",
               config.udp_listen_addr, config.tcp_listen_addr);
         
         Ok(Self {
@@ -183,9 +183,9 @@ impl KademliaTransport {
         })
     }
 
-    /// Démarre le transport (écoute UDP/TCP)
+    /// Starts the transport (listening UDP/TCP)
     pub async fn start(&self) -> Result<()> {
-        // Démarre l'écoute UDP
+        // Starts l'listening UDP
         let udp_socket = self.udp_socket.clone();
         let message_tx = self.message_tx.clone();
         let stats = self.stats.clone();
@@ -196,7 +196,7 @@ impl KademliaTransport {
             Self::udp_listener_loop(udp_socket, message_tx, stats, peer_limiters, rate_config).await;
         });
 
-        // Démarre l'écoute TCP
+        // Starts l'listening TCP
         if let Some(tcp_listener) = self.tcp_listener.take() {
             let connections = self.tcp_connections.clone();
             let message_tx = self.message_tx.clone();
@@ -209,22 +209,22 @@ impl KademliaTransport {
             });
         }
 
-        // Démarre le nettoyage des connexions inactives
+        // Starts the cleanup of connections inactive
         let connections = self.tcp_connections.clone();
         let stats = self.stats.clone();
         tokio::spawn(async move {
             Self::connection_cleanup_loop(connections, stats).await;
         });
 
-        info!(\"Transport Kademlia démarré\");
+        info!(\"Transport Kademlia started\");
         Ok(())
     }
 
-    /// Envoie un message Kademlia vers un peer
+    /// Envoie a message Kademlia vers a peer
     pub async fn send_message(&self, addr: SocketAddr, message: KademliaMessage) -> Result<()> {
         let encoded = encode_kademlia_message(&message)?;
         
-        // Choisit UDP ou TCP selon la taille du message
+        // Choisit UDP or TCP selon the size of the message
         if encoded.len() <= self.config.udp_max_size {
             self.send_udp_message(addr, &encoded).await
         } else {
@@ -232,9 +232,9 @@ impl KademliaTransport {
         }
     }
 
-    /// Envoie un message via UDP
+    /// Envoie a message via UDP
     async fn send_udp_message(&self, addr: SocketAddr, encoded: &[u8]) -> Result<()> {
-        // Vérifie rate limiting
+        // Verifies rate limiting
         if !self.check_peer_rate_limit(addr).await {
             self.stats.write().await.rate_limit_hits += 1;
             return Err(NetworkError::RateLimited(format!(\"UDP peer {}\", addr)));
@@ -243,7 +243,7 @@ impl KademliaTransport {
         match timeout(self.config.udp_timeout, self.udp_socket.send_to(encoded, addr)).await {
             Ok(Ok(bytes_sent)) => {
                 self.stats.write().await.udp_messages_sent += 1;
-                trace!(\"Message UDP envoyé vers {}: {} bytes\", addr, bytes_sent);
+                trace!(\"Message UDP sent vers {}: {} bytes\", addr, bytes_sent);
                 Ok(())
             },
             Ok(Err(e)) => {
@@ -257,7 +257,7 @@ impl KademliaTransport {
         }
     }
 
-    /// Envoie un message via TCP (avec retry et backoff)
+    /// Sends a message via TCP (with retry and backoff)
     async fn send_tcp_message(&self, addr: SocketAddr, message: &KademliaMessage) -> Result<()> {
         let mut retries = 0;
         let mut backoff = self.config.initial_backoff;
@@ -269,7 +269,7 @@ impl KademliaTransport {
                     return Ok(());
                 },
                 Err(e) if retries < self.config.max_retries => {
-                    warn!(\"Échec envoi TCP vers {} (tentative {}): {}\", addr, retries + 1, e);
+                    warn!(\"Failure envoi TCP vers {} (tentative {}): {}\", addr, retries + 1, e);
                     retries += 1;
                     sleep(backoff).await;
                     backoff *= 2; // Backoff exponentiel
@@ -282,9 +282,9 @@ impl KademliaTransport {
         }
     }
 
-    /// Envoie un message TCP (une tentative)
+    /// Envoie a message TCP (une attempt)
     async fn send_tcp_message_once(&self, addr: SocketAddr, message: &KademliaMessage) -> Result<()> {
-        // Essaie d'utiliser une connexion existante
+        // Essaie d'utiliser a connection existante
         {
             let connections = self.tcp_connections.read().await;
             if let Some(conn_mutex) = connections.get(&addr) {
@@ -292,18 +292,18 @@ impl KademliaTransport {
                 if let Ok(()) = conn.send_message(message).await {
                     return Ok(());
                 }
-                // La connexion a échoué, on va la supprimer et en créer une nouvelle
+                // La connection a failed, on va the delete and in create a new
             }
         }
 
-        // Crée une nouvelle connexion TCP
+        // Creates a new connection TCP
         let stream = timeout(self.config.tcp_timeout, TcpStream::connect(addr)).await??;
         let mut connection = TcpConnection::new(stream, addr, self.config.rate_limit.clone());
         
-        // Envoie le message
+        // Envoie the message
         connection.send_message(message).await?;
         
-        // Stocke la connexion pour réutilisation
+        // Store the connection for reuse
         let conn_mutex = Arc::new(Mutex::new(connection));
         {
             let mut connections = self.tcp_connections.write().await;
@@ -314,7 +314,7 @@ impl KademliaTransport {
         Ok(())
     }
 
-    /// Vérifie le rate limiting pour un peer
+    /// Verifies the rate limiting for a peer
     async fn check_peer_rate_limit(&self, addr: SocketAddr) -> bool {
         let mut limiters = self.peer_rate_limiters.write().await;
         let limiter = limiters.entry(addr)
@@ -322,17 +322,17 @@ impl KademliaTransport {
         limiter.check_rate_limit()
     }
 
-    /// Récupère le receiver pour les messages entrants
+    /// Retrieves the receiver for the messages entrants
     pub async fn take_message_receiver(&self) -> Option<mpsc::UnboundedReceiver<(SocketAddr, KademliaMessage)>> {
         self.message_rx.lock().await.take()
     }
 
-    /// Retourne les statistiques du transport
+    /// Returns the statistics of the transport
     pub async fn stats(&self) -> TransportStats {
         self.stats.read().await.clone()
     }
 
-    /// Boucle d'écoute UDP
+    /// Boucle d'listening UDP
     async fn udp_listener_loop(
         socket: Arc<UdpSocket>,
         message_tx: mpsc::UnboundedSender<(SocketAddr, KademliaMessage)>,
@@ -345,7 +345,7 @@ impl KademliaTransport {
         loop {
             match socket.recv_from(&mut buffer).await {
                 Ok((size, addr)) => {
-                    // Vérifie rate limiting
+                    // Verifies rate limiting
                     let rate_ok = {
                         let mut limiters = peer_limiters.write().await;
                         let limiter = limiters.entry(addr)
@@ -358,31 +358,31 @@ impl KademliaTransport {
                         continue;
                     }
 
-                    // Décode le message
+                    // Decodes the message
                     match decode_kademlia_message(&buffer[..size]) {
                         Ok(message) => {
                             stats.write().await.udp_messages_received += 1;
-                            trace!(\"Message UDP reçu de {}: {} bytes\", addr, size);
+                            trace!(\"Message UDP received de {}: {} bytes\", addr, size);
                             
                             if let Err(_) = message_tx.send((addr, message)) {
-                                error!(\"Canal de messages fermé - arrêt écoute UDP\");
+                                error!(\"Message channel closed - shutting down UDP listener\");
                                 break;
                             }
                         },
                         Err(e) => {
-                            warn!(\"Échec décodage message UDP de {}: {}\", addr, e);
+                            warn!(\"Failed to decode UDP message from {}: {}\", addr, e);
                         }
                     }
                 },
                 Err(e) => {
-                    error!(\"Erreur écoute UDP: {}\", e);
+                    error!(\"UDP listen error: {}\", e);
                     sleep(Duration::from_millis(100)).await;
                 }
             }
         }
     }
 
-    /// Boucle d'écoute TCP
+    /// Boucle d'listening TCP
     async fn tcp_listener_loop(
         listener: TcpListener,
         connections: Arc<RwLock<HashMap<SocketAddr, Arc<Mutex<TcpConnection>>>>>,
@@ -394,25 +394,25 @@ impl KademliaTransport {
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
-                    // Vérifie le nombre max de connexions
+                    // Check the maximum number of connections
                     {
                         let conns = connections.read().await;
                         if conns.len() >= max_connections {
-                            warn!(\"Connexion TCP refusée de {} - limite atteinte\", addr);
+                            warn!(\"Connection TCP rejectede de {} - limite atteinte\", addr);
                             continue;
                         }
                     }
 
                     let connection = Arc::new(Mutex::new(TcpConnection::new(stream, addr, rate_config.clone())));
                     
-                    // Stocke la connexion
+                    // Store the connection
                     {
                         let mut conns = connections.write().await;
                         conns.insert(addr, connection.clone());
                         stats.write().await.active_tcp_connections = conns.len() as u64;
                     }
 
-                    // Démarre la gestion de cette connexion
+                    // Starts the gestion de this connection
                     let message_tx_clone = message_tx.clone();
                     let stats_clone = stats.clone();
                     let connections_clone = connections.clone();
@@ -422,14 +422,14 @@ impl KademliaTransport {
                     });
                 },
                 Err(e) => {
-                    error!(\"Erreur acceptation TCP: {}\", e);
+                    error!(\"TCP accept error: {}\", e);
                     sleep(Duration::from_millis(100)).await;
                 }
             }
         }
     }
 
-    /// Gère une connexion TCP individuelle
+    /// Handles a connection TCP individuelle
     async fn handle_tcp_connection(
         connection: Arc<Mutex<TcpConnection>>,
         addr: SocketAddr,
@@ -437,7 +437,7 @@ impl KademliaTransport {
         stats: Arc<RwLock<TransportStats>>,
         connections: Arc<RwLock<HashMap<SocketAddr, Arc<Mutex<TcpConnection>>>>>,
     ) {
-        debug!(\"Nouvelle connexion TCP de {}\", addr);
+        debug!(\"Nouvelle connection TCP de {}\", addr);
         
         loop {
             let message_opt = {
@@ -445,7 +445,7 @@ impl KademliaTransport {
                 match conn.read_message().await {
                     Ok(msg_opt) => msg_opt,
                     Err(e) => {
-                        debug!(\"Erreur lecture TCP de {}: {}\", addr, e);
+                        debug!(\"TCP read error de {}: {}\", addr, e);
                         break;
                     }
                 }
@@ -455,26 +455,26 @@ impl KademliaTransport {
                 stats.write().await.tcp_messages_received += 1;
                 
                 if let Err(_) = message_tx.send((addr, message)) {
-                    error!(\"Canal de messages fermé - fermeture connexion TCP {}\", addr);
+                    error!(\"Message channel closed - closing TCP connection {}\", addr);
                     break;
                 }
             } else {
-                // Pas de message - continue à écouter
+                // Pas de message - continue to listeningr
                 sleep(Duration::from_millis(10)).await;
             }
         }
 
-        // Nettoie la connexion
+        // Clean the connection
         {
             let mut conns = connections.write().await;
             conns.remove(&addr);
             stats.write().await.active_tcp_connections = conns.len() as u64;
         }
         
-        debug!(\"Connexion TCP fermée: {}\", addr);
+        debug!(\"TCP connection closed: {}\", addr);
     }
 
-    /// Boucle de nettoyage des connexions inactives
+    /// Boucle de cleanup of connections inactive
     async fn connection_cleanup_loop(
         connections: Arc<RwLock<HashMap<SocketAddr, Arc<Mutex<TcpConnection>>>>>,
         stats: Arc<RwLock<TransportStats>>,
@@ -500,7 +500,7 @@ impl KademliaTransport {
                 let mut connections_write = connections.write().await;
                 for addr in to_remove {
                     connections_write.remove(&addr);
-                    debug!(\"Connexion TCP inactive supprimée: {}\", addr);
+                    debug!(\"Connection TCP inactive removede: {}\", addr);
                 }
                 stats.write().await.active_tcp_connections = connections_write.len() as u64;
             }
@@ -508,12 +508,12 @@ impl KademliaTransport {
     }
 }
 
-/// Encode un message Kademlia en bytes
+/// Encode a message Kademlia in bytes
 fn encode_kademlia_message(message: &KademliaMessage) -> Result<Vec<u8>> {
     bincode::serialize(message).map_err(|e| NetworkError::Serialization(e))
 }
 
-/// Décode un message Kademlia depuis des bytes
+/// Decodes a message Kademlia from of bytes
 fn decode_kademlia_message(data: &[u8]) -> Result<KademliaMessage> {
     bincode::deserialize(data).map_err(|e| NetworkError::Serialization(e))
 }

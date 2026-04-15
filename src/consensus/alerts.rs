@@ -4,48 +4,48 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{warn, error, info};
 
-/// Types d'alertes de consensus
+/// Types d'alerts de consensus
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AlertType {
-    /// Temps inter-blocs anormalement élevé
+    /// Temps inter-blocs anormalement high
     HighBlockTime {
         current: Duration,
         threshold: Duration,
     },
-    /// Taux d'orphelins trop élevé
+    /// Orphan rate too high
     HighOrphanRate {
         current: f64,
         threshold: f64,
     },
-    /// Hashrate en chute libre
+    /// Hashrate in chute libre
     HashrateDropped {
         current: f64,
         previous: f64,
         drop_percentage: f64,
     },
-    /// Difficulté instable
+    /// Difficulty instable
     DifficultyInstability {
         variance: f64,
         threshold: f64,
     },
-    /// Fork détecté
+    /// Fork detected
     ForkDetected {
         fork_length: u64,
         common_ancestor: String,
     },
-    /// Stagnation de la blockchain
+    /// Blockchain stagnation
     ChainStagnation {
         last_block_time: Duration,
         threshold: Duration,
     },
-    /// Attaque potentielle (51%)
+    /// Potential attack (51%)
     PotentialAttack {
         suspicious_hashrate: f64,
         network_hashrate: f64,
     },
 }
 
-/// Niveau de sévérité d'une alerte
+/// Alert severity level
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AlertSeverity {
     Info,
@@ -54,7 +54,7 @@ pub enum AlertSeverity {
     Emergency,
 }
 
-/// Structure d'une alerte
+/// Alert structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Alert {
     pub id: String,
@@ -83,20 +83,20 @@ impl Alert {
     }
 }
 
-/// Configuration des seuils d'alerte
+/// Alert threshold configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertThresholds {
     /// Seuil de temps inter-blocs (secondes)
     pub max_block_time: Duration,
-    /// Seuil de taux d'orphelins (pourcentage)
+    /// Orphan rate threshold (percentage)
     pub max_orphan_rate: f64,
-    /// Seuil de chute de hashrate (pourcentage)
+    /// Hashrate drop threshold (percentage)
     pub max_hashrate_drop: f64,
-    /// Seuil de variance de difficulté
+    /// Seuil de variance de difficulty
     pub max_difficulty_variance: f64,
-    /// Seuil de stagnation de la chaîne
+    /// Seuil de chain stagnation
     pub max_stagnation_time: Duration,
-    /// Seuil d'attaque potentielle (pourcentage du hashrate total)
+    /// Potential attack threshold (percentage of total hashrate)
     pub attack_threshold: f64,
 }
 
@@ -108,12 +108,12 @@ impl Default for AlertThresholds {
             max_hashrate_drop: 30.0, // 30%
             max_difficulty_variance: 0.2, // 20%
             max_stagnation_time: Duration::from_secs(600), // 10 minutes
-            attack_threshold: 45.0, // 45% du hashrate
+            attack_threshold: 45.0, // 45% of hashrate
         }
     }
 }
 
-/// Gestionnaire d'alertes de consensus
+/// Consensus alert manager
 pub struct ConsensusAlertManager {
     thresholds: AlertThresholds,
     active_alerts: Vec<Alert>,
@@ -121,7 +121,7 @@ pub struct ConsensusAlertManager {
     alert_sender: mpsc::UnboundedSender<Alert>,
     max_history_size: usize,
     
-    // Métriques pour détection d'anomalies
+    // Metrics for anomaly detection
     block_times: VecDeque<Duration>,
     hashrates: VecDeque<f64>,
     difficulties: VecDeque<f64>,
@@ -146,20 +146,20 @@ impl ConsensusAlertManager {
         }
     }
 
-    /// Met à jour les métriques et vérifie les alertes
+    /// Updates metrics and checks alerts
     pub fn update_metrics(&mut self, 
         block_time: Duration, 
         hashrate: f64, 
         difficulty: f64,
         orphan_rate: f64,
     ) {
-        // Mise à jour des métriques
+        // Update metrics
         self.block_times.push_back(block_time);
         self.hashrates.push_back(hashrate);
         self.difficulties.push_back(difficulty);
         self.last_block_time = Some(Instant::now());
 
-        // Limite la taille des buffers
+        // Limit buffer size
         if self.block_times.len() > 100 {
             self.block_times.pop_front();
         }
@@ -170,7 +170,7 @@ impl ConsensusAlertManager {
             self.difficulties.pop_front();
         }
 
-        // Vérification des alertes
+        // Check alerts
         self.check_block_time_alert(block_time);
         self.check_orphan_rate_alert(orphan_rate);
         self.check_hashrate_alert(hashrate);
@@ -178,7 +178,7 @@ impl ConsensusAlertManager {
         self.check_chain_stagnation();
     }
 
-    /// Vérifie les alertes de temps inter-blocs
+    /// Checks inter-block time alerts
     fn check_block_time_alert(&mut self, block_time: Duration) {
         if block_time > self.thresholds.max_block_time {
             let alert = Alert::new(
@@ -188,7 +188,7 @@ impl ConsensusAlertManager {
                 },
                 AlertSeverity::Warning,
                 format!(
-                    "Temps inter-blocs élevé: {:?} (seuil: {:?})",
+                    "Temps inter-blocs high: {:?} (seuil: {:?})",
                     block_time, self.thresholds.max_block_time
                 ),
             );
@@ -196,7 +196,7 @@ impl ConsensusAlertManager {
         }
     }
 
-    /// Vérifie les alertes de taux d'orphelins
+    /// Checks orphan rate alerts
     fn check_orphan_rate_alert(&mut self, orphan_rate: f64) {
         if orphan_rate > self.thresholds.max_orphan_rate {
             let severity = if orphan_rate > self.thresholds.max_orphan_rate * 2.0 {
@@ -212,7 +212,7 @@ impl ConsensusAlertManager {
                 },
                 severity,
                 format!(
-                    "Taux d'orphelins élevé: {:.2}% (seuil: {:.2}%)",
+                    "Taux d'orphelins high: {:.2}% (seuil: {:.2}%)",
                     orphan_rate, self.thresholds.max_orphan_rate
                 ),
             );
@@ -220,7 +220,7 @@ impl ConsensusAlertManager {
         }
     }
 
-    /// Vérifie les alertes de hashrate
+    /// Checks hashrate alerts
     fn check_hashrate_alert(&mut self, current_hashrate: f64) {
         if self.hashrates.len() >= 2 {
             let previous_hashrate = self.hashrates[self.hashrates.len() - 2];
@@ -241,14 +241,14 @@ impl ConsensusAlertManager {
                     },
                     severity,
                     format!(
-                        "Chute du hashrate: {:.2}% (de {:.2} à {:.2})",
+                        "Chute du hashrate: {:.2}% (de {:.2} to {:.2})",
                         drop_percentage, previous_hashrate, current_hashrate
                     ),
                 );
                 self.emit_alert(alert);
             }
 
-            // Détection d'attaque potentielle
+            // Detection d'attaque potentielle
             let total_network_hashrate = self.estimate_network_hashrate();
             if current_hashrate > total_network_hashrate * (self.thresholds.attack_threshold / 100.0) {
                 let alert = Alert::new(
@@ -258,7 +258,7 @@ impl ConsensusAlertManager {
                     },
                     AlertSeverity::Emergency,
                     format!(
-                        "Attaque potentielle détectée: hashrate suspect {:.2} vs réseau {:.2}",
+                        "Attaque potentielle detectede: hashrate suspect {:.2} vs network {:.2}",
                         current_hashrate, total_network_hashrate
                     ),
                 );
@@ -267,7 +267,7 @@ impl ConsensusAlertManager {
         }
     }
 
-    /// Vérifie la stabilité de la difficulté
+    /// Verifies the difficulty stability
     fn check_difficulty_stability(&mut self) {
         if self.difficulties.len() >= 10 {
             let recent_difficulties: Vec<f64> = self.difficulties.iter()
@@ -290,7 +290,7 @@ impl ConsensusAlertManager {
                     },
                     AlertSeverity::Warning,
                     format!(
-                        "Instabilité de difficulté détectée: CV={:.3} (seuil: {:.3})",
+                        "Instability de difficulty detectede: CV={:.3} (seuil: {:.3})",
                         coefficient_variation, self.thresholds.max_difficulty_variance
                     ),
                 );
@@ -299,7 +299,7 @@ impl ConsensusAlertManager {
         }
     }
 
-    /// Vérifie la stagnation de la chaîne
+    /// Verifies the chain stagnation
     fn check_chain_stagnation(&mut self) {
         if let Some(last_time) = self.last_block_time {
             let elapsed = last_time.elapsed();
@@ -317,7 +317,7 @@ impl ConsensusAlertManager {
                     },
                     severity,
                     format!(
-                        "Stagnation de la chaîne: {:?} depuis le dernier bloc (seuil: {:?})",
+                        "Stagnation de la chain: {:?} depuis le last bloc (seuil: {:?})",
                         elapsed, self.thresholds.max_stagnation_time
                     ),
                 );
@@ -326,13 +326,13 @@ impl ConsensusAlertManager {
         }
     }
 
-    /// Estime le hashrate total du réseau
+    /// Estimates the total network hashrate
     fn estimate_network_hashrate(&self) -> f64 {
         if self.hashrates.is_empty() {
             return 0.0;
         }
 
-        // Moyenne mobile sur les 20 dernières mesures
+        // Moving average over the last 20 measurements
         let recent_count = std::cmp::min(20, self.hashrates.len());
         self.hashrates.iter()
             .rev()
@@ -340,9 +340,9 @@ impl ConsensusAlertManager {
             .sum::<f64>() / recent_count as f64
     }
 
-    /// Émet une alerte
+    /// Emits an alert
     fn emit_alert(&mut self, alert: Alert) {
-        // Évite les doublons d'alertes actives
+        // Avoid duplicate active alerts
         if !self.active_alerts.iter().any(|a| 
             std::mem::discriminant(&a.alert_type) == std::mem::discriminant(&alert.alert_type)
         ) {
@@ -353,9 +353,9 @@ impl ConsensusAlertManager {
                 AlertSeverity::Emergency => error!("🔴 URGENCE: {}", alert.message),
             }
 
-            // Envoie l'alerte via le canal
+            // Envoie l'alert via the canal
             if let Err(e) = self.alert_sender.send(alert.clone()) {
-                error!("Erreur envoi alerte: {}", e);
+                error!("Error sending alert: {}", e);
             }
 
             self.active_alerts.push(alert.clone());
@@ -363,7 +363,7 @@ impl ConsensusAlertManager {
         }
     }
 
-    /// Ajoute une alerte à l'historique
+    /// Adds an alert to the history
     fn add_to_history(&mut self, alert: Alert) {
         self.alert_history.push_back(alert);
         if self.alert_history.len() > self.max_history_size {
@@ -371,26 +371,26 @@ impl ConsensusAlertManager {
         }
     }
 
-    /// Résout une alerte active
+    /// Resolves an active alert
     pub fn resolve_alert(&mut self, alert_id: &str) {
         if let Some(alert) = self.active_alerts.iter_mut().find(|a| a.id == alert_id) {
             alert.resolve();
-            info!("✅ Alerte résolue: {}", alert.message);
+            info!("✅ Alerte resolvede: {}", alert.message);
         }
         self.active_alerts.retain(|a| !a.resolved);
     }
 
-    /// Retourne les alertes actives
+    /// Returns active alerts
     pub fn get_active_alerts(&self) -> &[Alert] {
         &self.active_alerts
     }
 
-    /// Retourne l'historique des alertes
+    /// Returns the alert history
     pub fn get_alert_history(&self) -> &VecDeque<Alert> {
         &self.alert_history
     }
 
-    /// Nettoie les alertes résolues anciennes
+    /// Cleans up old resolved alerts
     pub fn cleanup_resolved_alerts(&mut self, max_age: Duration) {
         let cutoff = Instant::now() - max_age;
         self.active_alerts.retain(|alert| {
@@ -398,7 +398,7 @@ impl ConsensusAlertManager {
         });
     }
 
-    /// Retourne les statistiques d'alertes
+    /// Returns alert statistics
     pub fn get_alert_stats(&self) -> AlertStats {
         let total_alerts = self.alert_history.len();
         let active_count = self.active_alerts.len();
@@ -425,7 +425,7 @@ impl ConsensusAlertManager {
     }
 }
 
-/// Statistiques des alertes
+/// Alert statistics
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AlertStats {
     pub total_alerts: usize,
@@ -457,11 +457,11 @@ mod tests {
         let thresholds = AlertThresholds::default();
         let mut manager = ConsensusAlertManager::new(thresholds, tx);
         
-        // Temps de bloc normal - pas d'alerte
+        // Temps de bloc normal - pas d'alert
         manager.update_metrics(Duration::from_secs(60), 1000.0, 100.0, 2.0);
         assert!(rx.try_recv().is_err());
         
-        // Temps de bloc élevé - alerte
+        // Temps de bloc high - alert
         manager.update_metrics(Duration::from_secs(400), 1000.0, 100.0, 2.0);
         let alert = rx.try_recv().unwrap();
         assert!(matches!(alert.alert_type, AlertType::HighBlockTime { .. }));
@@ -473,7 +473,7 @@ mod tests {
         let thresholds = AlertThresholds::default();
         let mut manager = ConsensusAlertManager::new(thresholds, tx);
         
-        // Taux d'orphelins élevé
+        // Taux d'orphelins high
         manager.update_metrics(Duration::from_secs(60), 1000.0, 100.0, 8.0);
         let alert = rx.try_recv().unwrap();
         assert!(matches!(alert.alert_type, AlertType::HighOrphanRate { .. }));
@@ -485,10 +485,10 @@ mod tests {
         let thresholds = AlertThresholds::default();
         let mut manager = ConsensusAlertManager::new(thresholds, tx);
         
-        // Premier point de données
+        // Premier point of data
         manager.update_metrics(Duration::from_secs(60), 1000.0, 100.0, 2.0);
         
-        // Chute importante du hashrate
+        // Chute importante of the hashrate
         manager.update_metrics(Duration::from_secs(60), 600.0, 100.0, 2.0);
         let alert = rx.try_recv().unwrap();
         assert!(matches!(alert.alert_type, AlertType::HashrateDropped { .. }));

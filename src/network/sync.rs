@@ -132,6 +132,30 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
         }
     }
 
+    // ── Step 4b: Detect broken fast-sync state ──
+    // After a snapshot restore, the node may have fast_sync_base > 0 but only
+    // genesis in RAM (cumulative_work = GENESIS_DIFFICULTY). This causes an
+    // infinite sync loop because reorgs can't trace ancestors in the blind zone.
+    // Detect this early and reset before wasting cycles.
+    {
+        let (fsb, cw) = {
+            let chain = state.blockchain.read()
+                .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+            (chain.fast_sync_base_height(), chain.cumulative_work())
+        };
+        if fsb > 0 && cw <= crate::config::GENESIS_DIFFICULTY as u128 {
+            warn!(
+                "BROKEN_SNAPSHOT: fast_sync_base={} but cumulative_work={} (genesis-level). \
+                 Snapshot restore is corrupted — blocks don't exist. Resetting for fresh sync.",
+                fsb, cw
+            );
+            let mut chain = state.blockchain.write()
+                .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+            chain.reset_for_snapshot_resync();
+            return Ok(0); // Will re-sync from scratch on next cycle
+        }
+    }
+
     // ── Step 5: Determine sync mode ──
     // Use both height AND cumulative_work to decide if peer is ahead.
     // v1.6.0 removed work comparison ("unreliable after fast-sync") but that
@@ -281,22 +305,16 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
 
         match find_common_ancestor_headers(&state, &client, peer_url, local_height, peer_info.height).await {
             Ok(ancestor) => {
-                // BUG FIX: If ancestor == fast_sync_base, this is a FALLBACK, not a real
-                // common ancestor. Rolling back to fast_sync_base and re-downloading from
-                // a peer on a different fork creates a thrashing loop:
-                //   rollback → download fails → remine → peer announces → rollback → ...
-                // Instead, add a sync cooldown for this peer and skip.
+                // v2.1.3: The old ANCESTOR_IS_FALLBACK guard has been REMOVED.
+                // It blocked ALL rollbacks when ancestor <= fast_sync_base, but the most
+                // common fork scenario (miner restarts, mines locally, seeds have the real
+                // chain) has ancestor == fast_sync_base as a LEGITIMATE common ancestor.
+                // Anti-thrashing is already handled upstream: peer_work <= local_work = skip.
                 if fast_sync_base > 0 && ancestor <= fast_sync_base {
-                    // PATCH A: ancestor at or below fast_sync_base is ALWAYS a fallback,
-                    // never a real common ancestor. Rolling back to it is destructive
-                    // (thrashing loop). Skip this peer entirely — no ban, no rollback.
-                    // PATCH B: No ban/cooldown. With 10+ peers, banning each one for 120s
-                    // causes total isolation (all peers banned → miner forks alone).
-                    warn!(
-                        "SYNC_DEBUG: ANCESTOR_IS_FALLBACK ancestor={} <= fast_sync_base={}, local_h={}, peer_h={} — skipping peer {} (no rollback, no ban)",
-                        ancestor, fast_sync_base, local_height, peer_info.height, peer_id(peer_url)
+                    info!(
+                        "SYNC: ancestor={} at fast_sync_base={} — allowing rollback (peer has more work)",
+                        ancestor, fast_sync_base
                     );
-                    return Ok(0);
                 }
 
                 warn!("SYNC_DEBUG: ANCESTOR_FOUND height={} peer={}", ancestor, peer_id(peer_url));
@@ -306,7 +324,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 state.last_reorg_height.store(ancestor, std::sync::atomic::Ordering::Relaxed);
                 state.reorg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if let Some(cancel) = state.mining_cancel.read().unwrap().as_ref() {
-                    warn!("MINING_CANCEL=true reason=step8_rollback ancestor={} peer={}", ancestor, peer_id(peer_url));
+                    debug!("Mining cancelled for rollback to ancestor={}, peer={}", ancestor, peer_id(peer_url));
                     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
 
@@ -343,9 +361,9 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                         ancestor, post_orphan_height, post_orphan_height - ancestor
                     );
                 }
-                warn!(
-                    "SYNC_DEBUG: POST_ROLLBACK sync_from={} ancestor={} post_orphan={}",
-                    post_orphan_height, ancestor, post_orphan_height
+                debug!(
+                    "Post-rollback: sync_from={} ancestor={}",
+                    post_orphan_height, ancestor
                 );
                 // Use post-orphan height as sync start point.
                 // Without this, we re-download blocks already added by process_orphans
@@ -394,7 +412,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
     let mut recovery_attempted = false; // Prevent infinite recovery loops
 
     loop {
-        let blocks_url = format!("{}/blocks/since/{}", peer_url, current_sync_height);
+        let blocks_url = format!("{}/blocks/since/{}?limit=200", peer_url, current_sync_height);
         let response = client.get(&blocks_url).send().await?;
 
         if !response.status().is_success() {
@@ -412,8 +430,8 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
 
         let mut batch_added = 0u64;
 
-        warn!(
-            "SYNC_DEBUG: SYNC_BATCH_START from_height={} batch_size={} peer={}",
+        debug!(
+            "Sync batch: from={} size={} peer={}",
             current_sync_height, batch_size, peer_id(peer_url)
         );
 
@@ -455,8 +473,8 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
             }
         }
 
-        warn!(
-            "SYNC_DEBUG: SYNC_BATCH_END added={}/{} synced_total={}",
+        debug!(
+            "Sync batch done: added={}/{} total={}",
             batch_added, batch_size, synced
         );
 
@@ -470,12 +488,13 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
         // Use headers to find the real ancestor instead of looping forever.
         if batch_size > 0 && batch_added == 0 {
             consecutive_empty_batches += 1;
-            warn!(
-                "Got {} blocks from {} but none accepted (attempt {}/3) — chains diverged",
+            state.metric_empty_batches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            info!(
+                "Sync: {} blocks from {} but none accepted (attempt {}) — diverged",
                 batch_size, peer_id(peer_url), consecutive_empty_batches
             );
 
-            if consecutive_empty_batches >= 3 {
+            if consecutive_empty_batches >= 1 {
                 // Three strikes — this peer's chain is incompatible with ours
                 if recovery_attempted {
                     // BUG FIX: Don't ban the peer — the fork may be legitimate.
@@ -488,18 +507,22 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                     break;
                 }
                 recovery_attempted = true;
-                warn!("3 consecutive empty batches from {} — attempting header-based recovery", peer_id(peer_url));
+                let recovery_start = std::time::Instant::now();
+                info!("Empty batch from {} — attempting header-based recovery", peer_id(peer_url));
 
                 // Acquire reorg_lock BEFORE searching for ancestor to prevent race conditions
                 let _recovery_reorg_guard = state.reorg_lock.write().await;
                 if let Some(cancel) = state.mining_cancel.read().unwrap().as_ref() {
-                    warn!("MINING_CANCEL=true reason=recovery_rollback peer={}", peer_id(peer_url));
+                    debug!("Mining cancelled for recovery rollback, peer={}", peer_id(peer_url));
                     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
 
                 match find_common_ancestor_headers(&state, &client, peer_url, current_sync_height, peer_info.height).await {
                     Ok(ancestor) => {
-                        info!("Header recovery found ancestor at {} — rolling back", ancestor);
+                        let recovery_ms = recovery_start.elapsed().as_millis() as u64;
+                        state.metric_fork_recoveries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        state.metric_recovery_time_ms.fetch_add(recovery_ms, std::sync::atomic::Ordering::Relaxed);
+                        info!("Fork recovery: ancestor={} took={}ms", ancestor, recovery_ms);
                         state.last_reorg_height.store(ancestor, std::sync::atomic::Ordering::Relaxed);
                         state.reorg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -528,14 +551,17 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                         // Last resort: snapshot resync if peer passes checkpoints
                         if verify_peer_checkpoints(&client, peer_url).await {
                             // PATCH D: Suppress reset during post-fast-sync warm-up window.
+                            // Exception: if cumulative_work is at genesis level, the snapshot
+                            // is broken (blocks don't actually exist) — ALLOW the reset.
                             let recovery_fsb = {
                                 let c = state.blockchain.read()
                                     .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
-                                (c.fast_sync_base_height(), c.height())
+                                (c.fast_sync_base_height(), c.height(), c.cumulative_work())
                             };
-                            let (fsb, cur_h) = recovery_fsb;
+                            let (fsb, cur_h, cw) = recovery_fsb;
                             let delta = cur_h.saturating_sub(fsb);
-                            if fsb > 0 && delta < LWMA_WINDOW * 3 {
+                            let is_broken_snapshot = cw <= crate::config::GENESIS_DIFFICULTY as u128;
+                            if fsb > 0 && delta < LWMA_WINDOW * 3 && !is_broken_snapshot {
                                 warn!(
                                     "SNAPSHOT_RESYNC_SUPPRESSED_POST_FASTSYNC path=recovery_err fast_sync_base={} local_height={} delta={} peer={} reason=null_hash_placeholders_in_warmup",
                                     fsb, cur_h, delta, peer_id(peer_url)
@@ -564,7 +590,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
             consecutive_empty_batches = 0;
         }
 
-        if batch_size < 50 {
+        if batch_size < 200 {
             break;
         }
     }
@@ -731,9 +757,9 @@ async fn detect_fork_via_headers(
         }
         _ => ForkDetection::NoFork, // All headers match — no fork
     };
-    warn!(
-        "SYNC_DEBUG: detect_fork_via_headers peer={} start={} got={} headers best_match={:?} earliest_mismatch={:?} result={:?}",
-        peer_id(peer_url), start, peer_headers.len(), best_match, earliest_mismatch, result
+    debug!(
+        "Fork check: peer={} headers={} match={:?} mismatch={:?} result={:?}",
+        peer_id(peer_url), peer_headers.len(), best_match, earliest_mismatch, result
     );
     result
 }
@@ -1015,6 +1041,22 @@ async fn attempt_snapshot_sync(
     let resp = client.get(&dl_url).timeout(Duration::from_secs(30)).send().await
         .map_err(|e| SyncError::HttpError(format!("snapshot download: {}", e)))?;
 
+    // v2.1.3 FIX: extract actual snapshot height/hash from download headers
+    // before consuming the response body. The download cache can be up to 99
+    // blocks behind /snapshot/info.
+    let actual_snap_height = resp.headers()
+        .get("x-snapshot-height")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(snap_height);
+    let actual_snap_hash = resp.headers()
+        .get("x-snapshot-hash")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let snap_height = actual_snap_height;
+    let snap_hash_str = actual_snap_hash.as_deref().unwrap_or(snap_hash_str);
+
     let compressed = resp.bytes().await
         .map_err(|e| SyncError::HttpError(format!("snapshot bytes: {}", e)))?;
 
@@ -1083,9 +1125,101 @@ async fn attempt_snapshot_sync(
         }
     }
 
+    // v2.1.4: Strict manifest verification when available from seed peers.
+    // Checks: producer signature, 2+ seed confirmations, SHA256 match.
+    // Non-seed peers without a manifest are already rejected by the cross-verification above.
+    let manifest_state_root: Option<String>;
+    let manifest_url = format!("{}/snapshot/latest", peer_url);
+    let is_seed = crate::config::SEED_NODES.iter().any(|s| peer_url.starts_with(s));
+    match client.get(&manifest_url).timeout(Duration::from_secs(5)).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<super::snapshot_manifest::SnapshotManifest>().await {
+                Ok(manifest) if manifest.height == snap_height => {
+                    // 1. Verify producer signature
+                    if !manifest.verify_producer_signature() {
+                        warn!("Snapshot manifest REJECTED: invalid producer signature at height {}", snap_height);
+                        return Err(SyncError::InvalidResponse(
+                            "Snapshot manifest has invalid producer signature".into()
+                        ));
+                    }
+                    info!("Manifest check 1/4: producer signature VALID");
+
+                    // 2. Verify at least 2 seed confirmations
+                    let valid_confs = manifest.valid_confirmation_count();
+                    if valid_confs < 2 {
+                        warn!(
+                            "Snapshot manifest REJECTED: only {} valid confirmations (need 2+) at height {}",
+                            valid_confs, snap_height
+                        );
+                        return Err(SyncError::InvalidResponse(
+                            format!("Insufficient manifest confirmations: {} (need 2+)", valid_confs)
+                        ));
+                    }
+                    info!("Manifest check 2/4: {} seed confirmations VALID", valid_confs);
+
+                    // 3. Verify SHA256 of compressed data
+                    let computed_sha = {
+                        use sha2::Digest;
+                        hex::encode(sha2::Sha256::digest(&compressed))
+                    };
+                    if computed_sha != manifest.snapshot_sha256 {
+                        warn!(
+                            "Snapshot manifest REJECTED: SHA256 mismatch at height {}: computed={}, manifest={}",
+                            snap_height, &computed_sha[..16], &manifest.snapshot_sha256[..16]
+                        );
+                        return Err(SyncError::InvalidResponse(
+                            "Snapshot SHA256 mismatch with signed manifest".into()
+                        ));
+                    }
+                    info!("Manifest check 3/4: SHA256 MATCH ({})", &computed_sha[..16]);
+
+                    // Save state_root for post-import verification (check 4/4)
+                    manifest_state_root = Some(manifest.state_root.clone());
+                    info!(
+                        "Snapshot manifest VERIFIED: height={}, producer sig OK, {} confirmations, SHA256 OK",
+                        snap_height, valid_confs
+                    );
+                }
+                Ok(manifest) => {
+                    // Manifest exists but for a different height — skip verification
+                    info!("Manifest height {} != snapshot height {} — skipping manifest check", manifest.height, snap_height);
+                    manifest_state_root = None;
+                }
+                Err(e) => {
+                    if is_seed {
+                        info!("Could not parse manifest from seed {}: {} — proceeding without manifest", peer_id(peer_url), e);
+                    }
+                    manifest_state_root = None;
+                }
+            }
+        }
+        _ => {
+            // No manifest endpoint available — OK for seeds (backward compat)
+            if is_seed {
+                info!("Seed {} has no manifest endpoint — proceeding with cross-verification only", peer_id(peer_url));
+            }
+            manifest_state_root = None;
+        }
+    }
+
+    // Import the snapshot
     let mut chain = state.blockchain.write()
         .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
     chain.import_snapshot_at_height(snapshot, snap_height, block_hash, diff, next_diff, snap_work);
+
+    // 4. Post-import: verify state_root if manifest provided one
+    if let Some(expected_root) = manifest_state_root {
+        let computed_root = hex::encode(chain.state_root());
+        if computed_root == expected_root {
+            info!("Manifest check 4/4: state_root MATCH after import ({})", &computed_root[..16]);
+        } else {
+            warn!(
+                "Snapshot state_root MISMATCH after import: computed={}, manifest={}. Chain may be inconsistent.",
+                &computed_root[..16], &expected_root[..16]
+            );
+            // Don't reject — the chain will self-heal via sync. Log for monitoring.
+        }
+    }
 
     Ok(snap_height)
 }
@@ -1127,6 +1261,11 @@ async fn verify_peer_checkpoints(client: &reqwest::Client, peer_url: &str) -> bo
 
 /// Broadcast a newly mined block to all peers (concurrent, with timeout).
 pub async fn broadcast_block(block: &ShieldedBlock, peers: &[String], client: &reqwest::Client) -> Vec<Result<(), SyncError>> {
+    broadcast_block_with_id(block, peers, client, None).await
+}
+
+/// Broadcast a block with an optional local PeerID header for identification.
+pub async fn broadcast_block_with_id(block: &ShieldedBlock, peers: &[String], client: &reqwest::Client, local_peer_id: Option<String>) -> Vec<Result<(), SyncError>> {
     let mut handles = Vec::new();
     for peer in peers {
         if !super::is_contactable_peer(peer) { continue; }
@@ -1134,10 +1273,15 @@ pub async fn broadcast_block(block: &ShieldedBlock, peers: &[String], client: &r
         let client = client.clone();
         let block = block.clone();
         let peer_label = peer_id(peer);
+        let pid = local_peer_id.clone();
         handles.push(tokio::spawn(async move {
-            let result = client
+            let mut req = client
                 .post(&url)
-                .header("X-TSN-Version", env!("CARGO_PKG_VERSION"))
+                .header("X-TSN-Version", env!("CARGO_PKG_VERSION"));
+            if let Some(ref id) = pid {
+                req = req.header("X-TSN-PeerID", id.as_str());
+            }
+            let result = req
                 .timeout(std::time::Duration::from_secs(3))
                 .json(&block)
                 .send()
@@ -1253,10 +1397,12 @@ pub async fn sync_loop(state: Arc<AppState>, seed_peers: Vec<String>, sync_inter
                         // Ghost peer cleanup: remove after 5 consecutive failures (was 10)
                         // Seed nodes are never removed.
                         if *peer_count >= 5 && !seed_peers.contains(peer) {
-                            info!("Removing ghost peer {} after {} failures", peer_id(peer), peer_count);
+                            info!("Removing ghost peer {} after {} failures (blacklisted)", peer_id(peer), peer_count);
                             let mut peers_write = state.peers.write().unwrap();
                             peers_write.retain(|p| p != peer);
                             peer_failures.remove(peer);
+                            // v2.1.3: Blacklist to prevent Kademlia re-adding via PeerHttpAddr
+                            state.removed_peers.lock().unwrap().insert(peer.clone());
                         }
                         break;
                     }

@@ -1,7 +1,7 @@
-//! Intégration du système de gouvernance avec la blockchain TSN
+//! Integration of the system de governance with the blockchain TSN
 //! 
-//! Ce module fournit les interfaces pour intégrer le système de gouvernance
-//! cryptographique avec les autres composants de TSN (consensus, réseau, storage).
+//! This module provides the interfaces for integrate the system de governance
+//! cryptographique with the autres composants de TSN (consensus, network, storage).
 
 use crate::crypto::governance::{GovernanceManager, GovernanceConfig, Proposal, Vote, ProposalId, ConfigParameter, GovernanceError};
 use crate::consensus::signature_scheme::{SignatureSchemeManager, SignatureError};
@@ -11,60 +11,60 @@ use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use thiserror::Error;
 
-/// Événement de gouvernance pour la synchronisation réseau
+/// Event de governance for the synchronization network
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GovernanceEvent {
-    /// Nouvelle proposition créée
+    /// Nouvelle proposition created
     ProposalCreated {
         proposal: Proposal,
         creator_pubkey: SlhDsaPublicKey,
     },
-    /// Vote soumis sur une proposition
+    /// Vote soumis on a proposition
     VoteSubmitted {
         vote: Vote,
     },
-    /// Proposition approuvée et appliquée
+    /// Proposition approved and appliede
     ProposalApplied {
         proposal_id: ProposalId,
         new_config: GovernanceConfig,
         applied_at_height: u64,
     },
-    /// Proposition expirée
+    /// Proposition expired
     ProposalExpired {
         proposal_id: ProposalId,
         expired_at_height: u64,
     },
 }
 
-/// Gestionnaire intégré de gouvernance pour TSN
+/// Manager integrated de governance for TSN
 #[derive(Debug)]
 pub struct TsnGovernanceManager {
-    /// Gestionnaire de gouvernance principal
+    /// Gestionnaire de governance principal
     governance: Arc<RwLock<GovernanceManager>>,
-    /// Gestionnaire de schémas de signature
+    /// Manager de schemas de signature
     signature_manager: SignatureSchemeManager,
-    /// Événements en attente de propagation
+    /// Events in pending de propagation
     pending_events: Arc<RwLock<Vec<GovernanceEvent>>>,
-    /// Historique des configurations
+    /// Historique of configurations
     config_history: Arc<RwLock<HashMap<u64, GovernanceConfig>>>,
 }
 
 #[derive(Error, Debug)]
 pub enum TsnGovernanceError {
-    #[error("Erreur de gouvernance: {0}")]
+    #[error("Governance error: {0}")]
     Governance(#[from] GovernanceError),
-    #[error("Erreur de signature: {0}")]
+    #[error("Signature error: {0}")]
     Signature(#[from] SignatureError),
-    #[error("Hauteur de bloc invalide: {0}")]
+    #[error("Invalid block height: {0}")]
     InvalidBlockHeight(u64),
-    #[error("Configuration non trouvée pour la hauteur: {0}")]
+    #[error("Configuration non founde pour la hauteur: {0}")]
     ConfigNotFound(u64),
-    #[error("Erreur de sérialisation: {0}")]
+    #[error("Serialization error: {0}")]
     Serialization(String),
 }
 
 impl TsnGovernanceManager {
-    /// Crée un nouveau gestionnaire de gouvernance TSN
+    /// Creates a new manager of governance TSN
     pub fn new() -> Self {
         let governance = Arc::new(RwLock::new(GovernanceManager::new()));
         let signature_manager = SignatureSchemeManager::with_governance(
@@ -79,7 +79,7 @@ impl TsnGovernanceManager {
         }
     }
 
-    /// Initialise le système avec un comité de gouvernance initial
+    /// Initializes the system with a committee de governance initial
     pub fn initialize_committee(&self, initial_committee: Vec<SlhDsaPublicKey>) -> Result<(), TsnGovernanceError> {
         let mut governance = self.governance.write().unwrap();
         
@@ -90,7 +90,7 @@ impl TsnGovernanceManager {
         Ok(())
     }
 
-    /// Crée une nouvelle proposition de gouvernance
+    /// Creates a new proposition de governance
     pub fn create_proposal(
         &self,
         creator_key: &SlhDsaSecretKey,
@@ -103,10 +103,10 @@ impl TsnGovernanceManager {
         
         let proposal_id = governance.create_proposal(parameter, current_height, nonce)?;
         
-        // Récupérer la proposition créée pour l'événement
+        // Retrieve the proposition created for l'event
         let proposal = governance.active_proposals.get(&proposal_id).unwrap().clone();
         
-        // Créer l'événement
+        // Create l'event
         let event = GovernanceEvent::ProposalCreated {
             proposal,
             creator_pubkey,
@@ -117,7 +117,7 @@ impl TsnGovernanceManager {
         Ok(proposal_id)
     }
 
-    /// Soumet un vote sur une proposition
+    /// Soumet a vote on a proposition
     pub fn submit_vote(
         &self,
         proposal_id: ProposalId,
@@ -130,7 +130,7 @@ impl TsnGovernanceManager {
         
         governance.submit_vote(proposal_id, voter_key, support, current_height, nonce)?;
         
-        // Récupérer le vote pour l'événement
+        // Retrieve the vote for l'event
         let votes = governance.votes.get(&proposal_id).unwrap();
         let vote = votes.last().unwrap().clone();
         
@@ -140,12 +140,12 @@ impl TsnGovernanceManager {
         Ok(())
     }
 
-    /// Traite les propositions et applique celles qui sont approuvées
+    /// Processes the proposals and applique celles that are approved
     pub fn process_proposals(&self, current_height: u64) -> Result<Vec<GovernanceEvent>, TsnGovernanceError> {
         let mut governance = self.governance.write().unwrap();
         let mut events = Vec::new();
         
-        // Collecter les propositions à traiter
+        // Collect the proposals to process
         let proposal_ids: Vec<_> = governance.active_proposals.keys().cloned().collect();
         
         for proposal_id in proposal_ids {
@@ -153,11 +153,11 @@ impl TsnGovernanceManager {
             
             match status {
                 crate::crypto::governance::ProposalStatus::Approved => {
-                    // Sauvegarder la configuration actuelle
+                    // Save the current configuration
                     let old_config = governance.get_config().clone();
                     self.save_config_to_history(current_height, &old_config);
                     
-                    // Appliquer la proposition
+                    // Appliquer the proposition
                     governance.apply_proposal(proposal_id, current_height)?;
                     
                     let new_config = governance.get_config().clone();
@@ -174,14 +174,14 @@ impl TsnGovernanceManager {
                         expired_at_height: current_height,
                     });
                 }
-                _ => {} // Active ou Rejected, rien à faire
+                _ => {} // Active or Rejected, nothing to do
             }
         }
         
-        // Nettoyer les propositions expirées
+        // Clean up the proposals expireds
         governance.cleanup_expired_proposals(current_height);
         
-        // Ajouter les événements aux événements en attente
+        // Add events to pending events
         for event in &events {
             self.add_pending_event(event.clone());
         }
@@ -189,7 +189,7 @@ impl TsnGovernanceManager {
         Ok(events)
     }
 
-    /// Vérifie si une version de signature est acceptée
+    /// Checks if a version de signature is acceptsde
     pub fn is_signature_version_accepted(
         &self,
         version: crate::consensus::signature_scheme::SignatureVersion,
@@ -198,17 +198,17 @@ impl TsnGovernanceManager {
         Ok(self.signature_manager.is_version_accepted(version, block_height)?)
     }
 
-    /// Retourne la configuration de gouvernance actuelle
+    /// Returns the current governance configuration
     pub fn get_current_config(&self) -> Result<GovernanceConfig, TsnGovernanceError> {
         let governance = self.governance.read().unwrap();
         Ok(governance.get_config().clone())
     }
 
-    /// Retourne la configuration à une hauteur de bloc donnée
+    /// Returns the configuration to a height de bloc data
     pub fn get_config_at_height(&self, height: u64) -> Result<GovernanceConfig, TsnGovernanceError> {
         let history = self.config_history.read().unwrap();
         
-        // Chercher la configuration la plus récente <= height
+        // Chercher the configuration the plus recent <= height
         let mut best_height = 0;
         let mut best_config = None;
         
@@ -222,26 +222,26 @@ impl TsnGovernanceManager {
         best_config.ok_or(TsnGovernanceError::ConfigNotFound(height))
     }
 
-    /// Récupère et vide les événements en attente
+    /// Retrieves and vide the events in pending
     pub fn drain_pending_events(&self) -> Vec<GovernanceEvent> {
         let mut events = self.pending_events.write().unwrap();
         events.drain(..).collect()
     }
 
-    /// Ajoute un membre au comité de gouvernance
+    /// Adds a membre at the committee de governance
     pub fn add_committee_member(&self, pubkey: SlhDsaPublicKey) -> Result<(), TsnGovernanceError> {
         let mut governance = self.governance.write().unwrap();
         governance.add_committee_member(pubkey)?;
         Ok(())
     }
 
-    /// Retourne la liste des membres du comité
+    /// Returns the liste of membres of the committee
     pub fn get_committee_members(&self) -> Vec<SlhDsaPublicKey> {
         let governance = self.governance.read().unwrap();
         governance.committee.clone()
     }
 
-    /// Sérialise l'état de gouvernance pour la persistance
+    /// Serializes l'state de governance for the persistance
     pub fn serialize_state(&self) -> Result<Vec<u8>, TsnGovernanceError> {
         let governance = self.governance.read().unwrap();
         let config_history = self.config_history.read().unwrap();
@@ -252,7 +252,7 @@ impl TsnGovernanceManager {
             .map_err(|e| TsnGovernanceError::Serialization(e.to_string()))
     }
 
-    /// Désérialise et restaure l'état de gouvernance
+    /// Deserializes and restaure l'state de governance
     pub fn deserialize_state(&self, data: &[u8]) -> Result<(), TsnGovernanceError> {
         let (config, history): (GovernanceConfig, HashMap<u64, GovernanceConfig>) = 
             bincode::deserialize(data)
@@ -265,29 +265,29 @@ impl TsnGovernanceManager {
         Ok(())
     }
 
-    /// Valide un événement de gouvernance reçu du réseau
+    /// Validates a event de governance received of the network
     pub fn validate_governance_event(&self, event: &GovernanceEvent) -> Result<bool, TsnGovernanceError> {
         match event {
             GovernanceEvent::VoteSubmitted { vote } => {
-                // Vérifier la signature du vote
+                // Verify the signature of the vote
                 let vote_message = self.create_vote_message_for_validation(vote);
                 vote.voter_pubkey.verify(&vote_message, &vote.signature)
                     .map_err(|_| TsnGovernanceError::Signature(SignatureError::InvalidSignature))?;
                 
-                // Vérifier que le votant est dans le comité
+                // Verify que the votant is in the committee
                 let governance = self.governance.read().unwrap();
                 Ok(governance.committee.contains(&vote.voter_pubkey))
             }
             GovernanceEvent::ProposalCreated { proposal, creator_pubkey } => {
-                // Vérifier l'intégrité du commitment
+                // Verify l'integrity of the commitment
                 let computed_commitment = self.compute_proposal_commitment_for_validation(proposal);
                 Ok(computed_commitment == proposal.commitment)
             }
-            _ => Ok(true), // Autres événements validés lors du traitement
+            _ => Ok(true), // Other events validated during processing
         }
     }
 
-    // Méthodes privées
+    // Methods privates
 
     fn add_pending_event(&self, event: GovernanceEvent) {
         let mut events = self.pending_events.write().unwrap();
@@ -349,21 +349,21 @@ mod tests {
     fn test_proposal_workflow() {
         let manager = TsnGovernanceManager::new();
         
-        // Initialiser le comité
+        // Initialize the committee
         let voter_key = SlhDsaSecretKey::generate(&mut OsRng);
         manager.initialize_committee(vec![voter_key.public_key()]).unwrap();
         
-        // Créer une proposition
+        // Create a proposition
         let parameter = ConfigParameter::SignatureTransitionPeriod(15_000);
         let proposal_id = manager.create_proposal(&voter_key, parameter, 100, 1).unwrap();
         
         // Voter
         manager.submit_vote(proposal_id, &voter_key, true, 150, 1).unwrap();
         
-        // Traiter les propositions
+        // Traiter the proposals
         let events = manager.process_proposals(200).unwrap();
         
-        // Vérifier qu'une proposition a été appliquée
+        // Verify qu'une proposition a been appliede
         assert!(!events.is_empty());
         
         let config = manager.get_current_config().unwrap();
@@ -377,15 +377,15 @@ mod tests {
         
         manager.initialize_committee(vec![voter_key.public_key()]).unwrap();
         
-        // Créer et voter sur une proposition
+        // Create and voter on a proposition
         let parameter = ConfigParameter::SignatureTransitionPeriod(15_000);
         let proposal_id = manager.create_proposal(&voter_key, parameter, 100, 1).unwrap();
         manager.submit_vote(proposal_id, &voter_key, true, 150, 1).unwrap();
         
-        // Récupérer les événements
+        // Retrieve the events
         let events = manager.drain_pending_events();
         
-        // Valider les événements
+        // Validate the events
         for event in &events {
             assert!(manager.validate_governance_event(event).unwrap());
         }
@@ -401,13 +401,13 @@ mod tests {
         // Configuration initiale
         let initial_config = manager.get_current_config().unwrap();
         
-        // Modifier la configuration
+        // Modifier the configuration
         let parameter = ConfigParameter::SignatureTransitionPeriod(15_000);
         let proposal_id = manager.create_proposal(&voter_key, parameter, 100, 1).unwrap();
         manager.submit_vote(proposal_id, &voter_key, true, 150, 1).unwrap();
         manager.process_proposals(200).unwrap();
         
-        // Vérifier l'historique
+        // Verify l'historique
         let config_at_100 = manager.get_config_at_height(100).unwrap();
         assert_eq!(config_at_100.signature_transition_period, initial_config.signature_transition_period);
         
@@ -419,14 +419,14 @@ mod tests {
     fn test_serialization() {
         let manager = TsnGovernanceManager::new();
         
-        // Sérialiser l'état
+        // Serialize l'state
         let serialized = manager.serialize_state().unwrap();
         
-        // Créer un nouveau manager et désérialiser
+        // Create a nouveau manager and deserialize
         let new_manager = TsnGovernanceManager::new();
         new_manager.deserialize_state(&serialized).unwrap();
         
-        // Vérifier que les configurations sont identiques
+        // Verify que the configurations are identiques
         let original_config = manager.get_current_config().unwrap();
         let restored_config = new_manager.get_current_config().unwrap();
         assert_eq!(original_config, restored_config);

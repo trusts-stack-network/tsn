@@ -1,49 +1,49 @@
 //! SLH-DSA (SPHINCS+) post-quantum signatures — FIPS 205
 //!
-//! Implémentation de référence pour TSN. Sécurité post-quantique basée sur
-//! les fonctions de hachage SHA-256 (FIPS 202) et WOTS+/XMSS.
+//! Implementation de reference for TSN. Security post-quantique based sur
+//! the fonctions de hachage SHA-256 (FIPS 202) and WOTS+/XMSS.
 //!
-//! # Paramètres de sécurité
-//! - SLH-DSA-SHA2-128s: 128 bits de sécurité, signatures ~7.8KB, clé publique 32 octets
-//! - SLH-DSA-SHA2-192s: 192 bits de sécurité, signatures ~16KB, clé publique 48 octets
-//! - SLH-DSA-SHA2-256s: 256 bits de sécurité, signatures ~30KB, clé publique 64 octets
+//! # Parameters de security
+//! - SLH-DSA-SHA2-128s: 128 bits de security, signatures ~7.8KB, key publique 32 octets
+//! - SLH-DSA-SHA2-192s: 192 bits de security, signatures ~16KB, key publique 48 octets
+//! - SLH-DSA-SHA2-256s: 256 bits de security, signatures ~30KB, key publique 64 octets
 //!
-//! # Références
+//! # References
 //! - FIPS 205: <https://csrc.nist.gov/pubs/fips/205/final>
-//! - SPHINCS+ paper: Bernstein et al., "SPHINCS+ — A Stateless Hash-Based Signature Scheme"
+//! - SPHINCS+ paper: Bernstein and al., "SPHINCS+ — A Stateless Hash-Based Signature Scheme"
 
 use crate::crypto::hash::hash;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-/// Paramètres SLH-DSA-SHA2-128s (recommandé pour TSN)
-/// Sécurité: 128 bits classique / 64 bits post-quantique
+/// Parameters SLH-DSA-SHA2-128s (recommended for TSN)
+/// Security: 128 bits classique / 64 bits post-quantique
 pub const SLH_PARAM_N: usize = 16; // Longueur des hashes
-pub const SLH_PARAM_H: usize = 66; // Hauteur hypertree
-pub const SLH_PARAM_D: usize = 22; // Nombre de couches
-pub const SLH_PARAM_A: usize = 6; // Taille WOTS
-pub const SLH_PARAM_K: usize = 33; // Nombre de chaînes FORS
-pub const SLH_PARAM_W: u32 = 16; // Paramètre Winternitz
+pub const SLH_PARAM_H: usize = 66; // Hypertree height
+pub const SLH_PARAM_D: usize = 22; // Number of layers
+pub const SLH_PARAM_A: usize = 6; // WOTS size
+pub const SLH_PARAM_K: usize = 33; // Number of chains FORS
+pub const SLH_PARAM_W: u32 = 16; // Parameter Winternitz
 
-/// Taille de la clé publique SLH-DSA-SHA2-128s (32 octets)
-/// CORRECTION: était 64, corrigé à 32 pour SLH-DSA-SHA2-128s
+/// Size de the key publique SLH-DSA-SHA2-128s (32 octets)
+/// CORRECTION: was 64, corrected to 32 for SLH-DSA-SHA2-128s
 pub const SLH_PUBLIC_KEY_SIZE: usize = 32;
-/// Alias pour le validateur de signatures (taille clé publique)
+/// Alias for the validateur de signatures (size key publique)
 pub const PK_BYTES: usize = SLH_PUBLIC_KEY_SIZE;
-/// Taille de la clé privée SLH-DSA-SHA2-128s (64 octets)
+/// Size de the key private SLH-DSA-SHA2-128s (64 bytes)
 pub const SLH_SECRET_KEY_SIZE: usize = 64;
-/// Taille de la signature SLH-DSA-SHA2-128s (~7.8KB)
+/// Size de the signature SLH-DSA-SHA2-128s (~7.8KB)
 pub const SLH_SIGNATURE_SIZE: usize = 7856;
-/// Alias pour le validateur de signatures (taille signature)
+/// Alias for the validateur de signatures (size signature)
 pub const SIG_BYTES: usize = SLH_SIGNATURE_SIZE;
 
-/// Clé publique SLH-DSA
+/// Key publique SLH-DSA
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicKey {
     pub bytes: [u8; SLH_PUBLIC_KEY_SIZE],
 }
 
-/// Helper serde pour les tableaux de 64 octets
+/// Helper serde for the tableaux de 64 octets
 mod serde_sk_bytes {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use super::SLH_SECRET_KEY_SIZE;
@@ -58,7 +58,7 @@ mod serde_sk_bytes {
     }
 }
 
-/// Clé secrète SLH-DSA
+/// Key secret SLH-DSA
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SecretKey {
     #[serde(with = "serde_sk_bytes")]
@@ -72,7 +72,7 @@ pub struct Signature {
 }
 
 impl PublicKey {
-    /// Crée une clé publique à partir de bytes
+    /// Creates a key public to partir de bytes
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != SLH_PUBLIC_KEY_SIZE {
             return None;
@@ -82,14 +82,14 @@ impl PublicKey {
         Some(Self { bytes: key_bytes })
     }
 
-    /// Exporte la clé publique en bytes
+    /// Exporte the key publique in bytes
     pub fn to_bytes(&self) -> [u8; SLH_PUBLIC_KEY_SIZE] {
         self.bytes
     }
 }
 
 impl SecretKey {
-    /// Génère une paire de clés SLH-DSA
+    /// Generates a paire de keys SLH-DSA
     pub fn generate() -> (Self, PublicKey) {
         let mut rng = rand::thread_rng();
         let mut bytes = [0u8; SLH_SECRET_KEY_SIZE];
@@ -100,10 +100,10 @@ impl SecretKey {
         (sk, pk)
     }
 
-    /// Dérive la clé publique à partir de la clé secrète
+    /// Derives the key public to partir de the key secret
     fn derive_public_key(&self) -> PublicKey {
-        // Pour SLH-DSA, la clé publique est dérivée des premiers 32 octets de la clé secrète
-        // via une fonction de hachage
+        // Pour SLH-DSA, the key public is derived of firsts 32 bytes de the key secret
+        // via a fonction de hachage
         let hash_result = hash(&self.bytes);
         let mut pk_bytes = [0u8; SLH_PUBLIC_KEY_SIZE];
         pk_bytes.copy_from_slice(&hash_result.0[..SLH_PUBLIC_KEY_SIZE]);
@@ -111,7 +111,7 @@ impl SecretKey {
         PublicKey { bytes: pk_bytes }
     }
 
-    /// Crée une clé secrète à partir de bytes
+    /// Creates a key secret to partir de bytes
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != SLH_SECRET_KEY_SIZE {
             return None;
@@ -121,14 +121,14 @@ impl SecretKey {
         Some(Self { bytes: key_bytes })
     }
 
-    /// Exporte la clé secrète en bytes
+    /// Exporte the key secret in bytes
     pub fn to_bytes(&self) -> [u8; SLH_SECRET_KEY_SIZE] {
         self.bytes
     }
 }
 
 impl Signature {
-    /// Crée une signature à partir de bytes
+    /// Creates a signature to partir de bytes
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != SLH_SIGNATURE_SIZE {
             return None;
@@ -138,42 +138,42 @@ impl Signature {
         })
     }
 
-    /// Exporte la signature en bytes
+    /// Exporte the signature in bytes
     pub fn to_bytes(&self) -> &[u8] {
         &self.bytes
     }
 }
 
-/// Signe un message avec SLH-DSA
+/// Signe a message with SLH-DSA
 ///
 /// # Security
-/// Cette implémentation est un schéma simplifié pour le développement.
-/// En production, utiliser une crate auditée comme `pqcrypto-sphincsplus`.
+/// This implementation is a schema simplified for the development.
+/// En production, utiliser a crate audited like `pqcrypto-sphincsplus`.
 ///
-/// Schéma simplifié :
-/// 1. R = HASH(SK || message) — nonce déterministe
-/// 2. signature = R || HASH(PK || R || message) (répété pour remplir la taille)
+/// Schema simplified :
+/// 1. R = HASH(SK || message) — deterministic nonce
+/// 2. signature = R || HASH(PK || R || message) (repeated to fill size)
 pub fn sign(sk: &SecretKey, message: &[u8]) -> Signature {
     let pk = sk.derive_public_key();
     let mut sig_bytes = Vec::with_capacity(SLH_SIGNATURE_SIZE);
 
-    // Étape 1 : Nonce déterministe R = HASH(SK || message)
+    // Step 1 : Nonce deterministic R = HASH(SK || message)
     let mut r_input = sk.bytes.to_vec();
     r_input.extend_from_slice(message);
     let r = hash(&r_input);
 
-    // Les 32 premiers octets sont le nonce R
+    // Les 32 premiers octets are the nonce R
     sig_bytes.extend_from_slice(&r.0);
 
-    // Étape 2 : Preuve = HASH(PK || R || message)
+    // Step 2 : Preuve = HASH(PK || R || message)
     let mut proof_input = pk.bytes.to_vec();
     proof_input.extend_from_slice(&r.0);
     proof_input.extend_from_slice(message);
     let proof = hash(&proof_input);
     sig_bytes.extend_from_slice(&proof.0);
 
-    // Remplissage avec des blocs chaînés pour atteindre SLH_SIGNATURE_SIZE
-    // Chaque bloc supplémentaire = HASH(proof || block_index)
+    // Remplissage with blocs chained for atteindre SLH_SIGNATURE_SIZE
+    // Chaque bloc additional = HASH(proof || block_index)
     while sig_bytes.len() < SLH_SIGNATURE_SIZE {
         let idx = (sig_bytes.len() / 32) as u64;
         let mut block_input = proof.0.to_vec();
@@ -187,43 +187,43 @@ pub fn sign(sk: &SecretKey, message: &[u8]) -> Signature {
     Signature { bytes: sig_bytes }
 }
 
-/// Vérifie une signature SLH-DSA
+/// Verifies a signature SLH-DSA
 ///
 /// # Security
-/// Cette implémentation est un schéma simplifié. En production, utiliser
-/// une implémentation formellement vérifiée (pqcrypto-sphincsplus).
+/// This implementation is a schema simplified. En production, utiliser
+/// a implementation formellement verifiede (pqcrypto-sphincsplus).
 ///
-/// Vérification :
-/// 1. Extraire R (32 premiers octets) et proof (32 octets suivants)
+/// Verification :
+/// 1. Extraire R (32 premiers octets) and proof (32 octets suivants)
 /// 2. Recalculer expected_proof = HASH(PK || R || message)
-/// 3. Comparer en temps constant
+/// 3. Comparer in temps constant
 pub fn verify(pk: &PublicKey, message: &[u8], signature: &Signature) -> bool {
     if signature.bytes.len() != SLH_SIGNATURE_SIZE {
         return false;
     }
 
-    // Extraire R et proof de la signature
+    // Extraire R and proof de the signature
     let r = &signature.bytes[0..32];
     let proof = &signature.bytes[32..64];
 
-    // Recalculer la preuve attendue : HASH(PK || R || message)
+    // Recalculer the preuve attendue : HASH(PK || R || message)
     let mut proof_input = pk.bytes.to_vec();
     proof_input.extend_from_slice(r);
     proof_input.extend_from_slice(message);
     let expected_proof = hash(&proof_input);
 
-    // Comparaison en temps constant pour éviter les attaques temporelles
+    // Comparaison in temps constant for avoidr the attaques temporelles
     constant_time_eq(proof, &expected_proof.0)
 }
 
-/// Vérifie une signature SLH-DSA de manière constante (résistant aux attaques temporelles)
+/// Verifies a signature SLH-DSA de manner constante (resistant aux attaques temporelles)
 pub fn verify_constant_time(pk: &PublicKey, message: &[u8], signature: &Signature) -> bool {
-    // verify() utilise déjà une comparaison en temps constant
+    // verify() utilise already a comparison in temps constant
     verify(pk, message, signature)
 }
 
-/// Comparaison en temps constant de deux tranches de bytes
-/// Résiste aux attaques par canal auxiliaire (timing side-channel)
+/// Comparaison in temps constant de deux tranches de bytes
+/// Resists aux attaques par canal auxiliaire (timing side-channel)
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -235,14 +235,14 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Signeur SLH-DSA pour l'intégration avec le consensus
+/// Signeur SLH-DSA for l'integration with the consensus
 pub struct SlhDsaSigner {
     secret_key: SecretKey,
-    counter: u64, // Compteur pour les signatures stateful
+    counter: u64, // Counter for stateful signatures
 }
 
 impl SlhDsaSigner {
-    /// Crée un nouveau signeur avec une clé secrète
+    /// Creates a new signeur with a key secret
     pub fn new(secret_key: SecretKey) -> Self {
         Self {
             secret_key,
@@ -250,9 +250,9 @@ impl SlhDsaSigner {
         }
     }
     
-    /// Signe un message avec le compteur actuel.
-    /// Le compteur est concaténé au message avant signature pour garantir
-    /// qu'une même clé ne signe jamais deux fois le même input.
+    /// Signe a message with the counter actuel.
+    /// Le counter is concatenated at the message before signature for garantir
+    /// qu'une same key not signe jamais deux fois the same input.
     pub fn sign_with_counter(&mut self, message: &[u8]) -> (Signature, u64) {
         let counter = self.counter;
         let mut message_with_counter = message.to_vec();
@@ -262,35 +262,35 @@ impl SlhDsaSigner {
         (sig, counter)
     }
     
-    /// Obtient la clé publique associée
+    /// Gets the key public associated
     pub fn public_key(&self) -> PublicKey {
         self.secret_key.derive_public_key()
     }
     
-    /// Obtient le compteur actuel
+    /// Gets the counter actuel
     pub fn counter(&self) -> u64 {
         self.counter
     }
 }
 
-/// Vérificateur SLH-DSA
+/// Verifier SLH-DSA
 pub struct SlhDsaVerifier {
     public_key: PublicKey,
 }
 
 impl SlhDsaVerifier {
-    /// Crée un nouveau vérificateur avec une clé publique
+    /// Creates a new verifier with a key public
     pub fn new(public_key: PublicKey) -> Self {
         Self { public_key }
     }
     
-    /// Vérifie une signature avec un compteur
+    /// Verifies a signature with a compteur
     pub fn verify(&self, message: &[u8], signature: &[u8], counter: u64) -> Result<(), SlhDsaError> {
         let sig = Signature::from_bytes(signature)
             .ok_or(SlhDsaError::InvalidSignature)?;
         
-        // Vérification du compteur (pour les signatures stateful)
-        // En pratique, le compteur est inclus dans le message signé
+        // Counter verification (for stateful signatures)
+        // En pratique, the counter is inclus in the message signed
         let mut message_with_counter = message.to_vec();
         message_with_counter.extend_from_slice(&counter.to_le_bytes());
         
@@ -302,7 +302,7 @@ impl SlhDsaVerifier {
     }
 }
 
-/// Erreurs SLH-DSA
+/// Errors SLH-DSA
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlhDsaError {
     InvalidSignature,
@@ -324,21 +324,21 @@ impl std::fmt::Display for SlhDsaError {
 
 impl std::error::Error for SlhDsaError {}
 
-/// Vérifie une signature SLH-DSA à partir de bytes bruts.
+/// Verifies a signature SLH-DSA to partir de bytes bruts.
 ///
-/// API de haut niveau pour le validateur de signatures. Prend les bytes bruts
-/// du message, de la signature et de la clé publique, et retourne si la
-/// signature est valide.
+/// API de haut niveau for the validateur de signatures. Prend the bytes bruts
+/// of the message, de the signature and de the key publique, and returns if la
+/// signature is valid.
 ///
 /// # Arguments
-/// * `message` - Le message signé
+/// * `message` - Le message signed
 /// * `signature_bytes` - La signature (SLH_SIGNATURE_SIZE octets)
-/// * `public_key_bytes` - La clé publique (SLH_PUBLIC_KEY_SIZE octets)
+/// * `public_key_bytes` - La key publique (SLH_PUBLIC_KEY_SIZE octets)
 ///
 /// # Returns
-/// * `Ok(true)` si la signature est valide
-/// * `Ok(false)` si la signature est invalide
-/// * `Err(SlhDsaError)` si les entrées ont un format incorrect
+/// * `Ok(true)` if the signature is valid
+/// * `Ok(false)` if the signature is invalid
+/// * `Err(SlhDsaError)` if the entries ont a format incorrect
 pub fn verify_signature(
     message: &[u8],
     signature_bytes: &[u8],
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_public_key_size_constant() {
-        // Vérification critique: la clé publique doit faire 32 octets pour SLH-DSA-SHA2-128s
+        // Verification critique: the key publique must faire 32 octets for SLH-DSA-SHA2-128s
         assert_eq!(SLH_PUBLIC_KEY_SIZE, 32);
         assert_eq!(SLH_SECRET_KEY_SIZE, 64);
         assert_eq!(SLH_SIGNATURE_SIZE, 7856);
@@ -385,7 +385,7 @@ mod tests {
         let message = b"Original message";
         let sig = sign(&sk, message);
         
-        // La signature doit être valide pour le message original
+        // La signature must be valid for the message original
         assert!(verify(&pk, message, &sig));
     }
 
@@ -418,7 +418,7 @@ mod tests {
         let message = b"Test message";
         let (sig, counter) = signer.sign_with_counter(message);
 
-        // La vérification doit réussir avec le bon compteur
+        // La verification must succeed with the bon compteur
         assert!(verifier.verify(message, &sig.to_bytes(), counter).is_ok());
     }
 
@@ -445,7 +445,7 @@ mod tests {
     fn test_truncated_signature_rejected() {
         let (sk, pk) = SecretKey::generate();
         let sig = sign(&sk, b"test");
-        // Tronquer la signature
+        // Tronquer the signature
         let truncated = Signature::from_bytes(&sig.bytes[..SLH_SIGNATURE_SIZE - 1]);
         assert!(truncated.is_none());
     }
@@ -461,7 +461,7 @@ mod tests {
     fn test_corrupted_signature_rejected() {
         let (sk, pk) = SecretKey::generate();
         let sig = sign(&sk, b"test message");
-        // Corrompre chaque section critique de la signature
+        // Corrompre each section critique de the signature
         for corrupt_pos in [0, 16, 31, 32, 48, 63] {
             let mut bad = sig.bytes.clone();
             bad[corrupt_pos] ^= 0xFF;
@@ -500,7 +500,7 @@ mod tests {
         let msg = b"deterministic check";
         let sig1 = sign(&sk, msg);
         let sig2 = sign(&sk, msg);
-        // SLH-DSA simplifié est déterministe (R = HASH(SK || message))
+        // SLH-DSA simplified is deterministic (R = HASH(SK || message))
         assert_eq!(sig1.bytes, sig2.bytes);
     }
 
@@ -567,9 +567,9 @@ mod tests {
         assert!(verify_signature(msg, &sig.bytes, &pk.bytes).unwrap());
         // Mauvais message
         assert!(!verify_signature(b"wrong", &sig.bytes, &pk.bytes).unwrap());
-        // Mauvaise taille clé
+        // Mauvaise size key
         assert!(verify_signature(msg, &sig.bytes, &[0u8; 16]).is_err());
-        // Mauvaise taille signature
+        // Mauvaise size signature
         assert!(verify_signature(msg, &[0u8; 100], &pk.bytes).is_err());
     }
 
@@ -582,9 +582,9 @@ mod tests {
         let message = b"counter test";
         let (sig, counter) = signer.sign_with_counter(message);
 
-        // Bon compteur → OK
+        // Bon counter → OK
         assert!(verifier.verify(message, &sig.to_bytes(), counter).is_ok());
-        // Mauvais compteur → rejeté
+        // Mauvais counter → rejected
         assert!(verifier.verify(message, &sig.to_bytes(), counter + 1).is_err());
     }
 }

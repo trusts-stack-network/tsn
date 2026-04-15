@@ -1,15 +1,15 @@
-// Il est important de s'assurer que ce fichier n'introduit pas de vulnérabilités dans le code
-// La présence de ce fichier dans les erreurs de compilation suggère qu'il pourrait contenir
-// des éléments qui ne sont pas sécurisés ou qui ne sont pas conformes aux bonnes pratiques
+// Il is important de s'assurer que this file n'introduit pas de vulnerabilities in the code
+// La presence de this file in the errors de compilation sugmanages qu'il pourrait contenir
+// of elements that not are pas secures or that not are pas conformes aux bonnes pratiques
 
-// Il faudrait revoir le contenu de ce fichier et le corriger ou le supprimer si nécessaire
-// Pour l'exemple, on suppose que ce fichier contient une fonction vulnérable qui a été écrite
-// pour des tests ou des fins de démonstration, mais qui ne devrait pas être utilisée en production
+// Il faudrait revoir the contenu de this file and the corriger or the delete if necessary
+// Pour l'exemple, on suppose que this file contient a fonction vulnerable that a been writtene
+// for tests or of fins de demonstration, but that not should pas be used in production
 
-// Exemple de fonction vulnérable
+// Exemple de fonction vulnerable
 // pub fn fonction_vulnerable() {
 //     // ...
 // }
 
-// Dans le cas où cette fonction n'est pas nécessaire, il est préférable de la supprimer
-// pour éviter toute vulnérabilité potentielle
+// Dans the cas where this fonction n'est pas necessary, il is preferable de the delete
+// for avoidr toute vulnerability potentielle

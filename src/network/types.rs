@@ -108,7 +108,7 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const TIMESTAMP_TOLERANCE: Duration = Duration::from_secs(120);
 
-/// Encode un message avec un header de taille (4 bytes little-endian)
+/// Encodes a message with a size header (4 bytes little-endian)
 pub async fn write_message(stream: &mut TcpStream, msg: &TsnMessage) -> Result<(), NetworkError> {
     let encoded = bincode::serialize(msg)?;
     let len = encoded.len() as u32;
@@ -125,7 +125,7 @@ pub async fn write_message(stream: &mut TcpStream, msg: &TsnMessage) -> Result<(
     Ok(())
 }
 
-/// Lit un message avec vérification de taille
+/// Reads a message with size verification
 pub async fn read_message(stream: &mut TcpStream) -> Result<TsnMessage, NetworkError> {
     let mut len_bytes = [0u8; 4];
     stream.read_exact(&mut len_bytes).await?;

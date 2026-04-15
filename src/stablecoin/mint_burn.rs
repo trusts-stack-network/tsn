@@ -1,12 +1,12 @@
-// ZST — Logique d'exécution Mint/Burn
-// Applique les opérations sur l'état de la réserve
+// ZST — Logique d'execution Mint/Burn
+// Applique the operations sur l'state de the reserve
 
 use crate::stablecoin::config::StablecoinConfig;
 use crate::stablecoin::errors::StablecoinError;
 use crate::stablecoin::reserve::ReserveEngine;
 use crate::stablecoin::types::*;
 
-/// Gestionnaire des opérations mint/burn
+/// Gestionnaire of operations mint/burn
 pub struct MintBurnManager {
     engine: ReserveEngine,
 }
@@ -22,7 +22,7 @@ impl MintBurnManager {
         &self.engine
     }
 
-    /// Exécute un mint ZST: dépose TSN, reçoit ZST
+    /// Executes a mint ZST: deposits TSN, receives ZST
     pub fn execute_mint_zst(
         &self,
         state: &mut ReserveState,
@@ -33,7 +33,7 @@ impl MintBurnManager {
 
         let result = self.engine.simulate_mint_zst(state, request.amount_in)?;
 
-        // Vérifier slippage
+        // Verify slippage
         if result.amount_out < request.min_amount_out {
             return Err(StablecoinError::SlippageExceeded {
                 actual: result.amount_out,
@@ -41,7 +41,7 @@ impl MintBurnManager {
             });
         }
 
-        // Appliquer sur l'état
+        // Apply sur l'state
         state.reserve_tsn += result.amount_in - result.fee + result.fee_reserve;
         state.treasury_tsn += result.fee_treasury;
         state.supply_zst += result.amount_out;
@@ -49,7 +49,7 @@ impl MintBurnManager {
         Ok(result)
     }
 
-    /// Exécute un burn ZST: brûle ZST, récupère TSN
+    /// Executes a burn ZST: burns ZST, retrieves TSN
     pub fn execute_burn_zst(
         &self,
         state: &mut ReserveState,
@@ -58,10 +58,10 @@ impl MintBurnManager {
     ) -> Result<MintBurnResult, StablecoinError> {
         self.validate_common(state, current_timestamp)?;
 
-        // Vérifier circuit breaker (sauf en mode survie où burn ZST reste OK)
+        // Verify circuit breaker (sauf in mode survie where burn ZST reste OK)
         let is_survival = self.is_circuit_breaker_active(state, current_timestamp);
         if is_survival {
-            // En mode survie, seul le burn ZST est autorisé, mais avec frais max
+            // En mode survie, seul the burn ZST is authorized, but with fees max
         }
 
         let result =
@@ -75,7 +75,7 @@ impl MintBurnManager {
             });
         }
 
-        // Appliquer sur l'état
+        // Apply sur l'state
         let tsn_gross = self
             .engine
             .zst_to_tsn(request.amount_in, state.last_price.tsn_per_xau)?;
@@ -85,7 +85,7 @@ impl MintBurnManager {
         state.supply_zst -= request.amount_in;
         state.current_block_burned_zst += request.amount_in;
 
-        // Vérifier si on doit activer le circuit breaker
+        // Verify if on must activer the circuit breaker
         let ratio = self.engine.calculate_ratio(state)?;
         if ratio < self.engine.config.circuit_breaker_ratio
             && state.circuit_breaker_activated == 0
@@ -96,7 +96,7 @@ impl MintBurnManager {
         Ok(result)
     }
 
-    /// Exécute un mint ZRS: dépose TSN, reçoit ZRS
+    /// Executes a mint ZRS: deposits TSN, receives ZRS
     pub fn execute_mint_zrs(
         &self,
         state: &mut ReserveState,
@@ -124,7 +124,7 @@ impl MintBurnManager {
         Ok(result)
     }
 
-    /// Exécute un burn ZRS: brûle ZRS, récupère TSN
+    /// Executes a burn ZRS: burns ZRS, retrieves TSN
     pub fn execute_burn_zrs(
         &self,
         state: &mut ReserveState,
@@ -159,7 +159,7 @@ impl MintBurnManager {
         Ok(result)
     }
 
-    /// Dispatch une requête vers la bonne méthode
+    /// Dispatch a request to the bonne method
     pub fn execute(
         &self,
         state: &mut ReserveState,
@@ -174,13 +174,13 @@ impl MintBurnManager {
         }
     }
 
-    /// Réinitialise le tracking cooldown pour un nouveau bloc
+    /// Resets the tracking cooldown for a nouveau bloc
     pub fn new_block(&self, state: &mut ReserveState, block_height: u64) {
         state.current_block_burned_zst = 0;
         state.current_block_height = block_height;
     }
 
-    /// Désactive le circuit breaker si expiré
+    /// Disables the circuit breaker if expired
     pub fn check_circuit_breaker_expiry(&self, state: &mut ReserveState, current_timestamp: u64) {
         if state.circuit_breaker_activated > 0 {
             let expiry =
@@ -191,7 +191,7 @@ impl MintBurnManager {
         }
     }
 
-    // --- Helpers privés ---
+    // --- Helpers privates ---
 
     fn validate_common(
         &self,

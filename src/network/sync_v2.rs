@@ -102,7 +102,7 @@ pub struct SyncProgress {
     pub failed_downloads: u64,
 }
 
-/// Manages parallel block synchronization.
+/// Handles parallel block synchronization.
 pub struct ParallelSyncManager {
     config: SyncConfig,
     state: Arc<AppState>,

@@ -15,14 +15,14 @@ enum RpcRequest {
     // Autres demandes RPC
 }
 
-// Type de réponse RPC
+// Type de response RPC
 #[derive(Debug, Clone)]
 enum RpcResponse {
     Handshake {
         version: String,
         capabilities: Vec<String>,
     },
-    // Autres réponses RPC
+    // Autres responses RPC
 }
 
 // Comportement RPC
@@ -46,12 +46,12 @@ impl RpcBehaviour {
         peer_id: PeerId,
         request: RpcRequest,
     ) -> Result<(), std::io::Error> {
-        // Envoi de la demande RPC
+        // Send the RPC request
         // ...
     }
 
     async fn recv_rpc(&self, peer_id: PeerId) -> Result<RpcResponse, std::io::Error> {
-        // Réception de la réponse RPC
+        // Receive the RPC response
         // ...
     }
 }

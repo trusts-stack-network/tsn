@@ -1,12 +1,12 @@
-//! Validation des signatures de blocs et transactions
-//! Support hybride ML-DSA-65 (legacy) et SLH-DSA (nouveau)
+//! Block and transaction signature validation
+//! Support hybride ML-DSA-65 (legacy) and SLH-DSA (nouveau)
 //! 
 //! INVARIANTS:
-//! - Une clé ne peut être utilisée qu'une seule fois dans SLH-DSA
-//! - Les adresses de signature doivent être monotonically increasing
-//! - La transition entre ML-DSA et SLH-DSA est gérée par un point d'activation
+//! - A key can only be used once in SLH-DSA
+//! - Les addresses de signature doivent be monotonically increasing
+//! - The transition between ML-DSA and SLH-DSA is managed by an activation point
 //!
-//! ## Références
+//! ## References
 //! - FIPS 204: Module-Lattice-Based Digital Signature Standard (ML-DSA)
 //! - FIPS 205: Stateless Hash-Based Digital Signature Standard (SLH-DSA)
 
@@ -19,19 +19,19 @@ use std::collections::HashSet;
 
 #[derive(Debug, Error)]
 pub enum SignatureError {
-    #[error("Signature invalide: {0}")]
+    #[error("Invalid signature: {0}")]
     InvalidSignature(String),
-    #[error("Clé SLH-DSA réutilisée: {0}")]
+    #[error("Key SLH-DSA reused: {0}")]
     SlhDsaKeyReuse(String),
-    #[error("Adresse de signature invalide: {0}")]
+    #[error("Invalid signature address: {0}")]
     InvalidSignatureAddress(u64),
-    #[error("Schéma de signature non supporté: {0}")]
+    #[error("Schema de signature non supported: {0}")]
     UnsupportedScheme(String),
-    #[error("Erreur cryptographique: {0}")]
+    #[error("Cryptographic error: {0}")]
     CryptoError(#[from] CryptoError),
-    #[error("Erreur SLH-DSA: {0}")]
+    #[error("SLH-DSA error: {0}")]
     SlhDsaError(String),
-    #[error("Taille de signature invalide: attendu {expected}, reçu {actual}")]
+    #[error("Invalid signature size: expected {expected}, received {actual}")]
     InvalidSignatureSize { expected: usize, actual: usize },
 }
 
@@ -41,17 +41,17 @@ impl From<slh_dsa_impl::SlhDsaError> for SignatureError {
     }
 }
 
-/// Point d'activation pour la transition ML-DSA → SLH-DSA
-const SLH_DSA_ACTIVATION_HEIGHT: u64 = 1_000_000; // À calibrer avec l'équipe
+/// Activation point for the ML-DSA → SLH-DSA transition
+const SLH_DSA_ACTIVATION_HEIGHT: u64 = 1_000_000; // To be calibrated with the team
 
-/// Paramètres SLH-DSA par défaut pour le consensus
+/// Default SLH-DSA parameters for consensus
 const DEFAULT_SLH_DSA_PARAMS: slh_dsa_impl::SlhDsaParameterSet = slh_dsa_impl::SlhDsaParameterSet::Sha2_128s;
 
-/// Validateur de signatures pour le consensus
+/// Signature validator for consensus
 pub struct SignatureValidator {
-    /// Ensemble des clés SLH-DSA déjà utilisées (empêche la réutilisation)
+    /// Set of already used SLH-DSA keys (prevents reuse)
     used_slh_keys: HashSet<[u8; 32]>,
-    /// Adresse de signature actuelle pour SLH-DSA
+    /// Current SLH-DSA signature address
     current_signature_address: u64,
 }
 
@@ -63,14 +63,14 @@ impl SignatureValidator {
         }
     }
 
-    /// Valide la signature d'un bloc en fonction de sa hauteur
+    /// Validates the signature d'un bloc in fonction de sa hauteur
     pub fn validate_block_signature(
         &mut self,
         block: &Block,
         public_key: &PublicKey,
         signature: &Signature,
     ) -> Result<(), SignatureError> {
-        // Détermine le schéma de signature à utiliser
+        // Determine the signature scheme to use
         let scheme = self.get_signature_scheme(block.header.height);
         
         match scheme {
@@ -83,7 +83,7 @@ impl SignatureValidator {
         }
     }
 
-    /// Valide la signature d'une transaction
+    /// Validates a transaction's signature
     pub fn validate_transaction_signature(
         &mut self,
         tx: &Transaction,
@@ -98,7 +98,7 @@ impl SignatureValidator {
                 self.validate_mldsa_signature(tx, public_key, signature)
             }
             SignatureScheme::SlhDsa => {
-                // Pour les transactions, on utilise une adresse dérivée du hash
+                // For transactions, we use an address derived from the hash
                 let signature_address = self.derive_signature_address(tx);
                 self.validate_slh_signature_with_address(
                     tx,
@@ -110,7 +110,7 @@ impl SignatureValidator {
         }
     }
 
-    /// Détermine le schéma de signature à utiliser selon la hauteur du bloc
+    /// Determine the signature scheme to use selon the height of the bloc
     fn get_signature_scheme(&self, block_height: u64) -> SignatureScheme {
         if block_height >= SLH_DSA_ACTIVATION_HEIGHT {
             SignatureScheme::SlhDsa
@@ -119,20 +119,20 @@ impl SignatureValidator {
         }
     }
 
-    /// Valide une signature ML-DSA-65 (legacy)
+    /// Validates an ML-DSA-65 signature (legacy)
     fn validate_mldsa_signature(
         &self,
         data: &impl AsRef<[u8]>,
         public_key: &PublicKey,
         signature: &Signature,
     ) -> Result<(), SignatureError> {
-        // Appelle la validation ML-DSA-65 du module crypto
+        // Call the crypto module's ML-DSA-65 validation
         verify_mldsa65(public_key, data.as_ref(), signature)
             .map_err(|e| SignatureError::CryptoError(e))?;
         Ok(())
     }
 
-    /// Valide une signature SLH-DSA avec vérification anti-réutilisation
+    /// Validates an SLH-DSA signature with anti-reuse verification
     fn validate_slh_signature(
         &mut self,
         data: &impl AsRef<[u8]>,
@@ -141,24 +141,24 @@ impl SignatureValidator {
     ) -> Result<(), SignatureError> {
         let key_id = self.derive_key_id(public_key);
         
-        // Vérifie que la clé n'a pas été utilisée
+        // Verify that the key n'a pas been used
         if self.used_slh_keys.contains(&key_id) {
             return Err(SignatureError::SlhDsaKeyReuse(
-                format!("Clé déjà utilisée: {:?}", key_id)
+                format!("Key already used: {:?}", key_id)
             ));
         }
 
-        // Valide la signature via le module crypto SLH-DSA
+        // Validate the signature via the SLH-DSA crypto module
         self.verify_slh_signature(data, public_key, signature)?;
 
-        // Marque la clé comme utilisée
+        // Mark the key as used
         self.used_slh_keys.insert(key_id);
         self.current_signature_address += 1;
 
         Ok(())
     }
 
-    /// Valide une signature SLH-DSA avec adresse spécifique
+    /// Validates an SLH-DSA signature with specific address
     fn validate_slh_signature_with_address(
         &mut self,
         data: &impl AsRef<[u8]>,
@@ -166,7 +166,7 @@ impl SignatureValidator {
         signature: &Signature,
         signature_address: u64,
     ) -> Result<(), SignatureError> {
-        // Vérifie que l'adresse est valide
+        // Verify that the address is valid
         if signature_address != self.current_signature_address {
             return Err(SignatureError::InvalidSignatureAddress(signature_address));
         }
@@ -174,19 +174,19 @@ impl SignatureValidator {
         self.validate_slh_signature(data, public_key, signature)
     }
 
-    /// Dérive un identifiant unique pour une clé publique
+    /// Derives a unique identifier for a public key
     fn derive_key_id(&self, public_key: &PublicKey) -> [u8; 32] {
-        // Utilise SHA-256 pour dériver un identifiant unique de la clé publique
+        // Use SHA-256 to derive a unique identifier from the public key
         use sha2::{Sha256, Digest};
         let mut hasher = Sha256::new();
         hasher.update(public_key.as_bytes());
         hasher.finalize().into()
     }
 
-    /// Dérive une adresse de signature pour une transaction
+    /// Derives a signature address for a transaction
     fn derive_signature_address(&self, tx: &Transaction) -> u64 {
-        // Utilise une partie du hash de la transaction comme adresse
-        // Les 8 premiers octets du hash forment l'adresse
+        // Use part of the transaction hash as an address
+        // The first 8 bytes of the hash form the address
         let hash_bytes = tx.hash.as_ref();
         if hash_bytes.len() >= 8 {
             let bytes: [u8; 8] = hash_bytes[0..8].try_into().unwrap_or([0u8; 8]);
@@ -196,24 +196,24 @@ impl SignatureValidator {
         }
     }
 
-    /// Vérifie une signature SLH-DSA (appel au module crypto)
+    /// Verifies an SLH-DSA signature (call to crypto module)
     /// 
-    /// ## Implémentation
-    /// Cette fonction utilise le module `slh_dsa_impl` pour la vérification
-    /// cryptographique conforme à FIPS 205.
+    /// ## Implementation
+    /// This function uses the `slh_dsa_impl` module for verification
+    /// cryptographique conforme to FIPS 205.
     ///
-    /// ## Paramètres de sécurité
-    /// - Algorithme: SLH-DSA-SHA2-128s (par défaut)
-    /// - Niveau de sécurité: 128 bits post-quantique
-    /// - Taille de signature: ~7.8 KB
-    /// - Taille de clé publique: 32 octets
+    /// ## Security parameters
+    /// - Algorithme: SLH-DSA-SHA2-128s (by default)
+    /// - Security level: 128 bits post-quantum
+    /// - Signature size: ~7.8 KB
+    /// - Public key size: 32 bytes
     fn verify_slh_signature(
         &self,
         data: &impl AsRef<[u8]>,
         public_key: &PublicKey,
         signature: &Signature,
     ) -> Result<(), SignatureError> {
-        // Vérifie la taille de la signature (≈8KB pour Sha2_128s)
+        // Verify the signature size (≈8KB for Sha2_128s)
         let expected_sig_size = DEFAULT_SLH_DSA_PARAMS.signature_size();
         let sig_bytes = signature.as_ref();
         
@@ -224,32 +224,32 @@ impl SignatureValidator {
             });
         }
         
-        // Vérifie la taille de la clé publique
+        // Verify public key size
         let expected_pk_size = DEFAULT_SLH_DSA_PARAMS.public_key_size();
         let pk_bytes = public_key.as_bytes();
         
         if pk_bytes.len() != expected_pk_size {
             return Err(SignatureError::SlhDsaError(format!(
-                "Taille de clé publique invalide: attendu {}, reçu {}",
+                "Invalid public key size: expected {}, received {}",
                 expected_pk_size, pk_bytes.len()
             )));
         }
         
-        // Convertit vers les types SLH-DSA
+        // Convert to SLH-DSA types
         let slh_pk = SlhDsaPublicKey::from_bytes(pk_bytes)
-            .map_err(|e| SignatureError::SlhDsaError(format!("Clé publique invalide: {}", e)))?;
+            .map_err(|e| SignatureError::SlhDsaError(format!("Invalid public key: {}", e)))?;
         
         let slh_sig = SlhDsaSignature::from_bytes(sig_bytes)
-            .map_err(|e| SignatureError::SlhDsaError(format!("Signature invalide: {}", e)))?;
+            .map_err(|e| SignatureError::SlhDsaError(format!("Invalid signature: {}", e)))?;
         
-        // Appelle la vérification SLH-DSA du module crypto
+        // Call the crypto module's SLH-DSA verification
         slh_dsa_impl::verify(&slh_pk, data.as_ref(), &slh_sig)
             .map_err(|e| SignatureError::from(e))?;
         
         Ok(())
     }
     
-    /// Génère une paire de clés SLH-DSA pour les tests
+    /// Generates an SLH-DSA key pair for tests
     #[cfg(test)]
     pub fn generate_slh_keypair(
         &self,
@@ -259,7 +259,7 @@ impl SignatureValidator {
         Ok((sk, pk))
     }
     
-    /// Signe des données avec une clé SLH-DSA (pour les tests)
+    /// Signs data with an SLH-DSA key (for tests)
     #[cfg(test)]
     pub fn sign_with_slh(
         &self,
@@ -304,13 +304,13 @@ mod tests {
     fn test_signature_scheme_selection() {
         let validator = SignatureValidator::new();
         
-        // Avant activation: ML-DSA-65
+        // Before activation: ML-DSA-65
         assert_eq!(
             validator.get_signature_scheme(SLH_DSA_ACTIVATION_HEIGHT - 1),
             SignatureScheme::MlDsa65
         );
         
-        // Après activation: SLH-DSA
+        // After activation: SLH-DSA
         assert_eq!(
             validator.get_signature_scheme(SLH_DSA_ACTIVATION_HEIGHT),
             SignatureScheme::SlhDsa
@@ -322,11 +322,11 @@ mod tests {
         let mut validator = SignatureValidator::new();
         let pk = PublicKey::from_bytes(&[0u8; 32]).unwrap();
         
-        // Première validation
+        // First validation
         let key_id = validator.derive_key_id(&pk);
         assert!(!validator.used_slh_keys.contains(&key_id));
         
-        // Simule l'ajout de la clé
+        // Simulate adding the key
         validator.used_slh_keys.insert(key_id);
         assert!(validator.used_slh_keys.contains(&key_id));
     }
@@ -336,10 +336,10 @@ mod tests {
         let validator = SignatureValidator::new();
         let tx = Transaction::default();
         
-        // L'adresse doit être dérivée des 8 premiers octets du hash
+        // The address must be derived from the first 8 bytes of the hash
         let address = validator.derive_signature_address(&tx);
         
-        // Vérifie que l'adresse est cohérente
+        // Verify that the address is consistent
         let expected_address = if tx.hash.as_ref().len() >= 8 {
             let bytes: [u8; 8] = tx.hash.as_ref()[0..8].try_into().unwrap();
             u64::from_le_bytes(bytes)
@@ -359,10 +359,10 @@ mod tests {
         let id1 = validator.derive_key_id(&pk1);
         let id2 = validator.derive_key_id(&pk2);
         
-        // Les IDs doivent être différents pour des clés différentes
+        // IDs must be different for different keys
         assert_ne!(id1, id2);
         
-        // Les IDs doivent être déterministes
+        // Les IDs doivent be deterministics
         assert_eq!(id1, validator.derive_key_id(&pk1));
     }
 }

@@ -1,13 +1,13 @@
 //! Consensus SLH-DSA - Signature stateful
 //! 
-//! ⚠️  AVERTISSEMENT DE SÉCURITÉ: SLH-DSA est une signature stateful.
-//!    - Un même état ne doit JAMAIS être réutilisé
-//!    - L'état doit être persistant et atomique
-//!    - En cas de désynchronisation, le nœud doit s'arrêter
+//! ⚠️  SECURITY WARNING: SLH-DSA is a stateful signature.
+//!    - Un same state not must JAMAIS be reused
+//!    - L'state must be persistant and atomique
+//!    - En cas de desynchronization, the node must s'shutdowner
 //! 
-//! Cette implémentation inclut des garde-fous stricts pour empêcher
-//! la réutilisation d'état, mais ne peut pas garantir la sécurité
-//! dans un environnement distribué réel.
+//! This implementation includes strict safeguards to prevent
+//! state reuse, but cannot fully guarantee security
+//! in a environnement distributed real.
 
 use crate::crypto::pq::slh_dsa::{SlhDsaSigner, SlhDsaVerifier, SlhDsaError};
 use crate::core::block::{Block, BlockHeader};
@@ -17,41 +17,41 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use serde::{Serialize, Deserialize};
 
-/// Erreurs de validation SLH-DSA
+/// SLH-DSA validation errors
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum SlhDsaConsensusError {
-    #[error("État SLH-DSA désynchronisé - arrêt du nœud requis")]
+    #[error("State SLH-DSA desynchronized - shutdown du node requis")]
     StateDesync,
-    #[error("Signature SLH-DSA invalide")]
+    #[error("Signature SLH-DSA invalid")]
     InvalidSignature,
-    #[error("Réutilisation d'état détectée - attaque potentielle")]
+    #[error("Reuse d'state detectede - attaque potentielle")]
     StateReuseDetected,
-    #[error("Erreur interne SLH-DSA: {0}")]
+    #[error("Internal SLH-DSA error: {0}")]
     InternalError(String),
 }
 
-/// État d'un validateur SLH-DSA
+/// State d'un validateur SLH-DSA
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlhDsaValidatorState {
-    /// Dernier compteur utilisé
+    /// Last counter used
     pub last_counter: u64,
-    /// Hash du dernier bloc validé
+    /// Hash of the last bloc validated
     pub last_block_hash: Hash,
-    /// Nombre de signatures effectuées
+    /// Number of performed signatures
     pub signature_count: u64,
 }
 
-/// Gestionnaire d'état SLH-DSA
+/// Manager d'state SLH-DSA
 /// 
-/// Thread-safe avec verrouillage strict pour prévenir
-/// toute utilisation concurrente de l'état
+/// Thread-safe with strict locking to prevent
+/// toute utilisation concurrente de l'state
 pub struct SlhDsaStateManager {
     state: Arc<Mutex<SlhDsaValidatorState>>,
     max_signatures: u64,
 }
 
 impl SlhDsaStateManager {
-    /// Crée un nouveau gestionnaire d'état
+    /// Creates a new state manager
     pub fn new(initial_counter: u64, max_signatures: u64) -> Self {
         Self {
             state: Arc::new(Mutex::new(SlhDsaValidatorState {
@@ -63,20 +63,20 @@ impl SlhDsaStateManager {
         }
     }
 
-    /// Met à jour l'état après une signature réussie
+    /// Updates the state after a successful signature
     /// 
     /// # Panics
-    /// Si l'état est corrompu ou dépassé - par sécurité
+    /// Si l'state is corrupted or exceeded - par security
     pub fn update_signature_state(&self, new_counter: u64, block_hash: Hash) -> Result<(), SlhDsaConsensusError> {
         let mut state = self.state.lock()
             .map_err(|_| SlhDsaConsensusError::InternalError("Mutex poisoned".to_string()))?;
         
-        // Vérification anti-réutilisation
+        // Verification anti-reuse
         if new_counter <= state.last_counter {
-            panic!("CRITICAL: Réutilisation d'état SLH-DSA détectée - arrêt immédiat");
+            panic!("CRITICAL: Reuse d'state SLH-DSA detectede - shutdown immediate");
         }
         
-        // Vérification de limite
+        // Verification de limite
         state.signature_count += 1;
         if state.signature_count > self.max_signatures {
             return Err(SlhDsaConsensusError::StateDesync);
@@ -88,7 +88,7 @@ impl SlhDsaStateManager {
         Ok(())
     }
 
-    /// Obtient une copie de l'état actuel
+    /// Gets a copie de l'state actuel
     pub fn get_state(&self) -> SlhDsaValidatorState {
         // Mutex poisoning means a previous holder panicked — propagate
         self.state.lock()
@@ -96,7 +96,7 @@ impl SlhDsaStateManager {
             .clone()
     }
 
-    /// Vérifie si l'état est proche de la limite
+    /// Checks if l'state is proche de the limite
     pub fn is_near_limit(&self) -> bool {
         let state = self.state.lock()
             .expect("CRITICAL: SlhDsaStateManager mutex poisoned");
@@ -118,31 +118,31 @@ impl SlhDsaConsensus {
         }
     }
 
-    /// Valide la signature d'un bloc
+    /// Validates the signature d'un bloc
     /// 
     /// # Errors
-    /// Retourne une erreur si la signature est invalide ou si l'état est compromis
+    /// Returns a error if the signature is invalid or if l'state is compromis
     pub fn validate_block_signature(&self, block: &Block) -> Result<(), SlhDsaConsensusError> {
-        // Vérifier que l'état n'est pas proche de la limite
+        // Verify que l'state n'est pas proche de the limite
         if self.state_manager.is_near_limit() {
             return Err(SlhDsaConsensusError::StateDesync);
         }
 
-        // Obtenir le message signé (hash du bloc)
+        // Get the message signed (hash of the bloc)
         let message = block.hash().as_bytes();
         
-        // Extraire la signature et le compteur du bloc
+        // Extraire the signature and the counter of the bloc
         let (signature, counter) = self.extract_signature_data(block)?;
         
-        // Vérifier la signature
+        // Verify the signature
         self.verifier
             .verify(&message, &signature, counter)
             .map_err(|e| match e {
                 SlhDsaError::InvalidSignature => SlhDsaConsensusError::InvalidSignature,
-                _ => SlhDsaConsensusError::InternalError(format!("Vérification échouée: {:?}", e)),
+                _ => SlhDsaConsensusError::InternalError(format!("Verification failed: {:?}", e)),
             })?;
 
-        // Mettre à jour l'état
+        // Update l'state
         self.state_manager
             .update_signature_state(counter, block.hash())
             .map_err(|_| SlhDsaConsensusError::StateReuseDetected)?;
@@ -150,21 +150,21 @@ impl SlhDsaConsensus {
         Ok(())
     }
 
-    /// Valide la signature d'une transaction
+    /// Validates a transaction's signature
     pub fn validate_transaction_signature(&self, tx: &Transaction) -> Result<(), SlhDsaConsensusError> {
-        // Pour les transactions, on utilise une clé différente et un compteur séparé
-        // Cette implémentation dépend du format de transaction
-        // TODO: Implémenter selon le format de transaction TSN
+        // For transactions, we use a different key and a separate counter
+        // This implementation depends on the transaction format
+        // TODO: Implement selon the format de transaction TSN
         Ok(())
     }
 
-    /// Extrait la signature et le compteur des données du bloc
+    /// Extrait the signature and the counter of data of the bloc
     fn extract_signature_data(&self, block: &Block) -> Result<(Vec<u8>, u64), SlhDsaConsensusError> {
-        // Le format dépend de l'implémentation du bloc TSN
-        // Hypothèse: le bloc contient champ signature et counter
+        // The format depends on the TSN block implementation
+        // Assumption: the block contains signature and counter fields
         block
             .get_signature_data()
-            .ok_or_else(|| SlhDsaConsensusError::InternalError("Données de signature manquantes".to_string()))
+            .ok_or_else(|| SlhDsaConsensusError::InternalError("Data de signature missinges".to_string()))
     }
 }
 
@@ -208,5 +208,5 @@ mod tests {
     fn test_state_manager_prevents_reuse() {
         let manager = SlhDsaStateManager::new(0, 1000);
         
-        // Première mise à jour devrait réussir
+        // First update should succeed
         assert!(manager.update_signature_state(1,

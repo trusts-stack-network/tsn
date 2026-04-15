@@ -1,21 +1,21 @@
-// Le fichier src/crypto_vulnerable.rs contient probablement une erreur de syntaxe
-// due à un délimiteur non fermé. Il faut vérifier le code et corriger l'erreur.
+// The file src/crypto_vulnerable.rs probably contains a syntax error
+// due to an unclosed delimiter. The code needs to be checked and the error fixed.
 
-// Par exemple, si on avait un commentaire multiligne non fermé :
+// For example, if there was an unclosed multiline comment:
 // ```rust
 // /* 
-// * Ce commentaire est non fermé et causera une erreur de compilation
+// * This comment is unclosed and will cause a compilation error
 // ```
-// Il faut fermer le commentaire :
+// The comment needs to be closed:
 /* 
- * Ce commentaire est maintenant fermé et ne causera plus d'erreur de compilation
+ * Ce commentaire est now closed et ne causera plus d'error de compilation
  */
 
-// Si le problème venait d'une erreur de syntaxe dans une fonction ou une implémentation,
-// il faudrait la corriger en conséquence. Par exemple :
+// If the problem was a syntax error in a function or implementation,
+// it would need to be corrected accordingly. For example:
 fn exemple() {
-    // Code de la fonction
+    // Function code
     let exemple = "Ceci est un exemple";
-    // Il est important de s'assurer que toutes les déclarations sont correctes
-    // et que les délimiteurs sont bien fermés.
+    // It is important to ensure that all declarations are correct
+    // and that all delimiters are properly closed.
 }

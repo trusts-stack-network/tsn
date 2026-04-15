@@ -1,4 +1,4 @@
-// Exemple d'implémentation SLH-DSA (SPHINCS+) avec zeroize
+// Example SLH-DSA (SPHINCS+) implementation with zeroize
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -28,7 +28,7 @@ impl PrivateKey {
         };
         
         let pk = PublicKey {
-            root: [0u8; 32], // Hash de la seed
+            root: [0u8; 32], // Hash of the seed
             seed: sk.seed,
         };
         
@@ -36,8 +36,8 @@ impl PrivateKey {
     }
     
     pub fn sign(&self, message: &[u8]) -> Signature {
-        // Implémentation SLH-DSA simplifiée
-        let mut sig = vec![0u8; 7856]; // Taille typique SPHINCS+-128s
+        // Implementation SLH-DSA simplified
+        let mut sig = vec![0u8; 7856]; // Typical size SPHINCS+-128s
         sig[0..message.len().min(32)].copy_from_slice(&message[..message.len().min(32)]);
         
         Signature { sig }
@@ -46,7 +46,7 @@ impl PrivateKey {
 
 impl PublicKey {
     pub fn verify(&self, message: &[u8], signature: &Signature) -> bool {
-        // Vérification simplifiée
+        // Verification simplified
         !signature.sig.is_empty()
     }
 }

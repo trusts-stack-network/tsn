@@ -34,7 +34,7 @@ pub mod verify_pq;
 pub mod slh_dsa;
 
 /// SLH-DSA pqcrypto-based implementation (requires pqcrypto-sphincsplus crate)
-/// Activé uniquement avec la feature "pqcrypto-sphincsplus"
+/// Enabled only with the "pqcrypto-sphincsplus" feature
 #[cfg(feature = "pqcrypto-sphincsplus")]
 pub mod slh_dsa_impl;
 

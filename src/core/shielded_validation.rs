@@ -14,29 +14,29 @@ pub enum ShieldedValidationError {
     InvalidRangeProof,
 }
 
-/// Valide une transaction shielded.
+/// Validates a shielded transaction.
 ///
-/// Cette fonction vérifie les éléments suivants :
-/// - Le nullifier est valide
-/// - Le commitment est valide et n'a pas été utilisé précédemment
-/// - Le preuve de plage (range proof) est valide
+/// This function checks the following elements:
+/// - Le nullifier is valid
+/// - Le commitment is valid and n'a pas been used previously
+/// - Le preuve de plage (range proof) is valid
 pub fn validate_shielded_transaction(
     tx: &ShieldedTransaction,
     nullifiers_tree: &Tree,
     commitments_tree: &Tree,
 ) -> Result<(), ShieldedValidationError> {
-    // Vérifie le nullifier
+    // Verify the nullifier
     if !Nullifier::is_valid(&tx.nullifier) {
         return Err(ShieldedValidationError::InvalidNullifier);
     }
 
-    // Vérifie que le commitment n'a pas été utilisé précédemment
+    // Verify that the commitment has not been used previously
     let commitment_exists = commitments_tree.contains_key(tx.commitment.as_bytes());
     if commitment_exists {
         return Err(ShieldedValidationError::InvalidCommitment);
     }
 
-    // Vérifie la preuve de plage (range proof)
+    // Verify the range proof
     if !RangeProof::is_valid(&tx.range_proof) {
         return Err(ShieldedValidationError::InvalidRangeProof);
     }

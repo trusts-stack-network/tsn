@@ -1,18 +1,18 @@
-// ZST — Configuration du protocole
+// ZST — Configuration of the protocole
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration complète du protocole stablecoin ZST
+/// Configuration completee of the protocole stablecoin ZST
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StablecoinConfig {
     // === Reserve Ratios (en bps: 10000 = 100%) ===
-    /// Ratio minimum pour autoriser le mint ZST (15000 = 150%)
+    /// Ratio minimum for autoriser the mint ZST (15000 = 150%)
     pub min_reserve_ratio: u64,
-    /// Ratio cible du protocole (40000 = 400%)
+    /// Ratio cible of the protocole (40000 = 400%)
     pub target_reserve_ratio: u64,
-    /// Ratio max pour autoriser le mint ZRS (80000 = 800%)
+    /// Ratio max for autoriser the mint ZRS (80000 = 800%)
     pub max_reserve_ratio_mint_zrs: u64,
-    /// Ratio minimum pour autoriser le burn ZRS (20000 = 200%)
+    /// Ratio minimum for autoriser the burn ZRS (20000 = 200%)
     pub min_reserve_ratio_burn_zrs: u64,
 
     // === Frais (en bps: 100 = 1%) ===
@@ -30,35 +30,35 @@ pub struct StablecoinConfig {
     // === Oracle ===
     /// Quorum minimum d'oracles
     pub oracle_quorum: u8,
-    /// Âge maximum d'un prix oracle (en secondes)
+    /// Maximum oracle price age (in seconds)
     pub oracle_max_age_secs: u64,
-    /// Déviation maximum inter-oracle (en bps)
+    /// Deviation maximum inter-oracle (en bps)
     pub oracle_max_deviation_bps: u64,
-    /// Circuit breaker oracle: variation max en 1h (en bps)
+    /// Circuit breaker oracle: variation max in 1h (en bps)
     pub oracle_circuit_breaker_bps: u64,
 
     // === Anti-Bank-Run ===
-    /// Max % du supply ZST burnable par bloc (en bps: 500 = 5%)
+    /// Max % of the supply ZST burnable par bloc (en bps: 500 = 5%)
     pub cooldown_max_burn_pct: u64,
-    /// Ratio déclencheur du circuit breaker (12000 = 120%)
+    /// Ratio triggersur of the circuit breaker (12000 = 120%)
     pub circuit_breaker_ratio: u64,
-    /// Durée du circuit breaker en secondes (86400 = 24h)
+    /// Duration of the circuit breaker in secondes (86400 = 24h)
     pub circuit_breaker_duration: u64,
 
     // === Activation ===
-    /// Hauteur d'activation du module stablecoin
+    /// Height d'activation of the module stablecoin
     pub activation_height: u64,
-    /// Décimales pour ZST (8, comme TSN)
+    /// Decimals for ZST (8, like TSN)
     pub zst_decimals: u8,
 
-    // === Distribution des frais ===
-    /// Part des frais vers la réserve (en bps: 8000 = 80%)
+    // === Distribution of fees ===
+    /// Part of fees to the reserve (en bps: 8000 = 80%)
     pub fee_to_reserve_bps: u64,
-    /// Part des frais vers la trésorerie (en bps: 2000 = 20%)
+    /// Part of fees to the treasury (en bps: 2000 = 20%)
     pub fee_to_treasury_bps: u64,
 
     // === TWAP ===
-    /// Nombre de blocs pour le TWAP
+    /// Number of blocks for TWAP
     pub twap_blocks: u64,
 }
 
@@ -97,7 +97,7 @@ impl Default for StablecoinConfig {
 }
 
 impl StablecoinConfig {
-    /// Configuration pour les tests (quorum réduit, etc.)
+    /// Configuration for the tests (quorum reduces, etc.)
     pub fn testnet() -> Self {
         Self {
             oracle_quorum: 1,

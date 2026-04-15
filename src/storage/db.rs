@@ -34,7 +34,7 @@ impl Default for FaucetClaim {
 /// Uses separate trees for different data types:
 /// - blocks: hash -> block data
 /// - block_heights: height -> hash
-/// - nullifiers: nullifier -> () (existence check)
+/// - nullifiers: nullifier -> () (existsnce check)
 /// - accounts: address -> account data
 /// - metadata: key -> value
 /// - faucet_claims: pk_hash -> FaucetClaim
@@ -119,6 +119,13 @@ impl Database {
         Ok(())
     }
 
+    /// Insert a height→hash mapping without storing the full block.
+    /// Used by restore-snapshot to set the chain tip height in the DB.
+    pub fn save_height_entry(&self, height: u64, hash: &[u8; 32]) -> Result<(), DatabaseError> {
+        self.block_heights.insert(&height.to_be_bytes(), hash)?;
+        Ok(())
+    }
+
     /// Load a block by hash.
     pub fn load_block(&self, hash: &[u8; 32]) -> Result<Option<ShieldedBlock>, DatabaseError> {
         match self.blocks.get(hash)? {
@@ -131,7 +138,7 @@ impl Database {
     }
 
     /// Load all block hashes in order (sequential scan, no deserialization).
-    /// Returns a Vec of (height, hash) pairs sorted by height.
+    /// Returns a Vec of (height, hash) peers sorted by height.
     pub fn load_all_block_hashes(&self) -> Result<Vec<[u8; 32]>, DatabaseError> {
         let mut hashes = Vec::new();
         for entry in self.block_heights.iter() {
@@ -221,6 +228,16 @@ impl Database {
     /// Clear all nullifiers (used during reorg).
     pub fn clear_nullifiers(&self) -> Result<(), DatabaseError> {
         self.nullifiers.clear()?;
+        Ok(())
+    }
+
+    /// Clear all blocks and block_heights from the DB.
+    /// Used during reset_for_snapshot_resync to prevent stale blocks
+    /// from poisoning cumulative_work calculations after a fresh sync.
+    pub fn clear_blocks(&self) -> Result<(), DatabaseError> {
+        self.blocks.clear()?;
+        self.block_heights.clear()?;
+        self.cumulative_work.clear()?;
         Ok(())
     }
 

@@ -2,7 +2,7 @@ use crate::crypto::{PublicKey, Signature};
 use crate::transaction::Transaction;
 use thiserror::Error;
 
-// Erreur personnalisée pour les opérations sur les blocs
+// Error custom for the operations on the blocs
 #[derive(Error, Debug)]
 enum BlockError {
     #[error("Invalid block hash")]
@@ -11,18 +11,18 @@ enum BlockError {
     InvalidBlockSignature,
 }
 
-// Structure pour un bloc
+// Structure for a bloc
 pub struct Block {
     pub public_key: Vec<u8>,
     pub signature: Vec<u8>,
     pub transactions: Vec<Transaction>,
-    // Autres champs du bloc...
+    // Autres fields of the bloc...
 }
 
 impl Block {
     // Hash d'un bloc
     pub fn hash(&self) -> Vec<u8> {
-        // Calcul du hash...
+        // Calcul of the hash...
         unimplemented!()
     }
 }

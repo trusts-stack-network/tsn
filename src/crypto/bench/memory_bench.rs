@@ -1,13 +1,13 @@
-//! Benchmarks de consommation mémoire pour les systèmes ZK de TSN
+//! Benchmarks de consommation memory for the systems ZK de TSN
 //! 
-//! Mesure la consommation mémoire pendant:
-//! - Génération de preuve
-//! - Vérification de preuve
+//! Mesure the consommation memory pendant:
+//! - Generation de preuve
+//! - Verification de preuve
 //! 
-//! Contexte de sécurité:
-//! - La consommation mémoire doit être O(n) où n = taille du circuit
-//! - Pas de fuites mémoire pendant les opérations répétées
-//! - Zeroize des secrets après usage
+//! Contexte de security:
+//! - La consommation memory must be O(n) where n = size of the circuit
+//! - Pas de fuites memory pendant the operations repeateds
+//! - Zeroize of secrets after usage
 
 use plonky2::field::goldilocks_field::GoldilocksField;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
@@ -16,15 +16,15 @@ use plonky2::plonk::circuit_data::CircuitConfig;
 use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use std::time::{Duration, Instant};
 
-/// Type aliases pour Plonky2
+/// Type aliases for Plonky2
 type F = GoldilocksField;
 const D: usize = 2;
 type C = PoseidonGoldilocksConfig;
 
-/// Estimateur de mémoire simple
+/// Estimateur de memory simple
 /// 
-/// Note: Une implémentation complète nécessiterait jemalloc ou similar
-/// pour des statistiques précises d'allocation.
+/// Note: Une implementation completee requiresrait jemalloc or similar
+/// for statistics precises d'allocation.
 pub struct MemoryEstimator {
     baseline: usize,
 }
@@ -36,9 +36,9 @@ impl MemoryEstimator {
         }
     }
     
-    /// Retourne l'utilisation mémoire actuelle en KB
+    /// Returns l'utilisation memory current in KB
     /// 
-    /// Sur Linux, lit /proc/self/status pour VmRSS
+    /// Sur Linux, lit /proc/self/status for VmRSS
     fn current_usage() -> usize {
         #[cfg(target_os = "linux")]
         {
@@ -59,13 +59,13 @@ impl MemoryEstimator {
         0 // Fallback
     }
     
-    /// Mesure la mémoire utilisée pendant l'exécution d'une fonction
+    /// Mesure the memory used pendant l'execution d'une fonction
     pub fn measure<T>(&self, f: impl FnOnce() -> T) -> (T, usize) {
         let before = Self::current_usage();
         let result = f();
         let after = Self::current_usage();
         
-        // Soustrait la baseline pour obtenir la mémoire réellement utilisée
+        // Soustrait the baseline for get the memory realment used
         let used = if after > self.baseline {
             after.saturating_sub(self.baseline)
         } else {
@@ -76,12 +76,12 @@ impl MemoryEstimator {
     }
 }
 
-/// Circuit simple pour benchmark mémoire
+/// Circuit simple for benchmark memory
 fn build_memory_test_circuit() -> plonky2::plonk::circuit_data::CircuitData<F, C, D> {
     let config = CircuitConfig::standard_recursion_config();
     let mut builder = CircuitBuilder::<F, D>::new(config);
     
-    // Crée plusieurs gates pour simuler un circuit réaliste
+    // Creates multiple gates for simuler a circuit realistic
     let num_gates = 1000;
     
     let mut prev = builder.add_virtual_target();
@@ -89,7 +89,7 @@ fn build_memory_test_circuit() -> plonky2::plonk::circuit_data::CircuitData<F, C
     
     for i in 1..num_gates {
         let next = builder.add_virtual_target();
-        // Simple opération: next = prev + i
+        // Simple operation: next = prev + i
         let i_const = builder.constant(F::from_canonical_usize(i));
         let sum = builder.add(prev, i_const);
         builder.connect(sum, next);
@@ -99,7 +99,7 @@ fn build_memory_test_circuit() -> plonky2::plonk::circuit_data::CircuitData<F, C
     builder.build::<C>()
 }
 
-/// Benchmark: Consommation mémoire Plonky2 génération
+/// Benchmark: Consommation memory Plonky2 generation
 pub fn bench_plonky2_memory_generation() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -138,14 +138,14 @@ pub fn bench_plonky2_memory_generation() -> crate::crypto::bench::halo2_commitme
     )
 }
 
-/// Benchmark: Consommation mémoire Plonky2 vérification
+/// Benchmark: Consommation memory Plonky2 verification
 pub fn bench_plonky2_memory_verification() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
     let circuit_data = build_memory_test_circuit();
     let verifier_data = circuit_data.verifier_data();
     
-    // Génère une preuve une fois
+    // Generates a preuve a fois
     let mut pw = PartialWitness::new();
     let initial = circuit_data.prover_only.public_inputs[0];
     pw.set_target(initial, F::from_canonical_u64(42));
@@ -179,7 +179,7 @@ pub fn bench_plonky2_memory_verification() -> crate::crypto::bench::halo2_commit
     )
 }
 
-/// Exécute tous les benchmarks mémoire
+/// Executes all benchmarks memory
 pub fn run_memory_benchmarks() -> Vec<crate::crypto::bench::halo2_commitment_bench::BenchmarkResult> {
     println!("╔═══════════════════════════════════════════════════════════════╗");
     println!("║           TSN MEMORY BENCHMARKS                                 ║");
@@ -191,7 +191,7 @@ pub fn run_memory_benchmarks() -> Vec<crate::crypto::bench::halo2_commitment_ben
     results.push(bench_plonky2_memory_generation());
     results.push(bench_plonky2_memory_verification());
     
-    // Affiche les résultats
+    // Display results
     for result in &results {
         result.print();
     }
@@ -211,7 +211,7 @@ mod tests {
             std::hint::black_box(vec);
         });
         
-        // La mémoire devrait être > 0 sur Linux
+        // La memory should be > 0 sur Linux
         #[cfg(target_os = "linux")]
         assert!(mem > 0, "Memory usage should be detectable on Linux");
     }

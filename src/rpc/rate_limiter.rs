@@ -1,11 +1,11 @@
-//! Rate limiting par endpoint pour le RPC TSN
+//! Rate limiting par endpoint for the RPC TSN
 //!
 //! Supporte :
-//! - Rate limiting par méthode RPC (read vs write vs admin)
+//! - Rate limiting par method RPC (read vs write vs admin)
 //! - Rate limiting par IP source
-//! - Rate limiting par clé API
-//! - Burst allowance pour les pics de trafic
-//! - Sliding window pour une distribution uniforme
+//! - Rate limiting par key API
+//! - Burst allowance for the pics de trafic
+//! - Sliding window for a distribution uniforme
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -15,62 +15,62 @@ use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-/// Catégorie de méthode RPC pour le rate limiting
+/// Category de method RPC for the rate limiting
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RpcMethodCategory {
-    /// Méthodes de lecture (getblock, gettransaction, etc.)
+    /// Methods de lecture (getblock, gettransaction, etc.)
     Read,
-    /// Méthodes d'écriture (sendtransaction, submitblock)
+    /// Methods d'writing (sendtransaction, submitblock)
     Write,
-    /// Méthodes d'administration (peer management, debug)
+    /// Methods d'administration (peer management, debug)
     Admin,
-    /// Méthodes de gossip (propagation de blocs/tx)
+    /// Methods de gossip (propagation de blocs/tx)
     Gossip,
 }
 
 impl RpcMethodCategory {
-    /// Détermine la catégorie d'une méthode RPC
+    /// Determines the category d'une method RPC
     pub fn from_method(method: &str) -> Self {
         match method {
-            // Méthodes de lecture
+            // Methods de lecture
             "getblock" | "getblockhash" | "getblockheader" | "gettransaction" |
             "getbalance" | "getutxos" | "getmempool" | "getpeers" |
             "getchaininfo" | "getdifficulty" | "getbestblockhash" |
             "getblockcount" | "getrawtransaction" | "decoderawtransaction" |
             "getfeerate" | "getstakinginfo" => Self::Read,
             
-            // Méthodes d'écriture
+            // Methods d'writing
             "sendtransaction" | "sendrawtransaction" | "submitblock" |
             "createrawtransaction" | "signrawtransaction" => Self::Write,
             
-            // Méthodes d'admin
+            // Methods d'admin
             "addpeer" | "removepeer" | "banpeer" | "unbanpeer" |
             "getpeerinfo" | "setban" | "clearbanned" |
             "getdebuginfo" | "getnetworkinfo" | "stop" | "restart" => Self::Admin,
             
-            // Méthodes de gossip
+            // Methods de gossip
             "gossipblock" | "gossiptransaction" | "announcepeer" => Self::Gossip,
             
-            // Par défaut: lecture
+            // By default: lecture
             _ => Self::Read,
         }
     }
 }
 
-/// Configuration du rate limiting
+/// Rate limiting configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
-    /// Requêtes par minute pour les méthodes de lecture
+    /// Requests par minute for the methods de lecture
     pub read_rpm: u32,
-    /// Requêtes par minute pour les méthodes d'écriture
+    /// Requests par minute for the methods d'writing
     pub write_rpm: u32,
-    /// Requêtes par minute pour les méthodes d'admin
+    /// Requests par minute for the methods d'admin
     pub admin_rpm: u32,
-    /// Requêtes par minute pour les méthodes de gossip
+    /// Requests par minute for the methods de gossip
     pub gossip_rpm: u32,
     /// Burst allowance (multiplicateur)
     pub burst_multiplier: f32,
-    /// Fenêtre de temps en secondes
+    /// Window de temps in secondes
     pub window_seconds: u64,
 }
 
@@ -88,7 +88,7 @@ impl Default for RateLimitConfig {
 }
 
 impl RateLimitConfig {
-    /// Obtient le rate limit pour une catégorie
+    /// Gets the rate limit for a category
     pub fn get_limit(&self, category: RpcMethodCategory) -> u32 {
         match category {
             RpcMethodCategory::Read => self.read_rpm,
@@ -99,16 +99,16 @@ impl RateLimitConfig {
     }
 }
 
-/// État du rate limiting pour une source
+/// State of the rate limiting for a source
 #[derive(Debug)]
 struct RateLimitState {
-    /// Dernière requête
+    /// Last request
     last_request: Instant,
-    /// Nombre de requêtes dans la fenêtre courante
+    /// Number of requests in the current window
     request_count: u32,
-    /// Tokens disponibles (pour token bucket)
+    /// Available tokens (for token bucket)
     tokens: f32,
-    /// Dernier refill des tokens
+    /// Dernier refill of tokens
     last_refill: Instant,
 }
 
@@ -128,14 +128,14 @@ impl RateLimitState {
 pub struct EndpointRateLimiter {
     /// Configuration
     config: RateLimitConfig,
-    /// État par source IP (catégorie -> IP -> état)
+    /// State par source IP (category -> IP -> state)
     ip_states: Arc<RwLock<HashMap<RpcMethodCategory, HashMap<String, RateLimitState>>>>,
-    /// État par clé API (catégorie -> hash clé -> état)
+    /// State par key API (category -> hash key -> state)
     key_states: Arc<RwLock<HashMap<RpcMethodCategory, HashMap<String, RateLimitState>>>>,
 }
 
 impl EndpointRateLimiter {
-    /// Crée un nouveau rate limiter
+    /// Creates a new rate limiter
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
             config,
@@ -144,7 +144,7 @@ impl EndpointRateLimiter {
         }
     }
 
-    /// Vérifie si une requête est autorisée (sans clé API)
+    /// Checks if a request is authorized (without API key)
     pub async fn check_ip(&self, method: &str, ip: SocketAddr) -> bool {
         let category = RpcMethodCategory::from_method(method);
         let ip_str = ip.ip().to_string();
@@ -158,7 +158,7 @@ impl EndpointRateLimiter {
         self.check_state(state, limit, burst)
     }
 
-    /// Vérifie si une requête est autorisée (avec clé API)
+    /// Checks if a request is authorized (with API key)
     pub async fn check_key(&self, method: &str, key_hash: &str, key_limit: u32) -> bool {
         let category = RpcMethodCategory::from_method(method);
         let limit = key_limit.min(self.config.get_limit(category));
@@ -171,7 +171,7 @@ impl EndpointRateLimiter {
         self.check_state(state, limit, burst)
     }
 
-    /// Vérifie l'état et met à jour les compteurs
+    /// Verifies l'state and met up to date the compteurs
     fn check_state(&self,
         state: &mut RateLimitState,
         limit: u32,
@@ -186,7 +186,7 @@ impl EndpointRateLimiter {
         state.tokens = (state.tokens + elapsed * refill_rate).min(burst as f32);
         state.last_refill = now;
         
-        // Vérifie si on a assez de tokens
+        // Check if on a enough de tokens
         if state.tokens >= 1.0 {
             state.tokens -= 1.0;
             state.last_request = now;
@@ -196,7 +196,7 @@ impl EndpointRateLimiter {
         }
     }
 
-    /// Nettoie les états expirés (à appeler périodiquement)
+    /// Cleans up the states expireds (to appeler periodically)
     pub async fn cleanup(&self) {
         let now = Instant::now();
         let expiry = Duration::from_secs(self.config.window_seconds * 2);
@@ -219,7 +219,7 @@ impl EndpointRateLimiter {
         }
     }
 
-    /// Obtient les stats de rate limiting pour monitoring
+    /// Gets rate limiting stats for monitoring
     pub async fn get_stats(&self,
     ) -> RateLimitStats {
         let ip_states = self.ip_states.read().await;
@@ -252,7 +252,7 @@ pub struct RateLimitStats {
     pub config: RateLimitConfig,
 }
 
-/// Middleware Axum pour le rate limiting
+/// Middleware Axum for the rate limiting
 #[derive(Clone)]
 pub struct RateLimitLayer {
     limiter: Arc<EndpointRateLimiter>,
@@ -264,7 +264,7 @@ impl RateLimitLayer {
     }
 }
 
-/// Erreur de rate limiting
+/// Rate limiting error
 #[derive(Debug, thiserror::Error)]
 pub enum RateLimitError {
     #[error("Rate limit exceeded for method {method}")]
@@ -300,12 +300,12 @@ mod tests {
         let limiter = EndpointRateLimiter::new(config);
         let ip = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         
-        // 10 requêtes read devraient passer
+        // 10 read requests should pass
         for _ in 0..10 {
             assert!(limiter.check_ip("getblock", ip).await);
         }
         
-        // La 11ème devrait être rejetée
+        // La 11th should be rejectede
         assert!(!limiter.check_ip("getblock", ip).await);
     }
 
@@ -322,7 +322,7 @@ mod tests {
         let limiter = EndpointRateLimiter::new(config);
         let ip = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         
-        // Avec burst=2.0, on devrait pouvoir faire 20 requêtes
+        // Avec burst=2.0, on should pouvoir faire 20 requests
         let mut passed = 0;
         for _ in 0..25 {
             if limiter.check_ip("getblock", ip).await {
@@ -346,12 +346,12 @@ mod tests {
         let limiter = EndpointRateLimiter::new(config);
         let key_hash = "test_key_hash";
         
-        // 5 requêtes avec limite de 5
+        // 5 requests with limit of 5
         for _ in 0..5 {
             assert!(limiter.check_key("getblock", key_hash, 5).await);
         }
         
-        // La 6ème devrait être rejetée
+        // La 6th should be rejectede
         assert!(!limiter.check_key("getblock", key_hash, 5).await);
     }
 }

@@ -1,24 +1,24 @@
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-/// Configuration réseau TSN
+/// Configuration network TSN
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
-    /// Version du protocole TSN
+    /// Version of the protocole TSN
     pub protocol_version: u32,
-    /// ID du réseau (mainnet, testnet, etc.)
+    /// ID of the network (mainnet, testnet, etc.)
     pub network_id: String,
-    /// Adresse d'écoute
+    /// Listening address
     pub listen_addr: SocketAddr,
-    /// Port d'écoute
+    /// Port d'listening
     pub listen_port: u16,
-    /// Liste des seed nodes
+    /// Liste of seed nodes
     pub seed_nodes: Vec<String>,
-    /// Capabilities annoncées
+    /// Capabilities announced
     pub capabilities: Vec<String>,
-    /// Timeout de connexion
+    /// Timeout de connection
     pub connection_timeout_secs: u64,
-    /// Max pairs actifs
+    /// Max peers actifs
     pub max_peers: usize,
 }
 
@@ -56,7 +56,7 @@ impl NetworkConfig {
         Self {
             protocol_version: 1,
             network_id: "tsn-test".to_string(),
-            listen_addr: "127.0.0.1:0".parse().unwrap(), // Port aléatoire
+            listen_addr: "127.0.0.1:0".parse().unwrap(), // Port random
             listen_port: 0,
             seed_nodes: vec![],
             capabilities: vec!["test".to_string()],

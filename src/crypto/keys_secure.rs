@@ -1,12 +1,12 @@
-//! Gestion des clés post-quantiques sécurisée - VERSION SANS PANIC
+//! Gestion of keys post-quantiques secure - VERSION SANS PANIC
 //!
-//! Ce module remplace src/crypto/keys.rs avec une gestion d'erreur robuste.
-//! Aucun expect() sur les opérations de génération de clés.
+//! This module replaces src/crypto/keys.rs with robust error handling.
+//! No expect() on the operations de generation de keys.
 //!
-//! # Sécurité
-//! - Gestion des échecs de RNG
-//! - Validation des clés générées
-//! - Pas de panic sur erreurs cryptographiques
+//! # Security
+//! - Gestion of failures de RNG
+//! - Validation of keys generatedes
+//! - No panic on cryptographic errors
 
 use fips204::ml_dsa_65;
 use fips204::traits::SerDes;
@@ -15,33 +15,33 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::Address;
 
-/// Erreurs de gestion des clés
+/// Key management errors
 #[derive(Error, Debug, Clone)]
 pub enum KeyError {
-    #[error("Échec du générateur de nombres aléatoires: {0}")]
+    #[error("Random number generator failure: {0}")]
     RngFailure(String),
-    #[error("Clé invalide: {0}")]
+    #[error("Key invalid: {0}")]
     InvalidKey(String),
-    #[error("Sérialisation échouée: {0}")]
+    #[error("Serialization failed: {0}")]
     SerializationFailed(String),
-    #[error("Désérialisation échouée: {0}")]
+    #[error("Deserialization failed: {0}")]
     DeserializationFailed(String),
-    #[error("Signature invalide")]
+    #[error("Signature invalid")]
     InvalidSignature,
-    #[error("Vérification de signature échouée")]
+    #[error("Verification de signature failed")]
     SignatureVerificationFailed,
 }
 
-/// Clé publique ML-DSA-65
+/// Key publique ML-DSA-65
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicKey {
     pub(crate) key: ml_dsa_65::PublicKey,
 }
 
-/// Clé secrète ML-DSA-65 - effacée automatiquement
+/// Key secret ML-DSA-65 - erased automatically
 #[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
 pub struct SecretKey {
-    #[zeroize(skip)] // La clé interne gère son propre effacement
+    #[zeroize(skip)] // La key interne manages son propre effacement
     pub(crate) key: ml_dsa_65::SecretKey,
 }
 
@@ -51,7 +51,7 @@ pub struct Signature {
     pub(crate) sig: ml_dsa_65::Signature,
 }
 
-/// Paire de clés post-quantiques
+/// Paire de keys post-quantiques
 #[derive(Clone, Debug)]
 pub struct KeyPair {
     pub public_key: PublicKey,
@@ -59,10 +59,10 @@ pub struct KeyPair {
 }
 
 impl KeyPair {
-    /// Génère une nouvelle paire de clés de manière sécurisée
+    /// Generates a new paire de keys de manner secure
     /// 
-    /// # Sécurité
-    /// Retourne une erreur si le RNG échoue plutôt que de paniquer
+    /// # Security
+    /// Returns a error if the RNG fails rather que de paniquer
     /// 
     /// # Exemple
     /// ```
@@ -81,27 +81,24 @@ impl KeyPair {
         })
     }
 
-    /// Génère une paire de clés déterministe à partir d'une graine
+    /// Generates a paire de keys deterministic to partir d'une graine
     /// 
-    /// # Sécurité
-    /// Utile pour les tests et la récupération, mais moins sécurisé
-    /// que la génération aléatoire pour la production.
+    /// # Security
+    /// Utile for the tests and the retrieval, but moins secure
+    /// que the generation random for the production.
     pub fn from_seed(seed: &[u8; 32]) -> Result<Self, KeyError> {
-        // Utilisation d'un RNG déterministe basé sur la graine
-        // Note: Cette implémentation est simplifiée
-        let (public_key, secret_key) = ml_dsa_65::try_keygen()
-            .map_err(|e| KeyError::RngFailure(format!("{:?}", e)))?;
-        
+        use fips204::traits::KeyGen;
+        let (public_key, secret_key) = ml_dsa_65::KG::keygen_from_seed(seed);
         Ok(Self {
             public_key: PublicKey { key: public_key },
             secret_key: SecretKey { key: secret_key },
         })
     }
 
-    /// Signe un message
+    /// Signe a message
     /// 
-    /// # Sécurité
-    /// La signature est effectuée de manière constant-time
+    /// # Security
+    /// La signature is performede de manner constant-time
     pub fn sign(&self, message: &[u8]) -> Result<Signature, KeyError> {
         let sig = ml_dsa_65::sign(&self.secret_key.key, message, b"TSN")
             .map_err(|e| KeyError::InvalidSignature)?;
@@ -109,7 +106,7 @@ impl KeyPair {
         Ok(Signature { sig })
     }
 
-    /// Vérifie une signature
+    /// Verifies a signature
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<bool, KeyError> {
         let valid = ml_dsa_65::verify(&self.public_key.key, message, b"TSN", &signature.sig)
             .map_err(|e| KeyError::SignatureVerificationFailed)?;
@@ -117,22 +114,22 @@ impl KeyPair {
         Ok(valid)
     }
 
-    /// Sérialise la paire de clés
+    /// Serializes the paire de keys
     pub fn to_bytes(&self) -> Result<Vec<u8>, KeyError> {
         let mut result = Vec::new();
         
-        // Sérialisation de la clé publique
+        // Serialization de the key public
         let pk_bytes = self.public_key.key.into_bytes();
         result.extend_from_slice(&pk_bytes);
         
-        // Sérialisation de la clé secrète
+        // Serialization de the key secret
         let sk_bytes = self.secret_key.key.into_bytes();
         result.extend_from_slice(&sk_bytes);
         
         Ok(result)
     }
 
-    /// Désérialise une paire de clés
+    /// Deserializes a paire de keys
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, KeyError> {
         // ML-DSA-65 tailles: pk = 1952 bytes, sk = 4032 bytes
         const PK_SIZE: usize = 1952;
@@ -156,19 +153,19 @@ impl KeyPair {
         })
     }
 
-    /// Dérive une adresse à partir de la clé publique
+    /// Derives a adresse to partir de the key public
     pub fn derive_address(&self) -> Address {
         Address::from_public_key(&self.public_key.key.into_bytes())
     }
 }
 
 impl PublicKey {
-    /// Sérialise la clé publique
+    /// Serializes the key public
     pub fn to_bytes(&self) -> Vec<u8> {
         self.key.into_bytes()
     }
 
-    /// Désérialise une clé publique
+    /// Deserializes a key public
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, KeyError> {
         let key = ml_dsa_65::PublicKey::try_from_bytes(bytes)
             .map_err(|e| KeyError::DeserializationFailed(format!("{:?}", e)))?;
@@ -178,15 +175,15 @@ impl PublicKey {
 }
 
 impl SecretKey {
-    /// Sérialise la clé secrète
+    /// Serializes the key secret
     /// 
     /// # Avertissement
-    /// Cette méthode expose la clé secrète. Utiliser avec précaution.
+    /// This method exposes the secret key. Use with caution.
     pub fn to_bytes(&self) -> Vec<u8> {
         self.key.into_bytes()
     }
 
-    /// Désérialise une clé secrète
+    /// Deserializes a key secret
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, KeyError> {
         let key = ml_dsa_65::SecretKey::try_from_bytes(bytes)
             .map_err(|e| KeyError::DeserializationFailed(format!("{:?}", e)))?;
@@ -196,12 +193,12 @@ impl SecretKey {
 }
 
 impl Signature {
-    /// Sérialise la signature
+    /// Serializes the signature
     pub fn to_bytes(&self) -> Vec<u8> {
         self.sig.into_bytes()
     }
 
-    /// Désérialise une signature
+    /// Deserializes a signature
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, KeyError> {
         let sig = ml_dsa_65::Signature::try_from_bytes(bytes)
             .map_err(|e| KeyError::DeserializationFailed(format!("{:?}", e)))?;
@@ -210,37 +207,37 @@ impl Signature {
     }
 }
 
-/// Gestionnaire de clés sécurisé
+/// Manager de keys secure
 pub struct KeyManager {
     keys: Vec<KeyPair>,
 }
 
 impl KeyManager {
-    /// Crée un nouveau gestionnaire de clés
+    /// Creates a new manager of keys
     pub fn new() -> Self {
         Self {
             keys: Vec::new(),
         }
     }
 
-    /// Génère une nouvelle clé
+    /// Generates a new key
     pub fn generate_key(&mut self) -> Result<&KeyPair, KeyError> {
         let keypair = KeyPair::generate()?;
         self.keys.push(keypair);
         Ok(self.keys.last().unwrap())
     }
 
-    /// Récupère une clé par index
+    /// Retrieves a key par index
     pub fn get_key(&self, index: usize) -> Option<&KeyPair> {
         self.keys.get(index)
     }
 
-    /// Nombre de clés gérées
+    /// Number of managed keys
     pub fn len(&self) -> usize {
         self.keys.len()
     }
 
-    /// Vérifie si le gestionnaire est vide
+    /// Checks if the manager is vide
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }

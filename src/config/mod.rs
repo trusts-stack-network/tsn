@@ -254,6 +254,12 @@ pub const CHECKPOINT_ENABLED: bool = true;
 /// Inspired by Dilithion's MAX_REORG_DEPTH = 100.
 pub const MAX_REORG_DEPTH: u64 = 100;
 
+/// Interval between automatic signed snapshot exports (in blocks).
+/// A snapshot is triggered when a new multiple of this interval becomes finalized
+/// (i.e. tip >= multiple + MAX_REORG_DEPTH). With 10s blocks, 1000 blocks ~ 2.7 hours,
+/// producing roughly 8-10 snapshots per day.
+pub const SNAPSHOT_MANIFEST_INTERVAL: u64 = 1000;
+
 /// Hardcoded checkpoints — blocks that MUST be in the canonical chain.
 /// Any chain that doesn't include these exact hashes at these heights is rejected.
 /// This prevents fork chains (e.g. mined from genesis at low difficulty) from

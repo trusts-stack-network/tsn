@@ -1,19 +1,19 @@
 //! SLH-DSA (SPHINCS+) signature verification for consensus
 //! 
-//! Implémente la vérification des signatures SLH-DSA-SHA2-128s comme remplacement
-//! de ML-DSA-65. SLH-DSA offre une sécurité post-quantique basée sur les fonctions de hachage.
+//! Implements the verification of signatures SLH-DSA-SHA2-128s like remplacement
+//! de ML-DSA-65. SLH-DSA offre a security post-quantique based on the fonctions de hachage.
 
 use sha2::{Sha256, Digest};
 use thiserror::Error;
 
-/// Taille de la signature SLH-DSA-SHA2-128s (en octets)
+/// Size de the signature SLH-DSA-SHA2-128s (in bytes)
 pub const SLH_DSA_SIGNATURE_SIZE: usize = 7856;
-/// Taille de la clé publique SLH-DSA (en octets)
+/// Size de the key publique SLH-DSA (in bytes)
 pub const SLH_DSA_PUBLIC_KEY_SIZE: usize = 64;
-/// Taille de la clé privée SLH-DSA (en octets)  
+/// Size de the key private SLH-DSA (in bytes)  
 pub const SLH_DSA_SECRET_KEY_SIZE: usize = 128;
 
-/// Type alias pour les signatures SLH-DSA
+/// Type alias for the signatures SLH-DSA
 pub type SlhDsaSignature = [u8; SLH_DSA_SIGNATURE_SIZE];
 pub type SlhDsaPublicKey = [u8; SLH_DSA_PUBLIC_KEY_SIZE];
 
@@ -31,31 +31,31 @@ pub enum SignatureError {
     AlgorithmError(String),
 }
 
-/// Vérificateur de signatures SLH-DSA
+/// Verifier de signatures SLH-DSA
 pub struct SlhDsaVerifier;
 
 impl SlhDsaVerifier {
-    /// Crée un nouveau vérificateur
+    /// Creates a new verifier
     pub fn new() -> Self {
         Self
     }
 
-    /// Vérifie une signature SLH-DSA-SHA2-128s
+    /// Verifies an SLH-DSA-SHA2-128s signature
     /// 
     /// # Arguments
-    /// * `message` - Le message signé (haché en interne avec SHA-256)
-    /// * `signature` - La signature SLH-DSA (7856 octets)
-    /// * `public_key` - La clé publique (64 octets)
+    /// * `message` - The signed message (hashed internally with SHA-256)
+    /// * `signature` - The SLH-DSA signature (7856 bytes)
+    /// * `public_key` - The public key (64 bytes)
     /// 
     /// # Returns
-    /// Ok(()) si la signature est valide, Err(SignatureError) sinon
+    /// Ok(()) if the signature is valid, Err(SignatureError) sinon
     pub fn verify(
         &self,
         message: &[u8],
         signature: &[u8],
         public_key: &[u8],
     ) -> Result<(), SignatureError> {
-        // Vérification des tailles
+        // Verification of tailles
         if signature.len() != SLH_DSA_SIGNATURE_SIZE {
             return Err(SignatureError::InvalidLength {
                 expected: SLH_DSA_SIGNATURE_SIZE,
@@ -70,16 +70,16 @@ impl SlhDsaVerifier {
             });
         }
 
-        // Hachage du message avec SHA-256 (pré-requis SLH-DSA)
+        // Hachage of the message with SHA-256 (prerequisite SLH-DSA)
         let message_hash = Sha256::digest(message);
         
-        // Vérification de la signature SLH-DSA
-        // Note: Dans une implémentation réelle, utiliser pqcrypto-sphincsplus ou similaire
-        // Ici on simule la logique de vérification
+        // Verification de the signature SLH-DSA
+        // Note: In a real implementation, use pqcrypto-sphincsplus or similar
+        // Ici on simule the logique de verification
         self.verify_slh_dsa_sha2_128s(&message_hash, signature, public_key)
     }
 
-    /// Vérification interne SLH-DSA-SHA2-128s
+    /// Verification interne SLH-DSA-SHA2-128s
     /// 
     /// SLH-DSA-SHA2-128s utilise:
     /// - H: SHA-256 (256 bits)
@@ -92,6 +92,6 @@ impl SlhDsaVerifier {
         signature: &[u8],
         public_key: &[u8],
     ) -> Result<(), SignatureError> {
-        // Extraction des composants de la clé publique
+        // Extraction of composants de the key publique
         let pk_seed = &public_key[0..32];
         let pk_root = &public_key[32..64

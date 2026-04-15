@@ -1,12 +1,12 @@
-//! Exemples de code vulnérable pour démonstration des tests de régression
-//! NE PAS UTILISER EN PRODUCTION - Ces implémentations sont intentionnellement faibles
+//! Exemples de code vulnerable for demonstration of tests de regression
+//! NE PAS UTILISER EN PRODUCTION - Ces implementations are intentionnellement faibles
 
-/// Comparaison de MAC vulnérable aux attaques temporelles
+/// Comparison de MAC vulnerable aux attaques temporelles
 pub fn insecure_compare_mac(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    // VULNÉRABILITÉ: early return sur différence
+    // VULNERABILITY: early return sur difference
     for i in 0..a.len() {
         if a[i] != b[i] {
             return false; // Timing leak ici
@@ -15,7 +15,7 @@ pub fn insecure_compare_mac(a: &[u8], b: &[u8]) -> bool {
     true
 }
 
-/// Chiffrement avec nonce réutilisé (catastrophique pour AES-GCM/ChaCha20)
+/// Chiffrement with nonce reused (catastrophique for AES-GCM/ChaCha20)
 pub struct InsecureNonceGenerator {
     counter: u64,
 }
@@ -26,7 +26,7 @@ impl InsecureNonceGenerator {
     }
     
     pub fn next_nonce(&mut self) -> [u8; 12] {
-        // VULNÉRABILITÉ: nonce prévisible et potentiellement réutilisé après redémarrage
+        // VULNERABILITY: nonce predictable and potentiellement reused after restartup
         let mut nonce = [0u8; 12];
         nonce[4..12].copy_from_slice(&self.counter.to_be_bytes());
         self.counter += 1;
@@ -34,7 +34,7 @@ impl InsecureNonceGenerator {
     }
 }
 
-/// Décryptage avec distinction d'erreurs (Padding Oracle)
+/// Decryption with distinction d'errors (Padding Oracle)
 #[derive(Debug)]
 pub enum InsecureDecryptError {
     PaddingError,
@@ -45,14 +45,14 @@ pub fn insecure_decrypt_with_padding(
     ciphertext: &[u8],
     key: &[u8],
 ) -> Result<Vec<u8>, InsecureDecryptError> {
-    // Simulation de vérification de padding distincte de l'intégrité
+    // Simulation de verification de padding distincte de l'integrity
     if ciphertext.len() % 16 != 0 {
         return Err(InsecureDecryptError::PaddingError);
     }
     
-    // ... décryptage ...
+    // ... decryption ...
     
-    // VULNÉRABILITÉ: erreurs distinctes permettent padding oracle attack
+    // VULNERABILITY: errors distinctes allowstent padding oracle attack
     if !verify_padding(ciphertext) {
         return Err(InsecureDecryptError::PaddingError);
     }

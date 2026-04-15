@@ -5,7 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use log::{info, warn};
 use serde_json::{json, Value};
 
-// Structure pour stocker les informations de connexion d'un pair
+// Structure for stocker the informations de connection d'un pair
 struct GossipRpc {
     channel: mpsc::Sender<String>,
 }
@@ -29,19 +29,19 @@ impl GossipRpc {
                 match stream.read(&mut buffer).await {
                     Ok(n) => {
                         if n == 0 {
-                            return Err("Fin de la connexion".to_string());
+                            return Err("Fin de la connection".to_string());
                         }
                         Ok(String::from_utf8_lossy(&buffer[..n]).to_string())
                     }
-                    Err(e) => Err(format!("Erreur de lecture de message: {}", e)),
+                    Err(e) => Err(format!("Error reading message: {}", e)),
                 }
             }
-            Err(e) => Err(format!("Erreur de connexion: {}", e)),
+            Err(e) => Err(format!("Connection error: {}", e)),
         }
     }
 }
 
-// Tests avec mock network
+// Tests with mock network
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,7 +52,7 @@ mod tests {
         let gossip_rpc = GossipRpc::new().await;
         let message = json!({"block_hash": "block_hash", "transaction_hash": "transaction_hash"});
         gossip_rpc.send_message(message.to_string()).await;
-        // Vérification de la réception du message
+        // Verification de the reception of the message
         // ...
     }
 }

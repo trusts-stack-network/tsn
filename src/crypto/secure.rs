@@ -1,11 +1,11 @@
-//! Implémentation sécurisée de primitives cryptographiques
+//! Implementation secure de primitives cryptographiques
 //! 
-//! Règles appliquées:
+//! Rules appliedes:
 //! - Constant-time operations via `subtle`
 //! - Zeroization automatique via `ZeroizeOnDrop`
-//! - AEAD uniquement (pas de padding oracle possible)
-//! - RNG système sécurisé
-//! - Aucun unwrap/expect - erreurs propagées via Result
+//! - AEAD only (pas de padding oracle possible)
+//! - RNG system secure
+//! - No unwrap/expect - errors propagatedes via Result
 
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng, generic_array::GenericArray},
@@ -17,7 +17,7 @@ use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use thiserror::Error;
 
-/// Erreurs cryptographiques sécurisées
+/// Errors cryptographiques secure
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum CryptoError {
     #[error("Invalid key size")]
@@ -38,7 +38,7 @@ pub enum CryptoError {
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Clé secrète protégée en mémoire
+/// Key secret protected in memory
 #[derive(Clone)]
 pub struct SecretKey {
     bytes: Vec<u8>,
@@ -80,12 +80,12 @@ impl Drop for SecretKey {
     }
 }
 
-// Marqueur pour zeroization
+// Marqueur for zeroization
 struct SecretGuard;
 
 impl Drop for SecretGuard {
     fn drop(&mut self) {
-        // Logique additionnelle si nécessaire
+        // Logique additionnelle if necessary
     }
 }
 
@@ -115,7 +115,7 @@ pub fn encrypt_aes_gcm(
     Ok(result)
 }
 
-/// Déchiffrement AEAD AES-256-GCM
+/// Decryption AEAD AES-256-GCM
 #[must_use]
 pub fn decrypt_aes_gcm(
     key: &SecretKey,
@@ -140,7 +140,7 @@ pub fn decrypt_aes_gcm(
         .map_err(|_| CryptoError::DecryptionFailed)
 }
 
-/// HMAC-SHA256 avec vérification constant-time
+/// HMAC-SHA256 with verification constant-time
 #[must_use]
 pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<[u8; 32], CryptoError> {
     let mut mac = HmacSha256::new_from_slice(key)
@@ -153,7 +153,7 @@ pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<[u8; 32], CryptoError> 
     Ok(output)
 }
 
-/// Vérification HMAC constant-time
+/// Verification HMAC constant-time
 /// 
 /// SECURITY: Uses subtle::ConstantTimeEq to prevent timing attacks
 #[must_use]
@@ -170,7 +170,7 @@ pub fn verify_hmac_sha256(key: &[u8], message: &[u8], expected: &[u8]) -> Result
     Ok(computed.ct_eq(&expected_array).into())
 }
 
-/// Génération de nonce sécurisée
+/// Generation de nonce secure
 #[must_use]
 pub fn generate_nonce(size: usize) -> Result<Vec<u8>, CryptoError> {
     let mut nonce = vec![0u8; size];

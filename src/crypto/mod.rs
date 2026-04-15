@@ -19,8 +19,8 @@ pub mod pq;
 // Validateur de signatures SLH-DSA
 pub mod signature_validator;
 
-// MODULES DE DÉMONSTRATION VULNÉRABLES
-// Ces modules ne sont compilés qu'en mode test ou avec la feature explicite "vulnerable-demo"
+// MODULES DE DEMONSTRATION VULNERABLE
+// Ces modules not are compiled qu'en mode test or with the feature explicite "vulnerable-demo"
 // ⚠️ NE JAMAIS UTILISER EN PRODUCTION ⚠️
 #[cfg(any(test, feature = "vulnerable-demo"))]
 pub mod vulnerable;
@@ -28,9 +28,9 @@ pub mod vulnerable;
 #[cfg(any(test, feature = "vulnerable-demo"))]
 pub mod vulnerable_ops;
 
-// Guard de sécurité : les modules vulnérables ne compilent qu'en test/demo (voir cfg ci-dessus)
+// Guard de security : the modules vulnerables not compilent qu'en test/demo (voir cfg ci-dessus)
 #[cfg(all(not(test), feature = "vulnerable-demo"))]
-compile_error!("Feature 'vulnerable-demo' ne doit pas être activée en production !");
+compile_error!("Feature 'vulnerable-demo' ne doit pas be enabled en production !");
 
 pub use keys::KeyPair;
 pub use address::Address;

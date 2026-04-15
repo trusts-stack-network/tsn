@@ -6,23 +6,23 @@ use tracing::{info, debug, warn};
 use crate::network::api::AppState;
 use crate::network::peer_id;
 
-/// Intervalle entre les tentatives de découverte
+/// Intervalle between attempts de discovery
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Timeout pour les requêtes HTTP de découverte
+/// Timeout for the requests HTTP de discovery
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Max retry attempts avant d'activer le circuit breaker
+/// Max retry attempts before d'activer the circuit breaker
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 
-/// Limite maximale de peers à découvrir
+/// Limite maximale de peers to discover
 #[allow(dead_code)]
 const MAX_PEERS: usize = 50;
 
-/// Durée minimum avant de réessayer quand le circuit breaker est ouvert
+/// Duration minimum before de retry quand the circuit breaker is ouvert
 const CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(300); // 5 minutes
 
-/// État du circuit breaker
+/// State of the circuit breaker
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(dead_code)]
 enum CircuitState {
@@ -31,7 +31,7 @@ enum CircuitState {
     HalfOpen, // Testing if service is back up
 }
 
-/// Circuit breaker pour éviter les retry loops infinis
+/// Circuit breaker for avoidr the retry loops infinis
 #[derive(Debug)]
 #[allow(dead_code)]
 struct CircuitBreaker {
@@ -48,7 +48,7 @@ impl CircuitBreaker {
             state: CircuitState::Closed,
             failure_count: 0,
             last_failure_time: None,
-            success_threshold: 1, // Une réussite suffit pour fermer le circuit
+            success_threshold: 1, // One success is enough to close the circuit
             failure_threshold: MAX_RETRY_ATTEMPTS,
         }
     }
@@ -101,7 +101,7 @@ impl CircuitBreaker {
     }
 }
 
-/// Découverte de pairs via gossip avec circuit breaker
+/// Discovery de peers via gossip with circuit breaker
 pub async fn discovery_loop(state: Arc<AppState>) {
     let mut ticker = interval(DISCOVERY_INTERVAL);
     let client = reqwest::Client::builder()
@@ -116,7 +116,7 @@ pub async fn discovery_loop(state: Arc<AppState>) {
     loop {
         ticker.tick().await;
 
-        // Vérifier si le circuit breaker permet de continuer
+        // Verify if the circuit breaker allows de continuer
         let can_proceed = {
             let mut cb = circuit_breaker.lock().unwrap();
             cb.can_proceed()
@@ -127,13 +127,13 @@ pub async fn discovery_loop(state: Arc<AppState>) {
             continue;
         }
 
-        // Récupère la liste des pairs connus
+        // Retrieves the liste of peers connus
         let peers: Vec<String> = {
             let peers_guard = state.peers.read().unwrap();
             peers_guard.clone()
         };
 
-        // Annonce à chaque pair et découvre de nouveaux pairs
+        // Annonce to each pair and discovers de nouveaux peers
         for peer in &peers {
             if !crate::network::is_contactable_peer(peer) { continue; }
             // Announce ourselves to the peer
@@ -195,7 +195,7 @@ pub async fn discovery_loop(state: Arc<AppState>) {
     }
 }
 
-/// Annonce ce nœud à un pair via POST /peers
+/// Annonce this node to a pair via POST /peers
 async fn announce_to_peer(
     client: &reqwest::Client,
     peer: &str,
@@ -219,7 +219,7 @@ async fn announce_to_peer(
     Ok(())
 }
 
-/// Découvre de nouveaux pairs via GET /peers
+/// Discovers de nouveaux peers via GET /peers
 async fn discover_peers(
     client: &reqwest::Client,
     peer: &str,
@@ -239,7 +239,7 @@ async fn discover_peers(
     Ok(peers)
 }
 
-/// Normalise une URL de pair pour comparaison
+/// Normalise a URL de pair for comparaison
 fn normalize_url(url: &str) -> String {
     let mut s = url.trim().to_lowercase();
     while s.ends_with('/') {
@@ -248,7 +248,7 @@ fn normalize_url(url: &str) -> String {
     s
 }
 
-/// Information sur un pair
+/// Information on a pair
 #[derive(Debug, Clone)]
 pub struct PeerInfo {
     pub address: String,
@@ -266,7 +266,7 @@ impl PeerInfo {
     }
 }
 
-/// Gestionnaire de découverte
+/// Gestionnaire de discovery
 pub struct PeerDiscovery {
     known_peers: Vec<PeerInfo>,
 }

@@ -1,8 +1,8 @@
-//! Module de telemetry structurée pour TSN
+//! Structured telemetry module for TSN
 //!
-//! Ce module fournit des utilitaires de logging et de tracing pour toute
-//! l'application TSN. Il centralise la configuration du subscriber et fournit
-//! des spans prédéfinis pour les opérations critiques.
+//! This module provides logging and tracing utilities for the entire
+//! the TSN application. It centralizes the subscriber configuration and provides
+//! predefined spans for critical operations.
 //!
 //! # Usage
 //!
@@ -10,12 +10,12 @@
 //! use tsn::telemetry::{init_tracing, crypto_span, network_span};
 //! use tracing::{info, instrument};
 //!
-//! // Initialiser le tracing au démarrage
+//! // Initialize tracing at startup
 //! init_tracing("info");
 //!
-//! // Utiliser un span prédéfini
+//! // Use a predefined span
 //! let _span = crypto_span("signature_validation");
-//! info!(target: "tsn::crypto", "Validation démarrée");
+//! info!(target: "tsn::crypto", "Validation startede");
 //! ```
 
 use std::time::Duration;
@@ -27,10 +27,10 @@ use tracing_subscriber::{
     EnvFilter,
 };
 
-/// Initialise le système de tracing avec la configuration TSN.
+/// Initializes the tracing system with TSN configuration.
 ///
 /// # Arguments
-/// * `default_level` - Niveau de log par défaut (ex: "info", "debug")
+/// * `default_level` - Default log level (e.g., "info", "debug")
 ///
 /// # Exemple
 /// ```rust
@@ -53,10 +53,10 @@ pub fn init_tracing(default_level: &str) {
         .init();
 }
 
-/// Crée un span pour les opérations cryptographiques critiques.
+/// Creates a span for critical cryptographic operations.
 ///
 /// # Arguments
-/// * `operation` - Nom de l'opération (ex: "signature_validation", "proof_generation")
+/// * `operation` - Operation name (e.g., "signature_validation", "proof_generation")
 pub fn crypto_span(operation: &str) -> Span {
     span!(
         Level::DEBUG,
@@ -67,10 +67,10 @@ pub fn crypto_span(operation: &str) -> Span {
     )
 }
 
-/// Crée un span pour les opérations réseau.
+/// Creates a span for network operations.
 ///
 /// # Arguments
-/// * `operation` - Nom de l'opération (ex: "sync", "mempool_relay")
+/// * `operation` - Operation name (e.g., "sync", "mempool_relay")
 pub fn network_span(operation: &str) -> Span {
     span!(
         Level::DEBUG,
@@ -81,10 +81,10 @@ pub fn network_span(operation: &str) -> Span {
     )
 }
 
-/// Crée un span pour les opérations de consensus.
+/// Creates a span for consensus operations.
 ///
 /// # Arguments
-/// * `operation` - Nom de l'opération (ex: "block_validation", "fork_choice")
+/// * `operation` - Operation name (e.g., "block_validation", "fork_choice")
 pub fn consensus_span(operation: &str) -> Span {
     span!(
         Level::INFO,
@@ -95,10 +95,10 @@ pub fn consensus_span(operation: &str) -> Span {
     )
 }
 
-/// Crée un span pour les opérations de stockage.
+/// Creates a span for storage operations.
 ///
 /// # Arguments
-/// * `operation` - Nom de l'opération (ex: "block_write", "state_read")
+/// * `operation` - Operation name (e.g., "block_write", "state_read")
 pub fn storage_span(operation: &str) -> Span {
     span!(
         Level::TRACE,
@@ -109,10 +109,10 @@ pub fn storage_span(operation: &str) -> Span {
     )
 }
 
-/// Crée un span pour les opérations de wallet.
+/// Creates a span for wallet operations.
 ///
 /// # Arguments
-/// * `operation` - Nom de l'opération (ex: "transaction_create", "note_scan")
+/// * `operation` - Operation name (e.g., "transaction_create", "note_scan")
 pub fn wallet_span(operation: &str) -> Span {
     span!(
         Level::DEBUG,
@@ -123,10 +123,10 @@ pub fn wallet_span(operation: &str) -> Span {
     )
 }
 
-/// Instrumente une fonction pour le tracing avec des attributs standard.
+/// Instruments a function for tracing with standard attributes.
 ///
-/// Cette macro ajoute automatiquement des attributs comme le module, la ligne,
-/// et le temps d'exécution.
+/// This macro automatically adds attributes like module, line,
+/// and execution time.
 #[macro_export]
 macro_rules! trace_fn {
     ($level:expr, $name:expr) => {
@@ -135,11 +135,11 @@ macro_rules! trace_fn {
     };
 }
 
-/// Log une métrique de performance avec contexte.
+/// Log a performance metric with context.
 ///
 /// # Arguments
-/// * `name` - Nom de la métrique
-/// * `value` - Valeur (en millisecondes généralement)
+/// * `name` - Metric name
+/// * `value` - Value (in milliseconds generally)
 /// * `context` - Contexte additionnel
 pub fn log_metric(name: &str, value: u64, context: &str) {
     tracing::info!(
@@ -151,13 +151,13 @@ pub fn log_metric(name: &str, value: u64, context: &str) {
     );
 }
 
-/// Log un événement de sécurité avec niveau de criticité.
+/// Log a security event with criticality level.
 ///
 /// # Arguments
-/// * `level` - Niveau de criticité (warn, error)
-/// * `event_type` - Type d'événement
-/// * `description` - Description détaillée
-/// * `source` - Source de l'événement
+/// * `level` - Criticality level (warn, error)
+/// * `event_type` - Type d'event
+/// * `description` - Description detailed
+/// * `source` - Source de l'event
 pub fn log_security_event(level: Level, event_type: &str, description: &str, source: &str) {
     match level {
         Level::ERROR => {
@@ -190,9 +190,9 @@ pub fn log_security_event(level: Level, event_type: &str, description: &str, sou
     }
 }
 
-/// Structure pour mesurer le temps d'exécution d'une opération.
+/// Structure for measuring the execution time of an operation.
 ///
-/// Utilise le pattern RAII pour mesurer automatiquement la durée.
+/// Uses the RAII pattern to automatically measure duration.
 pub struct Timer {
     name: String,
     start: std::time::Instant,
@@ -200,10 +200,10 @@ pub struct Timer {
 }
 
 impl Timer {
-    /// Crée un nouveau timer.
+    /// Creates a new timer.
     ///
     /// # Arguments
-    /// * `name` - Nom de l'opération mesurée
+    /// * `name` - Name of the measured operation
     /// * `context` - Contexte additionnel
     pub fn new(name: &str, context: &str) -> Self {
         Self {
@@ -221,9 +221,9 @@ impl Drop for Timer {
     }
 }
 
-/// Extension trait pour instrumenter les résultats avec du logging.
+/// Extension trait for instrumenting results with logging.
 pub trait InstrumentResult<T, E> {
-    /// Log le résultat avec le niveau approprié.
+    /// Log the result with the appropriate level.
     fn instrument(self, operation: &str) -> Result<T, E>;
 }
 
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn test_timer_creation() {
         let timer = Timer::new("test_op", "test_context");
-        // Le timer sera drop à la fin du test
+        // Le timer sera drop to the fin of the test
         drop(timer);
     }
 }

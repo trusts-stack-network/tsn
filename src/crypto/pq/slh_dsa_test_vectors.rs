@@ -1,14 +1,14 @@
-//! Vecteurs de test FIPS 205 pour SLH-DSA (SPHINCS+)
+//! Vecteurs de test FIPS 205 for SLH-DSA (SPHINCS+)
 //!
-//! Références:
+//! References:
 //! - FIPS PUB 205 (2024): https://doi.org/10.6028/NIST.FIPS.205
 //! - NIST CAVP: https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program
 //!
-//! Ces vecteurs sont générés selon les spécifications FIPS 205 pour les paramètres
+//! Ces vecteurs are generateds selon the specifications FIPS 205 for the parameters
 //! SHA2-128s (n=16, h=63, d=7, a=12, k=14, w=16)
 
-/// Seed de test pour génération déterministe (32 octets)
-/// Utilisé pour reproduire les mêmes clés dans les tests
+/// Seed de test for generation deterministic (32 bytes)
+/// Used for reproduire the same keys in the tests
 pub const TEST_SEED_1: &[u8] = &[
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
     0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
@@ -24,41 +24,41 @@ pub const TEST_SEED_2: &[u8] = &[
     0xe7, 0xe6, 0xe5, 0xe4, 0xe3, 0xe2, 0xe1, 0xe0,
 ];
 
-/// Seed de test avec zéros (cas limite)
+/// Seed de test with zeros (cas limite)
 pub const TEST_SEED_ZEROS: &[u8] = &[0x00; 32];
 
-/// Seed de test avec uns (cas limite)
+/// Seed de test with uns (cas limite)
 pub const TEST_SEED_ONES: &[u8] = &[0xff; 32];
 
-/// Messages de test de différentes tailles
+/// Messages de test de different tailles
 pub const MESSAGE_EMPTY: &[u8] = b"";
 pub const MESSAGE_SHORT: &[u8] = b"Hello, World!";
 pub const MESSAGE_MEDIUM: &[u8] = b"The quick brown fox jumps over the lazy dog. This is a standard test message for cryptographic operations.";
-pub const MESSAGE_LONG: &[u8] = &[0x42u8; 10000]; // 10KB de données
+pub const MESSAGE_LONG: &[u8] = &[0x42u8; 10000]; // 10KB of data
 
-/// Message avec caractères spéciaux et UTF-8
-pub const MESSAGE_UTF8: &[u8] = "Test avec caractères spéciaux: éàùçñ 日本語 🎉".as_bytes();
+/// Message with characters special and UTF-8
+pub const MESSAGE_UTF8: &[u8] = "Test avec characters special: eaucn 日本語 🎉".as_bytes();
 
-/// Message avec octets nuls et valeurs extrêmes
+/// Message with bytes nuls and valeurs extreme
 pub const MESSAGE_BINARY: &[u8] = &[
     0x00, 0x01, 0x7f, 0x80, 0xff, 0x00, 0x00, 0x00,
     0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
 ];
 
-/// Clé publique attendue pour TEST_SEED_1 (paramètres SHA2-128s)
-/// Taille: 32 octets pour SHA2-128s
+/// Key publique attendue for TEST_SEED_1 (parameters SHA2-128s)
+/// Size: 32 octets for SHA2-128s
 pub const EXPECTED_PK_128S: &[u8] = &[
-    // Ces valeurs seraient générées par un outil de référence FIPS 205
-    // Pour les tests, on utilise des placeholders qui seront remplacés
-    // par les vraies valeurs lors de l'exécution
+    // Ces valeurs seraient generatedes par a outil de reference FIPS 205
+    // Pour the tests, on utilise of placeholders that seront replaced
+    // par the vraies valeurs during de l'execution
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
-/// Clé secrète attendue pour TEST_SEED_1 (paramètres SHA2-128s)
-/// Taille: 64 octets pour SHA2-128s
+/// Key secret attendue for TEST_SEED_1 (parameters SHA2-128s)
+/// Size: 64 octets for SHA2-128s
 pub const EXPECTED_SK_128S: &[u8] = &[
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -70,15 +70,15 @@ pub const EXPECTED_SK_128S: &[u8] = &[
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
-/// Signature attendue pour MESSAGE_SHORT avec TEST_SEED_1
-/// Taille: 7856 octets pour SHA2-128s
-/// Note: En pratique, on ne stocke pas la signature complète ici
-/// mais on vérifie les propriétés (taille, format)
+/// Signature attendue for MESSAGE_SHORT with TEST_SEED_1
+/// Size: 7856 octets for SHA2-128s
+/// Note: En pratique, on not stores pas the signature completee ici
+/// but on verifies the properties (taille, format)
 pub const EXPECTED_SIG_SIZE_128S: usize = 7856;
 pub const EXPECTED_PK_SIZE_128S: usize = 32;
 pub const EXPECTED_SK_SIZE_128S: usize = 64;
 
-/// Tailles pour les autres paramètres
+/// Sizes for the autres parameters
 pub const SIG_SIZE_128F: usize = 17088;
 pub const SIG_SIZE_192S: usize = 16224;
 pub const SIG_SIZE_192F: usize = 49248;
@@ -93,27 +93,27 @@ pub const SK_SIZE_128: usize = 64;
 pub const SK_SIZE_192: usize = 96;
 pub const SK_SIZE_256: usize = 128;
 
-/// Données pour tests de malleabilité
-/// Une signature modifiée qui ne devrait pas être valide
+/// Data for tests de malleability
+/// Une signature modified that not should pas be valid
 pub const MALLEABLE_SIG_HEADER: &[u8] = &[
     0x00, 0x00, 0x00, 0x00, // Version incorrecte
 ];
 
-/// Données pour tests de corruption
-/// Indices d'octets critiques dans la signature qui ne doivent pas être modifiés
+/// Data for tests de corruption
+/// Indices d'bytes critiques in the signature that not doivent pas be modifieds
 pub const CRITICAL_SIG_OFFSETS: &[usize] = &[0, 1, 2, 3, 4, 5, 6, 7];
 
-/// Nombre de signatures à générer pour tests de non-collision
+/// Number de signatures to generate for tests de non-collision
 pub const NON_COLLISION_ITERATIONS: usize = 100;
 
-/// Messages pour tests de domaine séparé
+/// Messages for tests de domaine separated
 pub const DOMAIN_SEPARATION_MESSAGES: &[&[u8]] = &[
     b"domain1:message",
     b"domain2:message",
     b"domain1:message", // Identique au premier
 ];
 
-/// Structure pour les cas de test nommés
+/// Structure for the cas de test named
 pub struct TestCase {
     pub name: &'static str,
     pub seed: &'static [u8],
@@ -151,13 +151,13 @@ pub const STANDARD_TEST_CASES: &[TestCase] = &[
         name: "utf8_message",
         seed: TEST_SEED_1,
         message: MESSAGE_UTF8,
-        description: "Message avec caractères UTF-8",
+        description: "Message avec characters UTF-8",
     },
     TestCase {
         name: "binary_message",
         seed: TEST_SEED_1,
         message: MESSAGE_BINARY,
-        description: "Message binaire avec octets spéciaux",
+        description: "Message binaire avec bytes special",
     },
     TestCase {
         name: "alternate_seed",
@@ -169,7 +169,7 @@ pub const STANDARD_TEST_CASES: &[TestCase] = &[
         name: "zero_seed",
         seed: TEST_SEED_ZEROS,
         message: MESSAGE_SHORT,
-        description: "Message avec seed de zéros",
+        description: "Message avec seed de zeros",
     },
     TestCase {
         name: "ones_seed",
@@ -179,7 +179,7 @@ pub const STANDARD_TEST_CASES: &[TestCase] = &[
     },
 ];
 
-/// Vecteurs de test pour vérification d'erreur
+/// Vecteurs de test for verification d'erreur
 pub struct ErrorTestCase {
     pub name: &'static str,
     pub public_key: &'static [u8],
@@ -189,23 +189,23 @@ pub struct ErrorTestCase {
     pub description: &'static str,
 }
 
-/// Cas d'erreur pour tests de vérification
+/// Cas d'error for tests de verification
 pub const ERROR_TEST_CASES: &[ErrorTestCase] = &[
     ErrorTestCase {
         name: "wrong_pk_size_too_short",
-        public_key: &[0x00; 16], // Trop court (devrait être 32)
+        public_key: &[0x00; 16], // Trop court (should be 32)
         message: MESSAGE_SHORT,
         signature: &[0x00; EXPECTED_SIG_SIZE_128S],
         expected_error: "InvalidPublicKeySize",
-        description: "Clé publique trop courte",
+        description: "Key publique trop courte",
     },
     ErrorTestCase {
         name: "wrong_pk_size_too_long",
-        public_key: &[0x00; 64], // Trop long (devrait être 32)
+        public_key: &[0x00; 64], // Trop long (should be 32)
         message: MESSAGE_SHORT,
         signature: &[0x00; EXPECTED_SIG_SIZE_128S],
         expected_error: "InvalidPublicKeySize",
-        description: "Clé publique trop longue",
+        description: "Key publique trop long",
     },
     ErrorTestCase {
         name: "wrong_sig_size_too_short",
@@ -221,11 +221,11 @@ pub const ERROR_TEST_CASES: &[ErrorTestCase] = &[
         message: MESSAGE_SHORT,
         signature: &[0x00; EXPECTED_SIG_SIZE_128S + 100], // Trop long
         expected_error: "InvalidSignatureSize",
-        description: "Signature trop longue",
+        description: "Signature trop long",
     },
 ];
 
-/// Données pour tests de performance
+/// Data for tests de performance
 pub const BENCH_MESSAGE_SIZES: &[usize] = &[
     32,      // 1 bloc hash
     64,      // 2 blocs
@@ -234,8 +234,8 @@ pub const BENCH_MESSAGE_SIZES: &[usize] = &[
     1048576, // 1 MB
 ];
 
-/// Nombre d'itérations pour les tests de stress
+/// Number d'iterations for the tests de stress
 pub const STRESS_TEST_ITERATIONS: usize = 1000;
 
-/// Limite de temps pour les tests de performance (ms)
+/// Limite de temps for the tests de performance (ms)
 pub const PERF_TEST_TIMEOUT_MS: u64 = 5000;

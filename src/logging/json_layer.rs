@@ -1,7 +1,7 @@
-//! Layer de formatage JSON pour tracing
+//! JSON formatting layer for tracing
 //!
-//! Ce module fournit un layer personnalisé pour le crate `tracing`
-//! qui formate les événements en JSON structuré.
+//! This module provides a custom layer for the `tracing` crate
+//! that formats events as structured JSON.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -18,12 +18,12 @@ use tracing_subscriber::registry::LookupSpan;
 
 use super::Result;
 
-/// Format de sortie JSON pour les logs
+/// JSON output format for logs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonFormat {
-    /// JSON compact (une ligne par événement)
+    /// Compact JSON (one line per event)
     Compact,
-    /// JSON pretty-printé (pour le développement)
+    /// Pretty-printed JSON (for development)
     Pretty,
 }
 
@@ -33,7 +33,7 @@ impl Default for JsonFormat {
     }
 }
 
-/// Layer de formatage JSON pour tracing
+/// JSON formatting layer for tracing
 pub struct JsonLayer<W> {
     writer: Mutex<W>,
     format: JsonFormat,
@@ -43,7 +43,7 @@ pub struct JsonLayer<W> {
 }
 
 impl<W: Write + Send + 'static> JsonLayer<W> {
-    /// Crée un nouveau layer JSON
+    /// Creates a new JSON layer
     pub fn new(writer: W) -> Self {
         Self {
             writer: Mutex::new(writer),
@@ -54,31 +54,31 @@ impl<W: Write + Send + 'static> JsonLayer<W> {
         }
     }
 
-    /// Définit le format de sortie
+    /// Sets the output format
     pub fn with_format(mut self, format: JsonFormat) -> Self {
         self.format = format;
         self
     }
 
-    /// Active/désactive l'inclusion du contexte de span
+    /// Enables/disables span context inclusion
     pub fn with_span_context(mut self, enabled: bool) -> Self {
         self.include_span_context = enabled;
         self
     }
 
-    /// Active/désactive l'inclusion des informations de thread
+    /// Enables/disables thread information inclusion
     pub fn with_thread_info(mut self, enabled: bool) -> Self {
         self.include_thread_info = enabled;
         self
     }
 
-    /// Active/désactive l'inclusion de la cible
+    /// Enables/disables target inclusion
     pub fn with_target(mut self, enabled: bool) -> Self {
         self.include_target = enabled;
         self
     }
 
-    /// Formate un événement en JSON
+    /// Formats an event as JSON
     fn format_event_json<S, N>(
         &self,
         ctx: &FmtContext<'S, N>,
@@ -93,15 +93,15 @@ impl<W: Write + Send + 'static> JsonLayer<W> {
         // Timestamp
         log_entry.timestamp = chrono::Utc::now().to_rfc3339();
 
-        // Niveau de log
+        // Log level
         log_entry.level = event.metadata().level().to_string();
 
-        // Cible (module)
+        // Target (module)
         if self.include_target {
             log_entry.target = Some(event.metadata().target().to_string());
         }
 
-        // Nom de l'événement
+        // Event name
         log_entry.name = event.metadata().name().to_string();
 
         // Thread info
@@ -112,7 +112,7 @@ impl<W: Write + Send + 'static> JsonLayer<W> {
             }
         }
 
-        // Champs de l'événement
+        // Event fields
         let mut visitor = JsonVisitor::default();
         event.record(&mut visitor);
         log_entry.fields = visitor.fields;
@@ -131,7 +131,7 @@ impl<W: Write + Send + 'static> JsonLayer<W> {
             }
         }
 
-        // Sérialiser selon le format
+        // Serialize selon the format
         match self.format {
             JsonFormat::Compact => serde_json::to_string(&log_entry),
             JsonFormat::Pretty => serde_json::to_string_pretty(&log_entry),
@@ -149,7 +149,7 @@ where
         event: &Event,
         ctx: Context<'S>,
     ) {
-        // Créer un contexte de formatage
+        // Create a formatting context
         let fmt_ctx = FmtContext::new(&ctx,
             &tracing_subscriber::fmt::format::DefaultFields::default(),
         );
@@ -162,46 +162,46 @@ where
                 };
 
                 if writeln!(writer, "{}", json).is_err() {
-                    // Ignorer les erreurs d'écriture
+                    // Ignore write errors
                 }
             }
             Err(_) => {
-                // Ignorer les erreurs de sérialisation
+                // Ignore serialization errors
             }
         }
     }
 }
 
-/// Entrée de log au format JSON
+/// JSON log entry
 #[derive(Debug, Default, Serialize)]
 struct JsonLogEntry {
     /// Timestamp ISO8601
     timestamp: String,
-    /// Niveau de log (TRACE, DEBUG, INFO, WARN, ERROR)
+    /// Log level (TRACE, DEBUG, INFO, WARN, ERROR)
     level: String,
-    /// Cible du log (module)
+    /// Log target (module)
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<String>,
-    /// Nom de l'événement
+    /// Event name
     name: String,
-    /// Message formaté
+    /// Formatted message
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     /// Champs additionnels
     #[serde(flatten)]
     fields: HashMap<String, serde_json::Value>,
-    /// ID du thread
+    /// Thread ID
     #[serde(skip_serializing_if = "Option::is_none")]
     thread_id: Option<String>,
-    /// Nom du thread
+    /// Thread name
     #[serde(skip_serializing_if = "Option::is_none")]
     thread_name: Option<String>,
-    /// Pile de spans
+    /// Span stack
     #[serde(skip_serializing_if = "Option::is_none")]
     spans: Option<Vec<String>>,
 }
 
-/// Visitor pour extraire les champs d'un événement
+/// Visitor to extract fields from an event
 #[derive(Default)]
 struct JsonVisitor {
     fields: HashMap<String, serde_json::Value>,
@@ -216,7 +216,7 @@ impl tracing::field::Visit for JsonVisitor {
         let key = field.name().to_string();
         let json_value = format!("{:?}", value);
         
-        // Le champ "message" est traité spécialement
+        // The "message" field is treated specially
         if key == "message" {
             self.message = Some(json_value.trim_matches('"').to_string());
         } else {
@@ -290,7 +290,7 @@ impl tracing::field::Visit for JsonVisitor {
     }
 }
 
-/// Layer de formatage JSON pour la console
+/// JSON formatting layer for the console
 pub struct ConsoleJsonLayer {
     format: JsonFormat,
     include_span_context: bool,
@@ -298,7 +298,7 @@ pub struct ConsoleJsonLayer {
 }
 
 impl ConsoleJsonLayer {
-    /// Crée un nouveau layer JSON pour la console
+    /// Creates a new JSON layer for the console
     pub fn new() -> Self {
         Self {
             format: JsonFormat::Compact,
@@ -307,7 +307,7 @@ impl ConsoleJsonLayer {
         }
     }
 
-    /// Définit le format de sortie
+    /// Sets the output format
     pub fn with_format(mut self, format: JsonFormat) -> Self {
         self.format = format;
         self
@@ -328,7 +328,7 @@ where
         // Timestamp
         log_entry.timestamp = chrono::Utc::now().to_rfc3339();
 
-        // Niveau de log
+        // Log level
         log_entry.level = event.metadata().level().to_string();
 
         // Cible
@@ -381,13 +381,13 @@ mod tests {
 
     #[test]
     fn test_json_visitor() {
-        // Ce test vérifie que le JsonVisitor fonctionne correctement
-        // Note: Les tests complets nécessiteraient un subscriber tracing
+        // This test verifies that the JsonVisitor works correctly
+        // Note: Completee tests would require a tracing subscriber
         
         let mut visitor = JsonVisitor::default();
         
-        // Simuler l'enregistrement de champs
-        // Dans un vrai test, on utiliserait event.record()
+        // Simuler l'enregistrement de fields
+        // In a real test, we would use event.record()
         
         assert!(visitor.fields.is_empty());
         assert!(visitor.message.is_none());
@@ -431,7 +431,7 @@ mod tests {
         let layer = ConsoleJsonLayer::new()
             .with_format(JsonFormat::Pretty);
         
-        // Vérifier que le layer est créé correctement
+        // Verify that the layer is created correctly
         assert_eq!(layer.format, JsonFormat::Pretty);
     }
 }

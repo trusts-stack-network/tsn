@@ -1,21 +1,21 @@
 // ZST — Oracle Manager
-// Agrégation des prix, validation quorum, TWAP, circuit breaker oracle
+// Price aggregation, quorum validation, TWAP, oracle circuit breaker
 
 use crate::stablecoin::config::StablecoinConfig;
 use crate::stablecoin::errors::StablecoinError;
 use crate::stablecoin::types::*;
 use std::collections::VecDeque;
 
-/// Gestionnaire des prix oracle
+/// Gestionnaire of prix oracle
 pub struct OracleManager {
     config: StablecoinConfig,
-    /// Prix soumis par les oracles (fenêtre glissante)
+    /// Prix soumis par the oracles (window glissante)
     pending_prices: Vec<OraclePrice>,
-    /// Historique des prix agrégés pour le TWAP
+    /// Historique of prix aggregateds for the TWAP
     price_history: VecDeque<AggregatedPrice>,
-    /// Oracles autorisés (clés publiques)
+    /// Oracles authorizeds (keys publics)
     authorized_oracles: Vec<[u8; 32]>,
-    /// Dernier prix agrégé
+    /// Last prix aggregated
     current_price: AggregatedPrice,
 }
 
@@ -30,32 +30,32 @@ impl OracleManager {
         }
     }
 
-    /// Enregistre un oracle autorisé
+    /// Records a oracle authorized
     pub fn register_oracle(&mut self, oracle_id: [u8; 32]) {
         if !self.authorized_oracles.contains(&oracle_id) {
             self.authorized_oracles.push(oracle_id);
         }
     }
 
-    /// Supprime un oracle
+    /// Removes a oracle
     pub fn unregister_oracle(&mut self, oracle_id: &[u8; 32]) {
         self.authorized_oracles.retain(|id| id != oracle_id);
     }
 
-    /// Soumet un prix oracle
+    /// Soumet a prix oracle
     pub fn submit_price(
         &mut self,
         price: OraclePrice,
         current_timestamp: u64,
     ) -> Result<(), StablecoinError> {
-        // Vérifier que l'oracle est autorisé
+        // Verify que l'oracle is authorized
         if !self.authorized_oracles.contains(&price.oracle_id)
             && !self.authorized_oracles.is_empty()
         {
             return Err(StablecoinError::InvalidOracleSignature);
         }
 
-        // Vérifier l'âge du prix
+        // Verify l'age of the prix
         if current_timestamp > price.timestamp
             && current_timestamp - price.timestamp > self.config.oracle_max_age_secs
         {
@@ -65,19 +65,19 @@ impl OracleManager {
             });
         }
 
-        // Vérifier les valeurs
+        // Verify the valeurs
         if price.xau_usd == 0 || price.tsn_usd == 0 {
             return Err(StablecoinError::NoPriceAvailable);
         }
 
-        // TODO: Vérifier la signature ML-DSA-65 en production
-        // Pour le testnet, on skip la vérification de signature
+        // TODO: Verify the signature ML-DSA-65 in production
+        // Pour the testnet, on skip the verification de signature
 
-        // Supprimer les anciens prix du même oracle
+        // Delete the anciens prix of the same oracle
         self.pending_prices
             .retain(|p| p.oracle_id != price.oracle_id);
 
-        // Supprimer les prix trop vieux
+        // Supprimer the prix trop vieux
         self.pending_prices.retain(|p| {
             current_timestamp <= p.timestamp
                 || current_timestamp - p.timestamp <= self.config.oracle_max_age_secs
@@ -87,12 +87,12 @@ impl OracleManager {
         Ok(())
     }
 
-    /// Agrège les prix soumis et produit un prix unique
+    /// Aggregates submitted prices and produces a single price
     pub fn aggregate_prices(
         &mut self,
         current_timestamp: u64,
     ) -> Result<AggregatedPrice, StablecoinError> {
-        // Filtrer les prix valides (pas trop vieux)
+        // Filtrer the prix valids (pas trop vieux)
         let valid_prices: Vec<&OraclePrice> = self
             .pending_prices
             .iter()
@@ -110,7 +110,7 @@ impl OracleManager {
             });
         }
 
-        // Calculer TSN/XAU pour chaque oracle
+        // Calculer TSN/XAU for each oracle
         // tsn_per_xau = xau_usd * MICRO_UNIT / tsn_usd
         let mut tsn_per_xau_values: Vec<u64> = valid_prices
             .iter()
@@ -127,7 +127,7 @@ impl OracleManager {
             return Err(StablecoinError::NoPriceAvailable);
         }
 
-        // Médiane
+        // Median
         tsn_per_xau_values.sort();
         let median = if tsn_per_xau_values.len() % 2 == 0 {
             let mid = tsn_per_xau_values.len() / 2;
@@ -136,7 +136,7 @@ impl OracleManager {
             tsn_per_xau_values[tsn_per_xau_values.len() / 2]
         };
 
-        // Vérifier la déviation de chaque prix par rapport à la médiane
+        // Verify the deviation de each prix par rapport to the median
         if median > 0 {
             for &val in &tsn_per_xau_values {
                 let deviation = if val > median {
@@ -152,7 +152,7 @@ impl OracleManager {
             }
         }
 
-        // Vérifier le circuit breaker oracle (variation vs TWAP)
+        // Verify the circuit breaker oracle (variation vs TWAP)
         if let Some(last) = self.price_history.back() {
             if last.tsn_per_xau > 0 {
                 let change = if median > last.tsn_per_xau {
@@ -171,7 +171,7 @@ impl OracleManager {
             }
         }
 
-        // Déterminer la confiance
+        // Determine the confiance
         let confidence = if count >= 4 {
             PriceConfidence::High
         } else if count >= 3 {
@@ -187,7 +187,7 @@ impl OracleManager {
             confidence,
         };
 
-        // Ajouter à l'historique pour le TWAP
+        // Add to history for TWAP
         self.price_history.push_back(aggregated.clone());
         if self.price_history.len() > self.config.twap_blocks as usize * 2 {
             self.price_history.pop_front();
@@ -197,7 +197,7 @@ impl OracleManager {
         Ok(aggregated)
     }
 
-    /// Calcule le TWAP sur les N derniers blocs
+    /// Calculates the TWAP on the N derniers blocs
     pub fn calculate_twap(&self) -> Option<u64> {
         let n = self.config.twap_blocks as usize;
         if self.price_history.is_empty() {
@@ -220,13 +220,13 @@ impl OracleManager {
         Some((sum / prices.len() as u128) as u64)
     }
 
-    /// Retourne le prix courant (TWAP si disponible, sinon dernier agrégé)
+    /// Returns the prix courant (TWAP if available, sinon last aggregated)
     pub fn get_current_price(&self) -> Result<AggregatedPrice, StablecoinError> {
         if self.current_price.tsn_per_xau == 0 {
             return Err(StablecoinError::NoPriceAvailable);
         }
 
-        // Utiliser le TWAP si on a assez d'historique
+        // Utiliser the TWAP if on a enough d'historique
         if let Some(twap) = self.calculate_twap() {
             let mut price = self.current_price.clone();
             price.tsn_per_xau = twap;
@@ -236,7 +236,7 @@ impl OracleManager {
         }
     }
 
-    /// Vérifie si le prix est stale
+    /// Checks if the prix is stale
     pub fn is_price_stale(&self, current_timestamp: u64) -> bool {
         if self.current_price.tsn_per_xau == 0 {
             return true;
@@ -248,22 +248,22 @@ impl OracleManager {
         false
     }
 
-    /// Retourne le nombre d'oracles actifs
+    /// Returns the number of active oracles
     pub fn active_oracle_count(&self) -> usize {
         self.pending_prices.len()
     }
 
-    /// Retourne les oracles enregistrés
+    /// Returns the oracles registered
     pub fn registered_oracles(&self) -> &[[u8; 32]] {
         &self.authorized_oracles
     }
 
-    /// Retourne l'historique des prix
+    /// Returns l'historique of prix
     pub fn price_history(&self) -> &VecDeque<AggregatedPrice> {
         &self.price_history
     }
 
-    /// Force un prix (pour le testnet / tests)
+    /// Forces a price (for testnet / tests)
     pub fn force_price(&mut self, tsn_per_xau: u64, timestamp: u64) {
         let price = AggregatedPrice {
             tsn_per_xau,

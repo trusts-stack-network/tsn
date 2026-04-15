@@ -42,16 +42,16 @@ mod tests {
 
     #[test]
     fn test_state_add_block() {
-        // Créer un état
+        // Create a state
         let mut state = State::new();
 
-        // Créer un bloc
+        // Create a bloc
         let block = Block::new();
 
-        // Ajouter le bloc à l'état
+        // Add block to state
         state.add_block(block);
 
-        // Vérifier que le bloc est ajouté
+        // Verify que the bloc is added
         assert!(state.get_block(0).is_some());
     }
 }

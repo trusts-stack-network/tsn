@@ -1,15 +1,15 @@
-//! Macros pour le profiling des opérations critiques
+//! Macros for the profiling of operations critiques
 //!
-//! Ce module fournit des macros pratiques pour instrumenter le code
-//! sans ajouter de boilerplate. Les macros sont désactivables via
-//! la feature flag `profiling`.
+//! This module provides macros pratiques for instrumenter the code
+//! without add de boilerplate. Les macros are disableable via
+//! the feature flag `profiling`.
 //!
 //! ## Exemples d'utilisation
 //!
 //! ```rust,ignore
 //! use tsn::profiling::{profile, profile_crypto, profile_db};
 //!
-//! // Profiler une fonction entière
+//! // Profiler a fonction entire
 //! fn process_block(block: &Block) -> Result<BlockHash, Error> {
 //!     profile!("process_block", || {
 //!         // ... logique de traitement
@@ -17,18 +17,18 @@
 //!     })
 //! }
 //!
-//! // Profiler une opération crypto spécifique
+//! // Profiler a operation crypto specific
 //! let sig = profile_crypto!("sign", || {
 //!     sign_message(msg, keypair)
 //! });
 //!
-//! // Profiler une requête DB
+//! // Profiler a request DB
 //! let block = profile_db!("read", "blocks", || {
 //!     db.get_block(&hash)
 //! });
 //! ```
 
-/// Profile une opération générique avec catégorie et nom
+/// Profile a operation generic with category and nom
 ///
 /// # Exemples
 ///
@@ -48,7 +48,7 @@ macro_rules! profile {
     }};
 }
 
-/// Profile une opération cryptographique
+/// Profile a operation cryptographique
 ///
 /// # Exemples
 ///
@@ -68,7 +68,7 @@ macro_rules! profile_crypto {
     }};
 }
 
-/// Profile une opération de base de données
+/// Profile a operation de base of data
 ///
 /// # Exemples
 ///
@@ -85,7 +85,7 @@ macro_rules! profile_db {
         let result = $body;
         let duration = timer.stop();
         
-        // Enregistrer avec la table spécifiée
+        // Register with the table specified
         $crate::profiling::DB_METRICS.record_operation(
             $operation,
             $table,
@@ -96,7 +96,7 @@ macro_rules! profile_db {
     }};
 }
 
-/// Profile une opération de sérialisation
+/// Profile a operation de serialization
 ///
 /// # Exemples
 ///
@@ -116,7 +116,7 @@ macro_rules! profile_serde {
     }};
 }
 
-/// Profile une opération réseau
+/// Profile a operation network
 ///
 /// # Exemples
 ///
@@ -136,7 +136,7 @@ macro_rules! profile_network {
     }};
 }
 
-/// Profile une opération de consensus
+/// Profile a operation de consensus
 ///
 /// # Exemples
 ///
@@ -156,7 +156,7 @@ macro_rules! profile_consensus {
     }};
 }
 
-/// Profile une fonction async
+/// Profile a fonction async
 ///
 /// # Exemples
 ///
@@ -178,7 +178,7 @@ macro_rules! profile_async {
     }};
 }
 
-/// Profile une opération crypto async
+/// Profile a operation crypto async
 ///
 /// # Exemples
 ///
@@ -200,7 +200,7 @@ macro_rules! profile_crypto_async {
     }};
 }
 
-/// Profile une opération DB async
+/// Profile a operation DB async
 ///
 /// # Exemples
 ///
@@ -229,15 +229,15 @@ macro_rules! profile_db_async {
     }};
 }
 
-/// Crée un timer de profiling qui s'arrête automatiquement à la fin du scope
+/// Creates a timer de profiling that s'shutdowne automatically to the fin of the scope
 ///
 /// # Exemples
 ///
 /// ```rust,ignore
 /// {
 ///     let _timer = profile_scope!("crypto", "hash");
-///     // ... opération à profiler
-/// } // Le timer s'arrête ici automatiquement
+///     // ... operation to profiler
+/// } // Le timer s'shutdowne ici automatically
 /// ```
 #[macro_export]
 macro_rules! profile_scope {
@@ -247,7 +247,7 @@ macro_rules! profile_scope {
     }};
 }
 
-/// Crée un timer de profiling pour les opérations crypto
+/// Creates a timer de profiling for the operations crypto
 ///
 /// # Exemples
 ///
@@ -255,7 +255,7 @@ macro_rules! profile_scope {
 /// {
 ///     let _timer = profile_crypto_scope!("sign");
 ///     let sig = sign_message(msg, keypair);
-/// } // Le timer s'arrête ici
+/// } // Le timer s'shutdowne ici
 /// ```
 #[macro_export]
 macro_rules! profile_crypto_scope {
@@ -265,7 +265,7 @@ macro_rules! profile_crypto_scope {
     }};
 }
 
-/// Crée un timer de profiling pour les opérations DB
+/// Creates a timer de profiling for the operations DB
 ///
 /// # Exemples
 ///
@@ -273,21 +273,21 @@ macro_rules! profile_crypto_scope {
 /// {
 ///     let _timer = profile_db_scope!("read", "blocks");
 ///     let block = db.get_block(&hash);
-/// } // Le timer s'arrête ici
+/// } // Le timer s'shutdowne ici
 /// ```
 #[macro_export]
 macro_rules! profile_db_scope {
     ($operation:expr, $table:expr) => {{
         use $crate::profiling::{OperationCategory, OperationTimer};
-        // Note: la table n'est pas utilisée dans le timer de base
-        // mais peut être étendue si nécessaire
+        // Note: the table is not used in the base timer
+        // but can be extended if necessary
         OperationTimer::new($operation, OperationCategory::Database)
     }};
 }
 
-/// Profile une fonction entière avec instrumentation automatique
+/// Profile a fonction entire with instrumentation automatique
 ///
-/// Cette macro ajoute du profiling au début et à la fin de la fonction.
+/// This macro adds of the profiling at the start and to the fin de the fonction.
 ///
 /// # Exemples
 ///
@@ -309,10 +309,10 @@ macro_rules! profile_fn {
     }};
 }
 
-/// Version conditionnelle du profiling (désactivable en release)
+/// Version conditionnelle of the profiling (disableable in release)
 ///
-/// Cette macro ne profile que si la feature `profiling` est activée
-/// ou si le mode debug est utilisé.
+/// This macro not profile que if the feature `profiling` is enabled
+/// or if the mode debug is used.
 #[macro_export]
 macro_rules! profile_debug {
     ($category:expr, $name:expr, $body:expr) => {{
@@ -331,9 +331,9 @@ macro_rules! profile_debug {
     }};
 }
 
-/// Mesure le temps d'exécution sans enregistrer de métriques
+/// Mesure the temps d'execution without register de metrics
 ///
-/// Utile pour les benchmarks rapides ou le debugging.
+/// Utile for the benchmarks rapides or the debugging.
 ///
 /// # Exemples
 ///
@@ -341,7 +341,7 @@ macro_rules! profile_debug {
 /// let (result, duration) = time_op!(|| {
 ///     expensive_computation()
 /// });
-/// println!("Durée: {:?}", duration);
+/// println!("Duration: {:?}", duration);
 /// ```
 #[macro_export]
 macro_rules! time_op {
@@ -353,7 +353,7 @@ macro_rules! time_op {
     }};
 }
 
-/// Mesure le temps d'exécution async sans enregistrer de métriques
+/// Mesure the temps d'execution async without register de metrics
 ///
 /// # Exemples
 ///
@@ -374,7 +374,7 @@ macro_rules! time_op_async {
     }};
 }
 
-/// Enregistre une métrique personnalisée
+/// Records a metric custom
 ///
 /// # Exemples
 ///
@@ -389,9 +389,9 @@ macro_rules! record_metric {
     }};
 }
 
-/// Profile une opération avec gestion d'erreur
+/// Profile a operation with gestion d'error
 ///
-/// Enregistre une métrique d'erreur si l'opération échoue.
+/// Records a metric d'error if l'operation fails.
 ///
 /// # Exemples
 ///
@@ -410,7 +410,7 @@ macro_rules! profile_result {
         match &result {
             Ok(_) => {}
             Err(_) => {
-                // Enregistrer l'erreur dans les métriques
+                // Register the error in metrics
                 match $category {
                     OperationCategory::Crypto => {
                         $crate::profiling::CRYPTO_METRICS.record_error($name);
@@ -428,7 +428,7 @@ macro_rules! profile_result {
     }};
 }
 
-/// Profile une opération crypto avec gestion d'erreur
+/// Profile a operation crypto with gestion d'error
 #[macro_export]
 macro_rules! profile_crypto_result {
     ($operation:expr, $body:expr) => {{
@@ -436,7 +436,7 @@ macro_rules! profile_crypto_result {
     }};
 }
 
-/// Profile une opération DB avec gestion d'erreur
+/// Profile a operation DB with gestion d'error
 #[macro_export]
 macro_rules! profile_db_result {
     ($operation:expr, $table:expr, $body:expr) => {{
@@ -454,7 +454,7 @@ macro_rules! profile_db_result {
 }
 
 // ============================================================================
-// Ré-export des macros pour usage interne
+// Re-export of macros for usage interne
 // ============================================================================
 
 pub use crate::profile;

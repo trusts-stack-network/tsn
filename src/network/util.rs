@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose};
 
-/// Hash simple d'une adresse pour créer un PeerId
+/// Hash simple d'une adresse for create a PeerId
 pub fn hash_peer_id(addr: &str) -> [u8; 32] {
     use sha2::{Sha256, Digest};
     let mut hasher = Sha256::new();
@@ -12,12 +12,12 @@ pub fn hash_peer_id(addr: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Parse une adresse "IP:port" avec support IPv6
+/// Parse a adresse "IP:port" with support IPv6
 pub fn parse_addr(s: &str) -> Result<SocketAddr> {
-    s.parse().map_err(|_| anyhow!("Adresse invalide : {}", s))
+    s.parse().map_err(|_| anyhow!("Adresse invalid : {}", s))
 }
 
-/// Timestamp actuel en secondes depuis epoch
+/// Timestamp current in secondes from epoch
 pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -25,12 +25,12 @@ pub fn now_secs() -> u64 {
         .as_secs()
 }
 
-/// Encode en base64 url-safe sans padding
+/// Encode in base64 url-safe without padding
 pub fn b64_encode(bytes: &[u8]) -> String {
     general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Décode base64 url-safe sans padding
+/// Decodes base64 url-safe without padding
 pub fn b64_decode(s: &str) -> Result<Vec<u8>> {
     general_purpose::URL_SAFE_NO_PAD
         .decode(s)
@@ -79,6 +79,6 @@ mod tests {
         let mut rl = RateLimiter::new(10.0, 1.0);
         assert!(rl.allow(5.0));
         assert!(rl.allow(5.0));
-        assert!(!rl.allow(1.0)); // épuisé
+        assert!(!rl.allow(1.0)); // exhausted
     }
 }
