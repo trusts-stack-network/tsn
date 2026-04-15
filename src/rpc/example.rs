@@ -16,7 +16,7 @@ struct RpcResponse {
     error: Option<String>,
 }
 
-// Fonction principale pour gerer les requests RPC
+// Fonction principale pour handle les requests RPC
 async fn rpc_handler(
     Json(request): Json<RpcRequest>,
     tx: mpsc::Sender<RpcRequest>,

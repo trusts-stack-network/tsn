@@ -14,20 +14,20 @@ pub fn expand_seed(seed: &[u8; 32]) -> Result<Vec<u8>, SlhDsaError> {
         return Err(SlhDsaError::InvalidSeed);
     }
     
-    // Stub: retourne une key derivee du seed
+    // Stub: returns une key derived du seed
     let mut sk = vec![0u8; 64];
     sk[..32].copy_from_slice(&seed[..32]);
     sk[32..].copy_from_slice(&seed[..32]);
     Ok(sk)
 }
 
-/// Generation de la key publique a partir de la key secret
+/// Generation de la key public to partir de la key secret
 pub fn generate_pk(sk: &[u8]) -> Result<Vec<u8>, SlhDsaError> {
     if sk.len() < 64 {
         return Err(SlhDsaError::InvalidSecretKey);
     }
     
-    // Stub: hash de la key secret pour la key publique
+    // Stub: hash de la key secret pour la key public
     let mut pk = vec![0u8; 32];
     pk.copy_from_slice(&sk[..32]);
     Ok(pk)
@@ -39,9 +39,9 @@ pub fn sign(sk: &[u8], msg: &[u8]) -> Result<Vec<u8>, SlhDsaError> {
         return Err(SlhDsaError::InvalidSecretKey);
     }
     
-    // Stub: signature simplifiee (NON SECURE - pour compilation only)
+    // Stub: signature simplified (NON SECURE - pour compilation only)
     let mut sig = vec![0u8; SLH_PARAM_SIG_SIZE];
-    // Remplir avec un pattern derive du message et de la key
+    // Remplir avec un pattern derived du message et de la key
     for (i, byte) in msg.iter().enumerate() {
         if i < SLH_PARAM_SIG_SIZE {
             sig[i] = byte.wrapping_add(sk[i % sk.len()]);
@@ -50,7 +50,7 @@ pub fn sign(sk: &[u8], msg: &[u8]) -> Result<Vec<u8>, SlhDsaError> {
     Ok(sig)
 }
 
-/// Verifie une signature
+/// Verifies une signature
 pub fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, SlhDsaError> {
     if pk.len() < 32 {
         return Err(SlhDsaError::InvalidPublicKey);
@@ -59,8 +59,8 @@ pub fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, SlhDsaError> {
         return Err(SlhDsaError::InvalidSignature);
     }
     
-    // Stub: verification toujours reussie (NON SECURE - pour compilation only)
-    // En production: implementer la verification SLH-DSA complete
+    // Stub: verification toujours successful (NON SECURE - pour compilation only)
+    // En production: implement la verification SLH-DSA completee
     Ok(true)
 }
 
@@ -87,7 +87,7 @@ pub fn fors_address(tree: u64, leaf: u32, pk_seed: &[u8]) -> [u8; 32] {
     addr[..8].copy_from_slice(&tree_bytes);
     addr[8..12].copy_from_slice(&leaf_bytes);
     
-    // Melange avec le seed
+    // Mixes avec le seed
     for i in 0..32 {
         addr[i] = addr[i].wrapping_add(pk_seed[i % pk_seed.len()]);
     }

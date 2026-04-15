@@ -1,6 +1,6 @@
 //! Transport network TCP/UDP pour TSN
 //!
-//! Implemente les sockets TCP/UDP avec gestion d'errors robuste,
+//! Implements les sockets TCP/UDP avec gestion d'errors robuste,
 //! rate limiting, et support des connections persistantes pour Kademlia DHT.
 
 use std::collections::HashMap;
@@ -53,7 +53,7 @@ impl Default for TransportConfig {
     }
 }
 
-/// Connexion TCP active avec buffer et rate limiting
+/// Connection TCP active avec buffer et rate limiting
 #[derive(Debug)]
 struct TcpConnection {
     stream: TcpStream,
@@ -84,7 +84,7 @@ impl TcpConnection {
         match timeout(Duration::from_secs(10), self.stream.write_all(&encoded)).await {
             Ok(Ok(())) => {
                 self.last_activity = Instant::now();
-                trace!("Message TCP envoye vers {}: {} bytes", masked_addr(&self.addr), encoded.len());
+                trace!("Message TCP sent vers {}: {} bytes", masked_addr(&self.addr), encoded.len());
                 Ok(())
             },
             Ok(Err(e)) => Err(NetworkError::Io(e)),
@@ -153,7 +153,7 @@ impl NetworkTransport {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        info!("Demarrage transport network TCP:{} UDP:{}",
+        info!("Starting transport network TCP:{} UDP:{}",
               self.config.tcp_listen_addr, self.config.udp_listen_addr);
 
         let tcp_listener = Arc::new(TcpListener::bind(self.config.tcp_listen_addr).await?);
@@ -222,14 +222,14 @@ impl NetworkTransport {
 
             match timeout(self.config.udp_request_timeout, socket.send_to(&encoded, addr)).await {
                 Ok(Ok(bytes_sent)) => {
-                    trace!("Message UDP envoye vers {}: {} bytes", addr, bytes_sent);
+                    trace!("Message UDP sent vers {}: {} bytes", addr, bytes_sent);
                     Ok(())
                 },
                 Ok(Err(e)) => Err(NetworkError::Io(e)),
                 Err(_) => Err(NetworkError::HandshakeTimeout),
             }
         } else {
-            Err(NetworkError::InvalidMessage("UDP socket non initialise".to_string()))
+            Err(NetworkError::InvalidMessage("UDP socket non initialized".to_string()))
         }
     }
 
@@ -269,7 +269,7 @@ impl NetworkTransport {
             connections.insert(addr, connection);
         }
 
-        debug!("Connexion TCP etablie vers {}", masked_addr(&addr));
+        debug!("Connection TCP establishede vers {}", masked_addr(&addr));
         Ok(())
     }
 
@@ -335,7 +335,7 @@ impl NetworkTransport {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        debug!("Handler TCP termine pour {}", masked_addr(&addr));
+        debug!("Handler TCP completed pour {}", masked_addr(&addr));
     }
 
     async fn udp_receive_loop(&self, socket: Arc<UdpSocket>) {
@@ -350,7 +350,7 @@ impl NetworkTransport {
                             .or_insert_with(|| Arc::new(RateLimiter::new(self.config.rate_limit.clone())));
 
                         if !limiter.check(&addr).await {
-                            trace!("Rate limit UDP depasse pour {}", masked_addr(&addr));
+                            trace!("Rate limit UDP exceeded pour {}", masked_addr(&addr));
                             continue;
                         }
                     }
@@ -358,21 +358,21 @@ impl NetworkTransport {
                     let mut buf = BytesMut::from(&buffer[..len]);
                     match decode_message(&mut buf) {
                         Ok(Some((message, _))) => {
-                            trace!("Message UDP recu de {}: {} bytes", masked_addr(&addr), len);
+                            trace!("Message UDP received de {}: {} bytes", masked_addr(&addr), len);
                             if let Err(e) = self.message_tx.send((addr, message)) {
                                 error!("Erreur envoi message UDP interne: {}", e);
                             }
                         },
                         Ok(None) => {
-                            trace!("Message UDP incomplete de {}", masked_addr(&addr));
+                            trace!("Message UDP incomplet de {}", masked_addr(&addr));
                         },
                         Err(e) => {
-                            warn!("Erreur decodage UDP de {}: {}", masked_addr(&addr), e);
+                            warn!("Error decoding UDP de {}: {}", masked_addr(&addr), e);
                         }
                     }
                 },
                 Err(e) => {
-                    error!("Erreur reception UDP: {}", e);
+                    error!("Error reception UDP: {}", e);
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }

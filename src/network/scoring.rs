@@ -1,6 +1,6 @@
 //! Peer scoring and anti-DoS system for TSN P2P network
 //! 
-//! Ce module implemente un system de scoring des pairs pour detect et bannir
+//! Ce module implements un system de scoring des peers pour detect et bannir
 //! les comportements abusifs. Il combine rate limiting et scoring comportemental.
 
 use std::collections::HashMap;
@@ -12,29 +12,29 @@ use std::sync::Arc;
 /// Score d'un pair (0-100, 100 = excellent, 0 = banni)
 pub type PeerScore = u8;
 
-/// Raisons de penalite pour un pair
+/// Raisons de penalty pour un pair
 #[derive(Debug, Clone, Copy)]
 pub enum PenaltyReason {
     /// Trop de requests (rate limiting)
     RateLimitExceeded,
     /// Message invalid (malformed, signature incorrecte)
     InvalidMessage,
-    /// Bloc invalid propage
+    /// Bloc invalid propagated
     InvalidBlock,
-    /// Transaction invalid propagee
+    /// Transaction invalid propagatede
     InvalidTransaction,
     /// Comportement de spam
     SpamBehavior,
-    /// Failure de handshake repete
+    /// Failure de handshake repeated
     HandshakeFailure,
     /// Timeout de connection
     ConnectionTimeout,
-    /// Deconnection brutale repetee
+    /// Disconnection brutale repeated
     AbruptDisconnection,
 }
 
 impl PenaltyReason {
-    /// Penalite associee a chaque raison (points retires du score)
+    /// Penalty associated to chaque raison (points removed du score)
     pub fn penalty_points(self) -> u8 {
         match self {
             Self::RateLimitExceeded => 5,
@@ -52,17 +52,17 @@ impl PenaltyReason {
 /// Statistiques d'un pair
 #[derive(Debug, Clone)]
 pub struct PeerStats {
-    /// Score current (0-100)
+    /// Score actuel (0-100)
     pub score: PeerScore,
     /// Nombre total de requests
     pub total_requests: u64,
     /// Nombre de messages invalids
     pub invalid_messages: u32,
-    /// Derniere activity
+    /// Last activity
     pub last_activity: Instant,
     /// Timestamp du ban (si banni)
     pub banned_until: Option<Instant>,
-    /// Historique des penalites recentes
+    /// Historique des penalties recents
     pub recent_penalties: Vec<(Instant, PenaltyReason)>,
 }
 
@@ -82,19 +82,19 @@ impl Default for PeerStats {
 /// Configuration du system de scoring
 #[derive(Debug, Clone)]
 pub struct ScoringConfig {
-    /// Score minimum avant ban temporaire
+    /// Score minimum avant ban temporary
     pub min_score_before_ban: PeerScore,
-    /// Duration du ban temporaire
+    /// Duration du ban temporary
     pub ban_duration: Duration,
     /// Score minimum avant ban permanent
     pub min_score_before_permanent_ban: PeerScore,
-    /// Duration de retention des penalites recentes
+    /// Duration de retention des penalties recents
     pub penalty_retention_duration: Duration,
-    /// Taux de recuperation du score (points par minute)
+    /// Taux de retrieval du score (points par minute)
     pub score_recovery_rate: u8,
-    /// Nombre max de requests par seconde avant penalite
+    /// Nombre max de requests par seconde avant penalty
     pub max_requests_per_second: u32,
-    /// Fenbe de temps pour le rate limiting
+    /// Window de temps pour le rate limiting
     pub rate_limit_window: Duration,
 }
 
@@ -112,7 +112,7 @@ impl Default for ScoringConfig {
     }
 }
 
-/// System de scoring des pairs avec anti-DoS
+/// System de scoring des peers avec anti-DoS
 #[derive(Debug)]
 pub struct PeerScoring {
     config: ScoringConfig,
@@ -122,7 +122,7 @@ pub struct PeerScoring {
 }
 
 impl PeerScoring {
-    /// Creates a nouveau system de scoring
+    /// Creates un nouveau system de scoring
     pub fn new(config: ScoringConfig) -> Self {
         Self {
             config,
@@ -131,38 +131,38 @@ impl PeerScoring {
         }
     }
 
-    /// Creates a system avec la configuration by default
+    /// Creates un system avec la configuration by default
     pub fn default() -> Self {
         Self::new(ScoringConfig::default())
     }
 
-    /// Checks if une request est autorisee (rate limiting + scoring)
+    /// Verifies si une request est authorized (rate limiting + scoring)
     pub async fn check_request_allowed(&self, addr: &SocketAddr) -> bool {
-        // Check if le pair est banni
+        // Verify si le pair est banni
         if self.is_peer_banned(addr).await {
             return false;
         }
 
-        // Check the rate limiting
+        // Verify le rate limiting
         if !self.check_rate_limit(addr).await {
-            // Appliquer une penalite pour depassement de rate limit
+            // Apply une penalty pour overflow de rate limit
             self.apply_penalty(addr, PenaltyReason::RateLimitExceeded).await;
             return false;
         }
 
-        // Mettre a jour l'activity du pair
+        // Update l'activity du pair
         self.update_peer_activity(addr).await;
         true
     }
 
-    /// Checks the rate limiting pour un pair
+    /// Verifies le rate limiting pour un pair
     async fn check_rate_limit(&self, addr: &SocketAddr) -> bool {
         let mut counters = self.request_counters.write().await;
         let now = Instant::now();
         
         let entry = counters.entry(*addr).or_insert((0, now));
         
-        // Reset du compteur si la fenbe est expiree
+        // Reset du compteur si la window est expired
         if now.duration_since(entry.1) >= self.config.rate_limit_window {
             entry.0 = 0;
             entry.1 = now;
@@ -172,7 +172,7 @@ impl PeerScoring {
         entry.0 <= self.config.max_requests_per_second
     }
 
-    /// Met a jour l'activity d'un pair
+    /// Met up to date l'activity d'un pair
     async fn update_peer_activity(&self, addr: &SocketAddr) {
         let mut peers = self.peers.write().await;
         let stats = peers.entry(*addr).or_insert_with(PeerStats::default);
@@ -180,7 +180,7 @@ impl PeerScoring {
         stats.total_requests += 1;
     }
 
-    /// Checks if un pair est currentlement banni
+    /// Verifies si un pair est currently banni
     pub async fn is_peer_banned(&self, addr: &SocketAddr) -> bool {
         let peers = self.peers.read().await;
         if let Some(stats) = peers.get(addr) {
@@ -191,23 +191,23 @@ impl PeerScoring {
         false
     }
 
-    /// Applique une penalite a un pair
+    /// Applique une penalty to un pair
     pub async fn apply_penalty(&self, addr: &SocketAddr, reason: PenaltyReason) {
         let mut peers = self.peers.write().await;
         let stats = peers.entry(*addr).or_insert_with(PeerStats::default);
         
-        // Ajouter la penalite a l'historique
+        // Add the penalty to history
         stats.recent_penalties.push((Instant::now(), reason));
         
-        // Nettoyer les oldnes penalites
+        // Clean up les anciennes penalties
         let cutoff = Instant::now() - self.config.penalty_retention_duration;
         stats.recent_penalties.retain(|(timestamp, _)| *timestamp > cutoff);
         
-        // Appliquer la penalite au score
+        // Apply la penalty au score
         let penalty = reason.penalty_points();
         stats.score = stats.score.saturating_sub(penalty);
         
-        // Incrementer le compteur de messages invalids si applicable
+        // Increment le compteur de messages invalids si applicable
         match reason {
             PenaltyReason::InvalidMessage 
             | PenaltyReason::InvalidBlock 
@@ -217,13 +217,13 @@ impl PeerScoring {
             _ => {}
         }
         
-        // Check if le pair doit be banni
+        // Verify si le pair doit be banni
         if stats.score <= self.config.min_score_before_permanent_ban {
             // Ban permanent (very long)
             stats.banned_until = Some(Instant::now() + Duration::from_secs(86400 * 7)); // 7 jours
             tracing::warn!("Peer {} permanently banned (score: {})", addr, stats.score);
         } else if stats.score <= self.config.min_score_before_ban {
-            // Ban temporaire
+            // Ban temporary
             stats.banned_until = Some(Instant::now() + self.config.ban_duration);
             tracing::warn!("Peer {} temporarily banned (score: {})", addr, stats.score);
         }
@@ -231,19 +231,19 @@ impl PeerScoring {
         tracing::debug!("Applied penalty {:?} to peer {} (new score: {})", reason, addr, stats.score);
     }
 
-    /// Recupere le score d'un pair
+    /// Retrieves le score d'un pair
     pub async fn get_peer_score(&self, addr: &SocketAddr) -> PeerScore {
         let peers = self.peers.read().await;
         peers.get(addr).map(|stats| stats.score).unwrap_or(100)
     }
 
-    /// Recupere les statistiques completes d'un pair
+    /// Retrieves les statistiques completees d'un pair
     pub async fn get_peer_stats(&self, addr: &SocketAddr) -> Option<PeerStats> {
         let peers = self.peers.read().await;
         peers.get(addr).cloned()
     }
 
-    /// Recupere la liste des pairs bannis
+    /// Retrieves la liste des peers bannis
     pub async fn get_banned_peers(&self) -> Vec<SocketAddr> {
         let peers = self.peers.read().await;
         let now = Instant::now();
@@ -260,7 +260,7 @@ impl PeerScoring {
             .collect()
     }
 
-    /// Debannit manuellement un pair (pour les admins)
+    /// Unbans manuellement un pair (pour les admins)
     pub async fn unban_peer(&self, addr: &SocketAddr) {
         let mut peers = self.peers.write().await;
         if let Some(stats) = peers.get_mut(addr) {
@@ -270,20 +270,20 @@ impl PeerScoring {
         }
     }
 
-    /// Tache de maintenance periodic (recuperation des scores)
+    /// Task de maintenance periodic (retrieval des scores)
     pub async fn maintenance_task(&self) {
         let mut peers = self.peers.write().await;
         let now = Instant::now();
         
         for (addr, stats) in peers.iter_mut() {
-            // Recuperation graduelle du score
+            // Retrieval graduelle du score
             if stats.score < 100 {
                 let minutes_since_last_activity = now.duration_since(stats.last_activity).as_secs() / 60;
                 let recovery_points = (minutes_since_last_activity as u8).saturating_mul(self.config.score_recovery_rate);
                 stats.score = (stats.score + recovery_points).min(100);
             }
             
-            // Nettoyer les bans expires
+            // Clean up les bans expireds
             if let Some(banned_until) = stats.banned_until {
                 if now >= banned_until {
                     stats.banned_until = None;
@@ -291,20 +291,20 @@ impl PeerScoring {
                 }
             }
             
-            // Nettoyer les oldnes penalites
+            // Clean up les anciennes penalties
             let cutoff = now - self.config.penalty_retention_duration;
             stats.recent_penalties.retain(|(timestamp, _)| *timestamp > cutoff);
         }
         
-        // Nettoyer les olds compteurs de rate limiting
+        // Nettoyer les anciens compteurs de rate limiting
         let mut counters = self.request_counters.write().await;
-        let cutoff = now - self.config.rate_limit_window * 2; // Garder 2x la fenbe
+        let cutoff = now - self.config.rate_limit_window * 2; // Garder 2x la window
         counters.retain(|_, (_, timestamp)| *timestamp > cutoff);
         
-        tracing::debug!("Peer scoring maintenance completeed");
+        tracing::debug!("Peer scoring maintenance completed");
     }
 
-    /// Recupere des statistiques globales du system
+    /// Retrieves des statistiques globales du system
     pub async fn get_global_stats(&self) -> GlobalScoringStats {
         let peers = self.peers.read().await;
         let now = Instant::now();
@@ -387,7 +387,7 @@ mod tests {
         assert!(scoring.check_request_allowed(&addr).await);
         assert!(scoring.check_request_allowed(&addr).await);
         
-        // Troisieme request bloquee
+        // Third request blockede
         assert!(!scoring.check_request_allowed(&addr).await);
     }
     
@@ -398,7 +398,7 @@ mod tests {
         let scoring = PeerScoring::new(config);
         let addr = test_addr();
         
-        // Appliquer assez de penalites pour declencher un ban
+        // Apply enough de penalties pour trigger un ban
         for _ in 0..6 {
             scoring.apply_penalty(&addr, PenaltyReason::InvalidMessage).await;
         }

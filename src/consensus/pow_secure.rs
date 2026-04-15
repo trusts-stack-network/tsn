@@ -1,12 +1,12 @@
-//! Proof-of-work securise - VERSION SANS PANIC
+//! Proof-of-work secure - VERSION SANS PANIC
 //!
-//! Ce module remplace src/consensus/pow.rs avec une gestion d'error robuste.
+//! Ce module remplace src/consensus/pow.rs avec une gestion d'erreur robuste.
 //! Aucun unwrap() ou expect() sur SystemTime ou autres operations system.
 //!
 //! # Security
-//! - Gestion des errors d'horloge system
+//! - Gestion des erreurs d'horloge system
 //! - Validation des timestamps
-//! - Pas de panic sur entrees malformedes
+//! - Pas de panic sur entries malformed
 
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use tracing::{info, debug, warn};
@@ -18,15 +18,15 @@ use crate::crypto::hash::Hash;
 /// Erreurs du module PoW
 #[derive(Error, Debug, Clone)]
 pub enum PowError {
-    #[error("System clock error: {0}")]
+    #[error("Erreur d'horloge system: {0}")]
     SystemTimeError(String),
     #[error("Timestamp invalid: {0}")]
     InvalidTimestamp(u64),
-    #[error("Invalid difficulty: {0}")]
+    #[error("Difficulty invalid: {0}")]
     InvalidDifficulty(u32),
     #[error("Nonce overflow")]
     NonceOverflow,
-    #[error("Calcul de hash echoue")]
+    #[error("Calculation de hash failed")]
     HashCalculationFailed,
     #[error("Cible invalid")]
     InvalidTarget,
@@ -49,29 +49,29 @@ impl Default for PowConfig {
     }
 }
 
-/// Mineur PoW securise
+/// Mineur PoW secure
 pub struct SecureMiner {
     config: PowConfig,
 }
 
 impl SecureMiner {
-    /// Creates a nouveau mineur avec la configuration by default
+    /// Creates un nouveau mineur avec la configuration by default
     pub fn new() -> Self {
         Self {
             config: PowConfig::default(),
         }
     }
 
-    /// Creates a mineur avec une configuration personnalisee
+    /// Creates un mineur avec une configuration custom
     pub fn with_config(config: PowConfig) -> Self {
         Self { config }
     }
 
-    /// Gets the timestamp current de maniere securisee
+    /// Gets le timestamp actuel de manner secure
     /// 
     /// # Security
-    /// Retourne une error si l'horloge system est invalid
-    /// plutot que de paniquer avec unwrap()
+    /// Retourne une erreur si l'horloge system est invalid
+    /// rather que de paniquer avec unwrap()
     pub fn current_timestamp(&self) -> Result<u64, PowError> {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -82,7 +82,7 @@ impl SecureMiner {
     /// Valide un timestamp
     /// 
     /// # Security
-    /// Checks that le timestamp est raisonnable
+    /// Verifies que le timestamp est raisonnable
     fn validate_timestamp(&self, timestamp: u64) -> Result<(), PowError> {
         let current = self.current_timestamp()?;
         
@@ -99,16 +99,16 @@ impl SecureMiner {
         Ok(())
     }
 
-    /// Mine un bloc avec gestion d'error securisee
+    /// Mine un bloc avec gestion d'error secure
     /// 
     /// # Security
-    /// Jamais de panic, toutes les errors sont propagees
+    /// Jamais de panic, toutes les errors sont propagatedes
     pub fn mine_block(&self,
         mut block: ShieldedBlock,
         coinbase_address: &[u8; 32],
     ) -> Result<ShieldedBlock, PowError> {
         
-        // Obtention securisee du timestamp
+        // Obtention secure du timestamp
         let timestamp = self.current_timestamp()?;
         block.header.timestamp = timestamp;
         
@@ -130,7 +130,7 @@ impl SecureMiner {
             
             block.header.nonce = nonce;
             
-            // Calcul du hash (simule - a remplacer par Poseidon)
+            // Hash calculation (simulated - to be replaced by Poseidon)
             let hash = block.hash();
             
             // Verification de la difficulty
@@ -148,7 +148,7 @@ impl SecureMiner {
         }
     }
 
-    /// Checks if un hash satisfait la difficulty cible
+    /// Verifies si un hash satisfait la difficulty cible
     fn meets_difficulty(&self, hash: &Hash, difficulty: u32) -> bool {
         let hash_bytes = hash.as_bytes();
         let leading_zeros = hash_bytes.iter()
@@ -158,10 +158,10 @@ impl SecureMiner {
         leading_zeros >= difficulty as usize
     }
 
-    /// Checks the preuve de travail d'un bloc
+    /// Verifies la preuve de travail d'un bloc
     /// 
     /// # Security
-    /// Validation complete sans panic
+    /// Validation completee sans panic
     pub fn verify_pow(&self, block: &ShieldedBlock) -> Result<bool, PowError> {
         // Validation du timestamp
         self.validate_timestamp(block.header.timestamp)?;
@@ -173,10 +173,10 @@ impl SecureMiner {
         Ok(valid)
     }
 
-    /// Ajuste la difficulty en fonction du temps ecoule
+    /// Ajuste la difficulty en fonction du temps elapsed
     /// 
     /// # Security
-    /// Gestion des errors de calcul
+    /// Gestion des erreurs de calcul
     pub fn adjust_difficulty(
         &self,
         current_difficulty: u32,
@@ -243,11 +243,11 @@ mod tests {
         let diff = miner.adjust_difficulty(10, 400, 100).unwrap();
         assert_eq!(diff, 9);
         
-        // Test limite inferieure
+        // Test limite lower
         let diff = miner.adjust_difficulty(1, 400, 100).unwrap();
         assert_eq!(diff, 1);
         
-        // Test limite superieure
+        // Test limite higher
         let diff = miner.adjust_difficulty(32, 1, 100).unwrap();
         assert_eq!(diff, 32);
     }

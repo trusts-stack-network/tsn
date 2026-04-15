@@ -41,11 +41,11 @@ fn test_handshake_encoding_performance() {
     
     println!("Handshake encoding: {:.0} ops/sec", ops_per_sec);
     
-    // Performance baseline : at least 10k ops/sec
+    // Performance baseline : au moins 10k ops/sec
     assert!(ops_per_sec > 10_000.0, "Encoding too slow: {:.0} ops/sec", ops_per_sec);
 }
 
-/// Test: performance de decodage de handshakes
+/// Test: performance de decoding de handshakes
 #[test]
 fn test_handshake_decoding_performance() {
     let handshake = HandshakeData {
@@ -80,7 +80,7 @@ fn test_handshake_decoding_performance() {
     
     println!("Handshake decoding: {:.0} ops/sec", ops_per_sec);
     
-    // Performance baseline : at least 10k ops/sec
+    // Performance baseline : au moins 10k ops/sec
     assert!(ops_per_sec > 10_000.0, "Decoding too slow: {:.0} ops/sec", ops_per_sec);
 }
 
@@ -105,11 +105,11 @@ fn test_handshake_ack_encoding_performance() {
     
     println!("HandshakeAck encoding: {:.0} ops/sec", ops_per_sec);
     
-    // HandshakeAck est plus simple, devrait be plus rapide
+    // HandshakeAck est plus simple, should be plus rapide
     assert!(ops_per_sec > 20_000.0, "HandshakeAck encoding too slow: {:.0} ops/sec", ops_per_sec);
 }
 
-/// Test: performance de decodage de HandshakeAck
+/// Test: performance de decoding de HandshakeAck
 #[test]
 fn test_handshake_ack_decoding_performance() {
     let msg = TsnMessage::HandshakeAck {
@@ -138,7 +138,7 @@ fn test_handshake_ack_decoding_performance() {
     assert!(ops_per_sec > 20_000.0, "HandshakeAck decoding too slow: {:.0} ops/sec", ops_per_sec);
 }
 
-/// Test: performance avec differentes tailles de capabilities
+/// Test: performance avec different tailles de capabilities
 #[test]
 fn test_capabilities_size_performance() {
     let capability_counts = vec![0, 1, 5, 10, 50, 100];
@@ -182,7 +182,7 @@ fn test_capabilities_size_performance() {
         
         println!("Capabilities count {}: {:.0} roundtrips/sec", cap_count, ops_per_sec);
         
-        // Performance devrait rester raisonnable same avec beaucoup de capabilities
+        // Performance should rester raisonnable same avec beaucoup de capabilities
         assert!(ops_per_sec > 100.0, "Too slow with {} capabilities: {:.0} ops/sec", cap_count, ops_per_sec);
     }
 }
@@ -238,7 +238,7 @@ fn test_batch_message_processing() {
     assert!(msgs_per_sec > 10_000.0, "Batch processing too slow: {:.0} msgs/sec", msgs_per_sec);
 }
 
-/// Test: performance avec buffers de differentes tailles
+/// Test: performance avec buffers de different tailles
 #[test]
 fn test_buffer_size_performance() {
     let handshake = HandshakeData {
@@ -252,7 +252,7 @@ fn test_buffer_size_performance() {
     let msg = TsnMessage::Handshake(handshake);
     let encoded = encode_message(&msg).expect("Encoding should succeed");
     
-    // Test avec differentes tailles de buffer initial
+    // Test avec different tailles de buffer initial
     let buffer_sizes = vec![64, 256, 1024, 4096];
     
     for buffer_size in buffer_sizes {
@@ -287,7 +287,7 @@ fn test_node_id_generation_performance() {
     
     for i in 0..iterations {
         let mut node_id = [0u8; 32];
-        // Simule une generation de node_id (ici simplifiee)
+        // Simule une generation de node_id (ici simplified)
         node_id[0..4].copy_from_slice(&(i as u32).to_be_bytes());
         node_id[4..8].copy_from_slice(&(i as u32).to_le_bytes());
         node_ids.push(node_id);
@@ -298,7 +298,7 @@ fn test_node_id_generation_performance() {
     
     println!("Node ID generation: {:.0} ops/sec", ops_per_sec);
     
-    // Verification d'unicite (echantillon)
+    // Verification uniqueness (sample)
     let sample_size = 1000.min(iterations);
     let mut unique_ids = std::collections::HashSet::new();
     for i in 0..sample_size {
@@ -318,7 +318,7 @@ fn test_timestamp_validation_performance() {
         .as_nanos() as u64;
     
     let timestamps = vec![
-        current_time - 1_000_000_000, // 1 seconde dans le passe
+        current_time - 1_000_000_000, // 1 second in the past
         current_time,
         current_time + 1_000_000_000, // 1 seconde dans le futur
         current_time + 10_000_000_000, // 10 secondes dans le futur (invalid)
@@ -338,7 +338,7 @@ fn test_timestamp_validation_performance() {
                 current_time - timestamp
             };
             
-            // Accepte les timestamps dans une fenbe de 5 secondes
+            // Accepts timestamps within a 5-second window
             if time_diff <= 5_000_000_000 {
                 valid_count += 1;
             }
@@ -354,7 +354,7 @@ fn test_timestamp_validation_performance() {
     assert!(validations_per_sec > 1_000_000.0, "Timestamp validation too slow: {:.0} validations/sec", validations_per_sec);
 }
 
-/// Test: performance de serialization avec differents types de capabilities
+/// Test: performance de serialization avec different types de capabilities
 #[test]
 fn test_capability_serialization_performance() {
     let capability_types = vec![

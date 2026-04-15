@@ -1,7 +1,7 @@
-// Il semble qu'il y ait un probleme avec un delimiteur non ferme
-// Verifions les delimiteurs dans le file
+// Il semble qu'il y ait un problem avec un delimiter non closed
+// Let's verify les delimiters dans le file
 
-// Supposons que nous ayons un commentaire multiligne qui n'est pas ferme
+// Supposons que nous ayons un commentaire multiligne qui n'est pas closed
 // /*
 // Nous devons fermer ce commentaire
 // */

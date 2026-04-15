@@ -1,6 +1,6 @@
-//! Logging system configuration
+//! Configuration du system de logging
 //!
-//! Ce module definit les structures de configuration pour le logging,
+//! This module defines configuration structures for logging,
 //! incluant les options de rotation, les niveaux de log, et les formats de sortie.
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::Level;
 
-/// Log file rotation policy
+/// Politique de rotation des files de log
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogRotation {
     /// Pas de rotation
@@ -19,7 +19,7 @@ pub enum LogRotation {
     Weekly,
     /// Rotation mensuelle
     Monthly,
-    /// Rotation par taille (in bytes)
+    /// Rotation par taille (en octets)
     Size(u64),
 }
 
@@ -44,11 +44,11 @@ impl std::fmt::Display for LogRotation {
 /// Destination de sortie des logs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogOutput {
-    /// Sortie console uniquement
+    /// Sortie console only
     Console,
     /// File only
     File,
-    /// Console and file
+    /// Console et file
     Both,
 }
 
@@ -58,24 +58,24 @@ impl Default for LogOutput {
     }
 }
 
-/// Complete logging system configuration
+/// Completee logging system configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogConfig {
     /// Log file directory
     pub log_dir: PathBuf,
-    /// Base name of log files
+    /// Nom de base des files de log
     pub file_name: String,
     /// Politique de rotation
     pub rotation: LogRotation,
-    /// Maximum log file size (in bytes) before rotation
+    /// Taille maximale d'un file de log (en octets) avant rotation
     pub max_file_size: u64,
-    /// Maximum number of log files to keep
+    /// Nombre maximum de files de log to conserver
     pub max_files: usize,
     /// Afficher les logs sur la console
     pub console_output: bool,
-    /// Write logs to a file
+    /// Write les logs dans un file
     pub file_output: bool,
-    /// Use JSON format for files
+    /// Utiliser le format JSON pour les files
     pub json_output: bool,
     /// Utiliser les couleurs ANSI dans la console
     pub use_ansi_colors: bool,
@@ -85,7 +85,7 @@ pub struct LogConfig {
     pub show_thread_names: bool,
     /// Niveau de log by default
     pub default_level: String,
-    /// Niveaux de log specifiques par module
+    /// Niveaux de log specific par module
     pub module_levels: HashMap<String, String>,
 }
 
@@ -110,12 +110,12 @@ impl Default for LogConfig {
 }
 
 impl LogConfig {
-    /// Creates a nouveau builder pour construire une configuration
+    /// Creates un nouveau builder pour construire une configuration
     pub fn builder() -> LogConfigBuilder {
         LogConfigBuilder::default()
     }
 
-    /// Checks if the configuration is valid
+    /// Verifies si la configuration est valid
     pub fn validate(&self) -> Result<(), String> {
         if self.file_output && self.log_dir.as_os_str().is_empty() {
             return Err(String::from("log_dir cannot be empty when file_output is enabled"));
@@ -125,7 +125,7 @@ impl LogConfig {
             return Err(String::from("file_name cannot be empty when file_output is enabled"));
         }
 
-        // Check that the default log level is valid
+        // Verify que le niveau de log by default est valid
         match self.default_level.to_lowercase().as_str() {
             "trace" | "debug" | "info" | "warn" | "error" => {}
             _ => return Err(format!("invalid default_level: {}", self.default_level)),
@@ -134,13 +134,13 @@ impl LogConfig {
         Ok(())
     }
 
-    /// Gets the current log file path
+    /// Obtient le path du file de log actuel
     pub fn current_log_path(&self) -> PathBuf {
         let timestamp = chrono::Local::now().format("%Y-%m-%d");
         self.log_dir.join(format!("{}_{}.log", self.file_name, timestamp))
     }
 
-    /// Gets the file name pattern for rotation
+    /// Obtient le pattern de nom de file pour la rotation
     pub fn file_pattern(&self) -> String {
         format!("{}_*.log", self.file_name)
     }
@@ -165,31 +165,31 @@ pub struct LogConfigBuilder {
 }
 
 impl LogConfigBuilder {
-    /// Defines the log file directory
+    /// Defines le directory des files de log
     pub fn log_dir<P: Into<PathBuf>>(mut self, path: P) -> Self {
         self.log_dir = Some(path.into());
         self
     }
 
-    /// Defines the base name of log files
+    /// Defines le nom de base des files de log
     pub fn file_name<S: Into<String>>(mut self, name: S) -> Self {
         self.file_name = Some(name.into());
         self
     }
 
-    /// Defines the politique de rotation
+    /// Defines la politique de rotation
     pub fn rotation(mut self, rotation: LogRotation) -> Self {
         self.rotation = Some(rotation);
         self
     }
 
-    /// Defines the maximum file size before rotation (in bytes)
+    /// Defines la taille maximale d'un file avant rotation (en bytes)
     pub fn max_file_size(mut self, size: u64) -> Self {
         self.max_file_size = Some(size);
         self
     }
 
-    /// Defines the maximum number of files to keep
+    /// Defines le nombre maximum de files to conserver
     pub fn max_files(mut self, count: usize) -> Self {
         self.max_files = Some(count);
         self
@@ -213,7 +213,7 @@ impl LogConfigBuilder {
         self
     }
 
-    /// Active/desactive les couleurs ANSI
+    /// Enables/disables ANSI colors
     pub fn use_ansi_colors(mut self, enabled: bool) -> Self {
         self.use_ansi_colors = Some(enabled);
         self
@@ -231,13 +231,13 @@ impl LogConfigBuilder {
         self
     }
 
-    /// Defines the niveau de log by default
+    /// Defines le niveau de log by default
     pub fn default_level<S: Into<String>>(mut self, level: S) -> Self {
         self.default_level = Some(level.into());
         self
     }
 
-    /// Ajoute un niveau de log specifique pour un module
+    /// Adds un niveau de log specific pour un module
     pub fn module_level<S: Into<String>>(mut self, module: S, level: S) -> Self {
         self.module_levels.insert(module.into(), level.into());
         self

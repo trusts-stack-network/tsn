@@ -1,14 +1,14 @@
 //! Preuves Zero-Knowledge pour transactions shielded TSN
 //! 
 //! Implementation des circuits ZK pour les transactions privates avec :
-//! - Conservation des balances sans reveler les montants
+//! - Conservation des balances sans reveal les montants
 //! - Verification des commitments Poseidon2 (quantum-safe)
-//! - Derivation securisee des nullifiers
-//! - Protection anti-double-depense
+//! - Derivation secure des nullifiers
+//! - Protection anti-double-spending
 //!
 //! Architecture :
 //! - Circuits R1CS avec Arkworks (groth16 trusted setup)
-//! - Contraintes arithmetiques optimisees pour Poseidon2
+//! - Arithmetic constraints optimized for Poseidon2
 //! - Niveau de security 128-bit post-quantique
 //!
 //! References :
@@ -49,27 +49,27 @@ pub const MAX_SHIELDED_OUTPUTS: usize = 8;
 pub const POSEIDON_WIDTH: usize = 5; // State width for Poseidon2
 
 /// Configuration des contraintes Poseidon2 pour circuits ZK
-/// Optimisee pour la security post-quantique et l'efficacite des circuits
+/// Optimized pour la security post-quantique et efficiency des circuits
 lazy_static::lazy_static! {
     static ref POSEIDON_PARAMS: ark_crypto_primitives::sponge::poseidon::PoseidonConfig<Fr> = {
-        // Parameters securises pour BN254 avec resistance post-quantique
+        // Parameters secures pour BN254 avec resistance post-quantique
         ark_crypto_primitives::sponge::poseidon::PoseidonConfig {
             full_rounds: 8,
             partial_rounds: 56,
             alpha: 5,
-            ark: vec![], // Round constants (initialises a la compilation)
-            mds: vec![], // MDS matrix (initialisee a la compilation) 
+            ark: vec![], // Round constants (initializeds to la compilation)
+            mds: vec![], // MDS matrix (initializede to la compilation) 
         }
     };
 }
 
 /// Note private d'input dans une transaction shielded
-/// Contient toutes les data secrets necessarys pour la depense
+/// Contient toutes les data secret necessary pour la spending
 #[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
 pub struct ShieldedInputNote {
     /// Valeur de la note (confidentielle)
     pub value: u64,
-    /// Hash de la key publique du proprietaire (32 bytes)
+    /// Hash de la key public du owner (32 bytes)
     pub recipient_pk_hash: [u8; 32],
     /// Randomness du commitment (confidentielle)
     #[zeroize(skip)] // Fr ne peut pas be zeroized facilement
@@ -82,7 +82,7 @@ pub struct ShieldedInputNote {
 }
 
 impl ShieldedInputNote {
-    /// Creates a nouvelle note d'input avec validation cryptographique
+    /// Creates une new note d'input avec validation cryptographique
     pub fn new(
         value: u64,
         recipient_pk_hash: [u8; 32],
@@ -105,7 +105,7 @@ impl ShieldedInputNote {
         commit_to_note(self.value, &self.recipient_pk_hash, &self.commitment_randomness)
     }
 
-    /// Calcule le nullifier pour avoid la double-depense
+    /// Calculationates le nullifier pour avoidr la double-spending
     /// nf = Poseidon(DOMAIN_NULLIFIER, nullifier_key, commitment, position)
     pub fn compute_nullifier(&self) -> Nullifier {
         let commitment = self.compute_commitment();
@@ -118,7 +118,7 @@ impl ShieldedInputNote {
 }
 
 /// Note de sortie dans une transaction shielded
-/// Creates a nouvelle note pour un destinataire
+/// Creates une new note pour un destinataire
 #[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
 pub struct ShieldedOutputNote {
     /// Valeur de la note (confidentielle)
@@ -131,7 +131,7 @@ pub struct ShieldedOutputNote {
 }
 
 impl ShieldedOutputNote {
-    /// Creates a nouvelle note d'output
+    /// Creates une new note d'output
     pub fn new(
         value: u64,
         recipient_pk_hash: [u8; 32],
@@ -150,25 +150,25 @@ impl ShieldedOutputNote {
     }
 }
 
-/// Transaction shielded complete prete pour la preuve ZK
+/// Transaction shielded completee ready pour la preuve ZK
 #[derive(Clone)]
 pub struct ShieldedTransaction {
-    /// Notes d'input (depensees)
+    /// Notes d'input (spentes)
     pub inputs: Vec<ShieldedInputNote>,
-    /// Notes d'output (creees)
+    /// Notes d'output (created)
     pub outputs: Vec<ShieldedOutputNote>,
     /// Frais de transaction (publics)
     pub transaction_fee: u64,
 }
 
 impl ShieldedTransaction {
-    /// Creates a nouvelle transaction shielded avec validation
+    /// Creates une new transaction shielded avec validation
     pub fn new(
         inputs: Vec<ShieldedInputNote>,
         outputs: Vec<ShieldedOutputNote>,
         transaction_fee: u64,
     ) -> Result<Self, ShieldedTransactionError> {
-        // Validation des limites de circuit
+        // Validation des limits de circuit
         if inputs.len() > MAX_SHIELDED_INPUTS {
             return Err(ShieldedTransactionError::TooManyInputs);
         }
@@ -193,7 +193,7 @@ impl ShieldedTransaction {
         Ok(tx)
     }
 
-    /// Checks that la transaction est equilibree
+    /// Verifies que la transaction est balanced
     /// sum(inputs) = sum(outputs) + fee
     pub fn is_balanced(&self) -> bool {
         let total_input: u64 = self.inputs.iter().map(|note| note.value).sum();
@@ -212,13 +212,13 @@ impl ShieldedTransaction {
     }
 }
 
-/// Data publiques d'une transaction shielded
+/// Data publics d'une transaction shielded
 /// C'est ce qui est visible sur la blockchain TSN
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShieldedTransactionPublicData {
-    /// Nullifiers des notes depensees (prevents double-depense)
+    /// Nullifiers des notes spentes (prevents double-spending)
     pub input_nullifiers: Vec<Nullifier>,
-    /// Commitments des nouvelles notes creees
+    /// Commitments des news notes created
     pub output_commitments: Vec<NoteCommitment>,
     /// Frais de transaction (en clair)
     pub transaction_fee: u64,
@@ -233,22 +233,22 @@ pub enum ShieldedTransactionError {
     TooManyOutputs,
     #[error("Transaction vide")]
     EmptyTransaction,
-    #[error("Transaction non equilibree: sum(inputs) != sum(outputs) + fee")]
+    #[error("Transaction non balanced: sum(inputs) != sum(outputs) + fee")]
     ImbalancedTransaction,
 }
 
 /// Circuit R1CS pour la preuve ZK de transaction shielded
-/// Prouve la validite sans reveler les valeurs privates
+/// Prouve la validity sans reveal les valeurs privates
 #[derive(Clone)]
 pub struct ShieldedTransactionCircuit {
-    /// Transaction a prouver (private)
+    /// Transaction to prouver (private)
     pub transaction: Option<ShieldedTransaction>,
-    /// Data publiques (exposees au checksur)
+    /// Data publics (exposed au verifiesur)
     pub public_data: Option<ShieldedTransactionPublicData>,
 }
 
 impl ShieldedTransactionCircuit {
-    /// Creates a circuit avec temoins pour le prouveur
+    /// Creates un circuit avec witnesses pour le prouveur
     pub fn with_witnesses(
         transaction: ShieldedTransaction,
         public_data: ShieldedTransactionPublicData,
@@ -259,7 +259,7 @@ impl ShieldedTransactionCircuit {
         }
     }
 
-    /// Creates a circuit sans temoins pour le setup
+    /// Creates un circuit sans witnesses pour le setup
     pub fn without_witnesses() -> Self {
         Self {
             transaction: None,
@@ -269,13 +269,13 @@ impl ShieldedTransactionCircuit {
 }
 
 /// Contrainte pour hash Poseidon2 dans un circuit R1CS
-/// Verifie: output = Poseidon2(domain, inputs...)
+/// Verifies: output = Poseidon2(domain, inputs...)
 fn constrain_poseidon2_hash<F: PrimeField>(
     cs: ConstraintSystemRef<F>,
     domain: F,
     inputs: &[FpVar<F>],
 ) -> Result<FpVar<F>, SynthesisError> {
-    // Creates a sponge Poseidon avec les parameters securises
+    // Creates un sponge Poseidon avec les parameters secures
     let mut sponge = PoseidonSpongeVar::new(cs.clone(), &POSEIDON_PARAMS);
     
     // Absorbe le domain separator
@@ -287,13 +287,13 @@ fn constrain_poseidon2_hash<F: PrimeField>(
         sponge.absorb(input)?;
     }
     
-    // Extrait le hash resultant
+    // Extracted le hash resulting
     let hash_results = sponge.squeeze_field_elements(1)?;
     Ok(hash_results[0].clone())
 }
 
-/// Contrainte pour checksr un commitment de note
-/// Verifie: cm = Poseidon2(DOMAIN_NOTE_COMMITMENT, value, pk_hash, randomness)
+/// Contrainte pour verify un commitment de note
+/// Verifies: cm = Poseidon2(DOMAIN_NOTE_COMMITMENT, value, pk_hash, randomness)
 fn constrain_note_commitment<F: PrimeField>(
     cs: ConstraintSystemRef<F>,
     value: &UInt64<F>,
@@ -317,8 +317,8 @@ fn constrain_note_commitment<F: PrimeField>(
     Ok(())
 }
 
-/// Contrainte pour checksr un nullifier
-/// Verifie: nf = Poseidon2(DOMAIN_NULLIFIER, nk, cm, position)
+/// Contrainte pour verify un nullifier
+/// Verifies: nf = Poseidon2(DOMAIN_NULLIFIER, nk, cm, position)
 fn constrain_nullifier<F: PrimeField>(
     cs: ConstraintSystemRef<F>,
     nullifier_key: &FpVar<F>,
@@ -348,7 +348,7 @@ impl ConstraintSynthesizer<Fr> for ShieldedTransactionCircuit {
         let public_data = self.public_data.as_ref().unwrap();
 
         // =========================================================================
-        // PRIVATE VARIABLES ALLOCATION
+        // ALLOCATION DES VARIABLES PRIVATE
         // =========================================================================
 
         // Variables pour les inputs
@@ -363,7 +363,7 @@ impl ConstraintSynthesizer<Fr> for ShieldedTransactionCircuit {
             let value = UInt64::new_witness(cs.clone(), || Ok(input_note.value))?;
             input_values.push(value);
 
-            // Hash de key publique (prive)
+            // Hash de key public (private)
             let pk_hash = FpVar::new_witness(cs.clone(), || {
                 Ok(bytes32_to_field(&input_note.recipient_pk_hash))
             })?;
@@ -392,7 +392,7 @@ impl ConstraintSynthesizer<Fr> for ShieldedTransactionCircuit {
             let value = UInt64::new_witness(cs.clone(), || Ok(output_note.value))?;
             output_values.push(value);
 
-            // Hash de key publique (prive)
+            // Hash de key public (private)
             let pk_hash = FpVar::new_witness(cs.clone(), || {
                 Ok(bytes32_to_field(&output_note.recipient_pk_hash))
             })?;
@@ -433,7 +433,7 @@ impl ConstraintSynthesizer<Fr> for ShieldedTransactionCircuit {
         // =========================================================================
 
         for i in 0..transaction.inputs.len() {
-            // Checks the commitment de l'input
+            // Verifies le commitment de l'input
             let input_commitment = FpVar::new_witness(cs.clone(), || {
                 Ok(bytes32_to_field(&transaction.inputs[i].compute_commitment().0))
             })?;
@@ -446,7 +446,7 @@ impl ConstraintSynthesizer<Fr> for ShieldedTransactionCircuit {
                 &input_commitment,
             )?;
 
-            // Checks the nullifier de l'input
+            // Verifies le nullifier de l'input
             constrain_nullifier(
                 cs.clone(),
                 &input_nullifier_keys[i],
@@ -461,7 +461,7 @@ impl ConstraintSynthesizer<Fr> for ShieldedTransactionCircuit {
         // =========================================================================
 
         for i in 0..transaction.outputs.len() {
-            // Checks the commitment de l'output
+            // Verifies le commitment de l'output
             constrain_note_commitment(
                 cs.clone(),
                 &output_values[i],
@@ -501,13 +501,13 @@ pub struct ShieldedProofSystem {
 }
 
 impl ShieldedProofSystem {
-    /// Initializes the system avec trusted setup
-    /// ATTENTION: En production, requires une ceremonie de trusted setup securisee
+    /// Initialise le system avec trusted setup
+    /// ATTENTION: En production, requires une ceremony de trusted setup secure
     pub fn setup<R: RngCore>(rng: &mut R) -> Result<Self, Box<dyn std::error::Error>> {
         // Circuit dummy pour le setup
         let dummy_circuit = ShieldedTransactionCircuit::without_witnesses();
         
-        // Generates thes keys de proving et verification
+        // Generates les keys de proving et verification
         let (pk, vk) = Groth16::<Bn254>::circuit_specific_setup(dummy_circuit, rng)?;
         
         Ok(Self {
@@ -516,7 +516,7 @@ impl ShieldedProofSystem {
         })
     }
 
-    /// Generates ae preuve ZK pour une transaction shielded
+    /// Generates une preuve ZK pour une transaction shielded
     pub fn prove_transaction(
         &self,
         transaction: ShieldedTransaction,
@@ -524,13 +524,13 @@ impl ShieldedProofSystem {
         // Extrait les data publiques
         let public_data = transaction.public_data();
         
-        // Prepare le circuit avec temoins
+        // Prepares le circuit avec witnesses
         let circuit = ShieldedTransactionCircuit::with_witnesses(transaction.clone(), public_data.clone());
         
-        // Prepare les inputs publics pour Groth16
+        // Prepares les inputs publics pour Groth16
         let mut public_inputs = Vec::new();
         
-        // Ajoute les frais
+        // Ajoute les fees
         public_inputs.push(Fr::from(transaction.transaction_fee));
         
         // Ajoute les nullifiers
@@ -543,7 +543,7 @@ impl ShieldedProofSystem {
             public_inputs.push(bytes32_to_field(&commitment.0));
         }
         
-        // Generates the preuve
+        // Generates la preuve
         let proof = Groth16::<Bn254>::prove(&self.proving_key, circuit, &mut OsRng)?;
         
         Ok(ShieldedTransactionZkProof {
@@ -552,7 +552,7 @@ impl ShieldedProofSystem {
         })
     }
 
-    /// Verifie une preuve ZK de transaction shielded
+    /// Verifies une preuve ZK de transaction shielded
     pub fn verify_transaction(
         &self,
         proof: &ShieldedTransactionZkProof,
@@ -573,7 +573,7 @@ impl ShieldedProofSystem {
             public_inputs.push(bytes32_to_field(&commitment.0));
         }
         
-        // Verifie avec Groth16
+        // Verifies avec Groth16
         let verification_result = Groth16::<Bn254>::verify(
             &self.verifying_key,
             &public_inputs,
@@ -589,27 +589,27 @@ impl ShieldedProofSystem {
     }
 }
 
-/// Preuve ZK complete pour une transaction shielded
+/// Preuve ZK completee pour une transaction shielded
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShieldedTransactionZkProof {
     /// Preuve Groth16
     pub proof: Proof<Bn254>,
-    /// Data publiques de la transaction
+    /// Data publics de la transaction
     pub public_data: ShieldedTransactionPublicData,
 }
 
 impl ShieldedTransactionZkProof {
-    /// Serialise la preuve en bytes pour le stockage
+    /// Serializes la preuve en bytes pour le stockage
     pub fn to_bytes(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         Ok(bincode::serialize(self)?)
     }
 
-    /// Deserialise une preuve depuis les bytes
+    /// Deserializes une preuve depuis les bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(bincode::deserialize(bytes)?)
     }
 
-    /// Verifie rapidement la structure de la preuve (sans cryptographie)
+    /// Verifies rapidement la structure de la preuve (sans cryptographie)
     pub fn is_well_formed(&self) -> bool {
         // Verifications de base
         !self.public_data.input_nullifiers.is_empty() || !self.public_data.output_commitments.is_empty()
@@ -718,7 +718,7 @@ mod tests {
         
         let system = proof_system.unwrap();
         let _vk = system.verifying_key();
-        // Le setup fonctionne sans error
+        // Le setup fonctionne sans erreur
     }
 
     #[test] 

@@ -1,12 +1,12 @@
 //! Benchmarks pour les circuits ZK de TSN
 //! 
-//! Ce module provides des benchmarks comparatifs entre:
+//! Ce module fournit des benchmarks comparatifs entre:
 //! - Plonky2 STARKs (system ZK principal de TSN, post-quantique)
 //! - Legacy Groth16 (via arkworks, pour reference)
 //! 
 //! Contexte de security:
-//! - Tous les benchmarks usesnt des parameters 128-bit security
-//! - Les benchmarks sont concus pour be reproductibles
+//! - Tous les benchmarks utilisent des parameters 128-bit security
+//! - Les benchmarks sont designed pour be reproductibles
 //! 
 //! Usage:
 //! ```bash
@@ -25,9 +25,9 @@ pub use plonky2_bench::run_plonky2_benchmarks;
 pub use memory_bench::run_memory_benchmarks;
 pub use halo2_plonky2_comparison::run_comparison;
 
-/// Execute la suite complete de benchmarks
+/// Executes la suite completee de benchmarks
 /// 
-/// Cette fonction est le point d'entree principal pour tous les benchmarks ZK.
+/// Cette fonction est le point d'entry principal pour tous les benchmarks ZK.
 /// Elle mesure:
 /// - Temps de generation de preuve
 /// - Temps de verification
@@ -64,7 +64,7 @@ pub fn run_full_benchmark_suite() -> Vec<BenchmarkResult> {
     let _ = run_comparison();
     
     println!();
-    println!("Benchmark suite completeed.");
+    println!("Benchmark suite completed.");
     
     all_results
 }
@@ -75,7 +75,7 @@ mod tests {
     
     #[test]
     fn test_full_suite() {
-        // Test que la suite complete s'execute sans paniquer
+        // Test que la suite completee runs sans paniquer
         let results = run_full_benchmark_suite();
         assert!(!results.is_empty());
     }

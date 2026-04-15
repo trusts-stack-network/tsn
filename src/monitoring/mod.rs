@@ -1,11 +1,11 @@
-//! Dashboard de monitoring en temps reel pour Trust Stack Network (TSN)
+//! Dashboard de monitoring en temps real pour Trust Stack Network (TSN)
 //!
-//! Ce module provides :
-//! - Surveillance des metrics blockchain en temps reel
-//! - Debit de transactions, validation de blocs, state des peers
-//! - Sante cryptographique post-quantique
+//! Ce module fournit :
+//! - Surveillance des metrics blockchain en temps real
+//! - Throughput de transactions, validation de blocs, state des peers
+//! - Health cryptographique post-quantique
 //! - Interface REST pour integration externe
-//! - WebSocket pour mises a jour temps reel
+//! - WebSocket pour mises up to date temps real
 
 pub mod api;
 pub mod crypto_health;
@@ -31,19 +31,19 @@ pub const DEFAULT_DASHBOARD_PORT: u16 = 8080;
 /// Port by default pour les metrics Prometheus
 pub const DEFAULT_METRICS_PORT: u16 = 9090;
 
-/// Intervalle de rafraichissement by default (secondes)
+/// Intervalle de refresh by default (secondes)
 pub const DEFAULT_REFRESH_INTERVAL: u64 = 5;
 
 /// Configuration du dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardConfig {
-    /// Port d'ecoute du dashboard
+    /// Port d'listening du dashboard
     pub port: u16,
     /// Adresse de bind
     pub bind_address: String,
-    /// Intervalle de rafraichissement des metrics (secondes)
+    /// Intervalle de refresh des metrics (secondes)
     pub refresh_interval: u64,
-    /// Activer les mises a jour WebSocket
+    /// Enable WebSocket updates
     pub enable_websocket: bool,
     /// Activer l'API REST
     pub enable_rest_api: bool,
@@ -53,7 +53,7 @@ pub struct DashboardConfig {
     pub prometheus_port: u16,
     /// Duration de retention des data historiques (heures)
     pub data_retention_hours: u64,
-    /// Nombre maximum de points of data par serie
+    /// Nombre maximum de points of data par series
     pub max_data_points: usize,
 }
 
@@ -90,7 +90,7 @@ pub struct SystemStatus {
     pub subsystems: SubsystemStatus,
 }
 
-/// Statut de sante
+/// Statut de health
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
@@ -133,13 +133,13 @@ impl Default for SubsystemStatus {
 /// Metrics de performance critique
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CriticalMetrics {
-    /// Debit de transactions (TPS)
+    /// Throughput de transactions (TPS)
     pub transactions_per_second: f64,
     /// Temps de validation de bloc moyen (ms)
     pub avg_block_validation_time_ms: f64,
     /// Latence network moyenne (ms)
     pub avg_network_latency_ms: f64,
-    /// Nombre de pairs connectes
+    /// Nombre de peers connected
     pub connected_peers: usize,
     /// Taille du mempool
     pub mempool_size: usize,
@@ -158,7 +158,7 @@ pub struct TimeSeriesPoint {
     pub value: f64,
 }
 
-/// Helper pour obtenir le timestamp current
+/// Helper pour obtenir le timestamp actuel
 pub fn current_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

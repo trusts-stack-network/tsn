@@ -1,10 +1,10 @@
-//! Structured logging system with rotation for TSN
+//! System de logging structured avec rotation pour TSN
 //!
-//! This module provides a unified logging system with:
+//! Ce module fournit un system de logging unified avec:
 //! - Support JSON pour une ingestion facile par les outils de log aggregation
-//! - Automatic file rotation by size or date
+//! - Rotation automatique des files par taille ou par date
 //! - Niveaux de log configurables par module
-//! - Integration avec tracing pour les spans et traces distribuees
+//! - Integration avec tracing pour les spans et traces distributed
 //!
 //! # Usage
 //!
@@ -18,7 +18,7 @@
 //!     .build();
 //!
 //! let handle = init_logging(config).expect("Failed to initialize logging");
-//! // Pour arreter proprement:
+//! // Pour shutdowner proprement:
 //! // handle.shutdown();
 //! ```
 
@@ -73,39 +73,39 @@ pub enum LoggingError {
     },
 }
 
-/// Result type for logging operations
+/// Type result pour les operations de logging
 pub type Result<T> = std::result::Result<T, LoggingError>;
 
-/// Handle to control the logging system
+/// Handle pour control le system de logging
 /// 
-/// Cette structure encapsule les ressources necessarys pour gerer
-/// the logging system lifecycle, including graceful shutdown
-/// du manager de rotation.
+/// Cette structure encapsule les ressources necessary pour handle
+/// le cycle de vie du system de logging, notamment l'shutdown propre
+/// du gestionnaire de rotation.
 #[derive(Debug, Clone)]
 pub struct LoggingHandle {
-    /// Token d'annulation pour le manager de rotation
+    /// Token d'annulation pour le gestionnaire de rotation
     rotation_cancel_token: Option<Arc<CancellationToken>>,
 }
 
 impl LoggingHandle {
-    /// Creates a nouveau handle sans manager de rotation
+    /// Creates un nouveau handle sans gestionnaire de rotation
     fn new() -> Self {
         Self {
             rotation_cancel_token: None,
         }
     }
 
-    /// Creates a nouveau handle avec un token d'annulation pour la rotation
+    /// Creates un nouveau handle avec un token d'annulation pour la rotation
     fn with_rotation_token(token: CancellationToken) -> Self {
         Self {
             rotation_cancel_token: Some(Arc::new(token)),
         }
     }
 
-    /// Arrete proprement le manager de rotation
+    /// Stoppinge proprement le manager de rotation
     /// 
-    /// Cette methode signale au manager de rotation qu'il doit
-    /// s'arreter. Elle est sans effet si la rotation n'est pas activee.
+    /// Cette method signale au manager de rotation qu'il doit
+    /// s'shutdowner. Elle est sans effet si la rotation n'est pas enabled.
     /// 
     /// # Exemple
     /// 
@@ -128,25 +128,25 @@ impl LoggingHandle {
         }
     }
 
-    /// Checks if the rotation manager is active
+    /// Verifies si le manager de rotation est actif
     pub fn has_rotation(&self) -> bool {
         self.rotation_cancel_token.is_some()
     }
 }
 
-/// Initializes the logging system with the provided configuration.
+/// Initialise le system de logging avec la configuration fournie.
 ///
 /// Cette fonction configure le subscriber tracing avec:
 /// - Un layer console (optionnel)
-/// - A file layer with rotation (optionnel)
+/// - Un layer file avec rotation (optionnel)
 /// - Un layer JSON pour la production (optionnel)
-/// - Un filtre d'environnement pour controler les niveaux
+/// - Un filtre d'environnement pour control les niveaux
 ///
 /// # Arguments
 /// * `config` - Configuration du logging
 ///
 /// # Retourne
-/// Un `LoggingHandle` allowstant de controler le cycle de vie du logging.
+/// Un `LoggingHandle` allowstant de control le cycle de vie du logging.
 ///
 /// # Exemple
 ///
@@ -165,7 +165,7 @@ impl LoggingHandle {
 /// let handle = init_logging(config).unwrap();
 /// ```
 pub fn init_logging(config: LogConfig) -> Result<LoggingHandle> {
-    // Create the directory de logs if needed
+    // Create le directory de logs si necessary
     if !config.log_dir.exists() {
         std::fs::create_dir_all(&config.log_dir)?;
     }
@@ -173,10 +173,10 @@ pub fn init_logging(config: LogConfig) -> Result<LoggingHandle> {
     // Construire le filtre d'environnement
     let filter = build_env_filter(&config)?;
 
-    // Initialize le subscriber avec les layers configures
+    // Initialize le subscriber avec les layers configureds
     let subscriber = tracing_subscriber::registry().with(filter);
 
-    // Ajouter le layer console si active
+    // Add console layer if enabled
     let subscriber = if config.console_output {
         let console_layer = fmt::layer()
             .with_target(true)
@@ -204,7 +204,7 @@ pub fn init_logging(config: LogConfig) -> Result<LoggingHandle> {
             // Layer JSON pour la production
             JsonLayer::new(file_appender).boxed()
         } else {
-            // Layer texte formate pour le developpement
+            // Layer texte formatted pour le development
             fmt::layer()
                 .with_writer(Arc::new(file_appender))
                 .with_target(true)
@@ -221,20 +221,20 @@ pub fn init_logging(config: LogConfig) -> Result<LoggingHandle> {
         subscriber.with(None)
     };
 
-    // Initialize le subscriber
+    // Initialiser le subscriber
     subscriber.init();
 
     let mut handle = LoggingHandle::new();
 
-    // Configurer le manager de rotation if needed
+    // Configure le manager de rotation si necessary
     if config.file_output && config.rotation != LogRotation::Never {
         let rotation_manager = RotationManager::new(config.clone())?;
         
-        // Create a token d'annulation pour pouvoir arreter proprement
+        // Create un token d'annulation pour pouvoir shutdowner proprement
         let cancel_token = CancellationToken::new();
         handle = LoggingHandle::with_rotation_token(cancel_token.clone());
         
-        // Start the task de rotation en arriere-plan
+        // Start la task de rotation en background
         let _handle = tokio::spawn(async move {
             rotation_manager.run(cancel_token).await;
         });
@@ -251,34 +251,34 @@ pub fn init_logging(config: LogConfig) -> Result<LoggingHandle> {
     Ok(handle)
 }
 
-/// Arrete proprement le manager de rotation
+/// Stoppinge proprement le manager de rotation
 /// 
-/// # Deprecie
-/// Cette fonction est depreciee. Utilisez `LoggingHandle::shutdown()` a la place.
-/// Elle est conservee temporairement pour la compatibility ascendante.
-#[deprecated(since = "0.2.0", note = "Use LoggingHandle::shutdown() instead")]
+/// # Deprecated
+/// Cette fonction est deprecated. Utilisez `LoggingHandle::shutdown()` to la place.
+/// Elle est kept temporarily pour la compatibility ascendante.
+#[deprecated(since = "0.2.0", note = "Utilisez LoggingHandle::shutdown() to la place")]
 pub fn shutdown_rotation() {
     // Cette fonction ne fait plus rien car le token n'est plus global
     // Les utilisateurs doivent migrer vers LoggingHandle::shutdown()
     tracing::warn!(
         target: "tsn::logging",
-        "shutdown_rotation() is deprecated. Use LoggingHandle::shutdown()"
+        "shutdown_rotation() est deprecated. Utilisez LoggingHandle::shutdown()"
     );
 }
 
-/// Construit le filtre d'environnement a partir de la configuration.
+/// Construit le filtre d'environnement to partir de la configuration.
 /// 
 /// # Errors
-/// Retourne une error si une directive de module est invalid.
+/// Retourne une erreur si une directive de module est invalid.
 fn build_env_filter(config: &LogConfig) -> Result<EnvFilter> {
     // Essayer d'abord la variable d'environnement RUST_LOG
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|e| {
-            // Si RUST_LOG n'est pas definie ou invalid, logger l'error et usesr default_level
+            // Si RUST_LOG n'est pas definede ou invalid, logger l'error et utiliser default_level
             tracing::warn!(
                 target: "tsn::logging",
                 error = %e,
-                "RUST_LOG invalid or undefined, using default level"
+                "RUST_LOG invalid ou non definede, utilisation du niveau by default"
             );
             EnvFilter::try_new(&config.default_level)
                 .unwrap_or_else(|e| {
@@ -286,13 +286,13 @@ fn build_env_filter(config: &LogConfig) -> Result<EnvFilter> {
                         target: "tsn::logging",
                         error = %e,
                         default_level = %config.default_level,
-                        "Invalid default log level, falling back to 'info'"
+                        "Niveau de log by default invalid, fallback sur 'info'"
                     );
                     EnvFilter::new("info")
                 })
         });
 
-    // Ajouter les directives de niveau specifiques aux modules
+    // Ajouter les directives de niveau specific aux modules
     let mut filter = filter;
     for (module, level) in &config.module_levels {
         let directive_str = format!("{}={}", module, level);
@@ -301,7 +301,7 @@ fn build_env_filter(config: &LogConfig) -> Result<EnvFilter> {
                 filter = filter.add_directive(directive);
             }
             Err(e) => {
-                // Propager l'error avec contexte au lieu de silencer
+                // Propager l'erreur avec contexte au lieu de silencer
                 return Err(LoggingError::InvalidModuleDirective {
                     module: module.clone(),
                     level: level.clone(),
@@ -314,7 +314,7 @@ fn build_env_filter(config: &LogConfig) -> Result<EnvFilter> {
     Ok(filter)
 }
 
-/// Recupere le directory de logs by default
+/// Retrieves le directory de logs by default
 pub fn default_log_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -366,7 +366,7 @@ mod tests {
         use std::collections::HashMap;
         
         let mut module_levels = HashMap::new();
-        // Niveau invalid: "invalid_level" n'est pas un niveau de log valide
+        // Niveau invalid: "invalid_level" n'est pas un niveau de log valid
         module_levels.insert("tsn::crypto".to_string(), "invalid_level".to_string());
         
         let config = LogConfig {

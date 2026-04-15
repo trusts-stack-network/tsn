@@ -1,6 +1,6 @@
 //! Comprehensive validator for shielded blocks.
 //!
-//! This module provides a completee validation framework for shielded blocks,
+//! This module provides a complete validation framework for shielded blocks,
 //! integrating proof-of-work validation, transaction validation, and state
 //! consistency checks.
 
@@ -140,7 +140,7 @@ impl ShieldedBlockValidator {
         }
     }
     
-    /// Validate a completee shielded block with full context
+    /// Validate a complete shielded block with full context
     pub fn validate_block(
         &self,
         block: &ShieldedBlock,
@@ -453,7 +453,7 @@ mod tests {
     fn test_fast_validation_utility() {
         let block = ShieldedBlock::genesis(8, dummy_coinbase(0, 50));
         
-        // This should completee without panic, regardless of result
+        // This should complete without panic, regardless of result
         let result = validate_shielded_block_fast(&block, None);
         match result {
             Ok(_) => println!("Fast validation passed"),

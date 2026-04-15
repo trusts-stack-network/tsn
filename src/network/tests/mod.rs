@@ -1,6 +1,6 @@
 //! Module de tests pour le network TSN
 //! 
-//! Organisation des tests en modules separes pour une meilleure maintenabilite.
+//! Organisation des tests en modules separateds pour une meilleure maintainability.
 
 pub mod unit_tests;
 pub mod handshake_tests;

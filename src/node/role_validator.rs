@@ -85,7 +85,7 @@ pub enum RoleValidation {
     /// Proof is too old (stale)
     StaleProof { age_secs: u64 },
     /// Role claim is missing required fields
-    IncompleteeProof(String),
+    IncompleteProof(String),
 }
 
 impl RoleValidation {
@@ -108,7 +108,7 @@ impl std::fmt::Display for RoleValidation {
             Self::StaleProof { age_secs } => {
                 write!(f, "proof is {}s old (max: 300s)", age_secs)
             }
-            Self::IncompleteeProof(msg) => write!(f, "incompletee proof: {}", msg),
+            Self::IncompleteProof(msg) => write!(f, "incomplete proof: {}", msg),
         }
     }
 }
@@ -234,7 +234,7 @@ impl RoleValidator {
                     network_tip: self.network_tip,
                 }
             }
-            None => RoleValidation::IncompleteeProof("miner must report chain height".into()),
+            None => RoleValidation::IncompleteProof("miner must report chain height".into()),
             _ => RoleValidation::Valid,
         }
     }
@@ -248,7 +248,7 @@ impl RoleValidator {
                     network_tip: self.network_tip,
                 }
             }
-            None => RoleValidation::IncompleteeProof("relay must report chain height".into()),
+            None => RoleValidation::IncompleteProof("relay must report chain height".into()),
             _ => RoleValidation::Valid,
         }
     }

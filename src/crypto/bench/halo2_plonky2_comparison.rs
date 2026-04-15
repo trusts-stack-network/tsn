@@ -1,11 +1,11 @@
 //! Benchmark comparatif Halo2 vs Plonky2 pour TSN
 //! 
-//! Ce module provides une comparaison complete entre:
+//! Ce module fournit une comparison completee entre:
 //! - Legacy: Groth16/Arkworks (BN254, non post-quantique)
 //! - Current: Plonky2 STARKs (FRI-based, post-quantique)
 //! 
 //! Contexte de security:
-//! - TSN uses Plonky2 comme system de preuve ZK principal
+//! - TSN utilise Plonky2 comme system de preuve ZK principal
 //! - Plonky2 offre une security post-quantique via FRI (Fast Reed-Solomon IOP)
 //! - Les preuves sont transparentes (no trusted setup)
 //! 
@@ -62,14 +62,14 @@ impl ComparisonResult {
 
 use std::time::Duration;
 
-/// Execute la comparaison complete
+/// Executes la comparison completee
 pub fn run_comparison() -> Vec<ComparisonResult> {
     println!("╔═══════════════════════════════════════════════════════════════╗");
     println!("║     TSN ZK SYSTEMS COMPARISON: Plonky2 vs Legacy                ║");
     println!("╚═══════════════════════════════════════════════════════════════╝");
     println!();
     
-    // Execute tous les benchmarks
+    // Executes tous les benchmarks
     let results = run_all_benchmarks();
     
     // Analyse les results
@@ -92,7 +92,7 @@ pub fn run_comparison() -> Vec<ComparisonResult> {
         println!("Plonky2 Verification: {:?}", ver.avg_time);
     }
     
-    println!("\nNote: Halo2 n'est pas inclus car la crate n'est pas dans les dependances.");
+    println!("\nNote: Halo2 n'est pas inclus car la crate n'est pas dans les dependencies.");
     println!("      Utilisez 'cargo add halo2_proofs pasta_curves ff rand_core criterion'");
     println!("      pour ajouter le support Halo2.");
     
@@ -119,7 +119,7 @@ mod tests {
     
     #[test]
     fn test_run_comparison() {
-        // Ce test checks que la comparaison s'execute sans paniquer
+        // Ce test verifies que la comparison runs sans paniquer
         let _results = run_comparison();
     }
 }

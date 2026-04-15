@@ -1,6 +1,6 @@
 [package]
 name = "tsn"
-version = "2.1.4"
+version = "2.1.5"
 edition = "2021"
 description = "TSN (Trust Stack Network) - A privacy-preserving post-quantum cryptocurrency"
 license = "MIT"
@@ -14,6 +14,7 @@ sha2 = { version = "0.10", features = ["compress"] }
 blake2 = "0.10"
 light-poseidon = "0.2"
 pbkdf2 = "0.12"
+hmac = "0.12"
 
 # zk-SNARKs (Groth16 on BN254 for compatibility with circomlibjs/snarkjs) - V1 LEGACY
 ark-groth16 = "0.4"
@@ -157,12 +158,12 @@ tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [features]
-# Feature pour activer les modules de demonstration vulnerable (TESTS UNIQUEMENT)
-# ⚠️ Ces modules ne doivent JAMAIS be used en production
+# Feature pour activer les modules de démonstration vulnérables (TESTS UNIQUEMENT)
+# ⚠️ Ces modules ne doivent JAMAIS être utilisés en production
 # Utilisation : cargo build --features vulnerable-demo
 vulnerable-demo = []
-# Feature pour utiliser pqcrypto-sphincsplus (implementation C optimized)
+# Feature pour utiliser pqcrypto-sphincsplus (implémentation C optimisée)
 pqcrypto-sphincsplus = []
-# Feature pour disable certains tests (timing, security, etc.)
+# Feature pour désactiver certains tests (timing, sécurité, etc.)
 # Utilisation : cargo test --features disabled_test
 disabled_test = []

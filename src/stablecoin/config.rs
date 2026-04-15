@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration complete du protocole stablecoin ZST
+/// Configuration completee du protocole stablecoin ZST
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StablecoinConfig {
     // === Reserve Ratios (en bps: 10000 = 100%) ===
@@ -30,7 +30,7 @@ pub struct StablecoinConfig {
     // === Oracle ===
     /// Quorum minimum d'oracles
     pub oracle_quorum: u8,
-    /// Age maximum d'un prix oracle (en secondes)
+    /// Maximum oracle price age (in seconds)
     pub oracle_max_age_secs: u64,
     /// Deviation maximum inter-oracle (en bps)
     pub oracle_max_deviation_bps: u64,
@@ -40,7 +40,7 @@ pub struct StablecoinConfig {
     // === Anti-Bank-Run ===
     /// Max % du supply ZST burnable par bloc (en bps: 500 = 5%)
     pub cooldown_max_burn_pct: u64,
-    /// Ratio declencheur du circuit breaker (12000 = 120%)
+    /// Ratio triggersur du circuit breaker (12000 = 120%)
     pub circuit_breaker_ratio: u64,
     /// Duration du circuit breaker en secondes (86400 = 24h)
     pub circuit_breaker_duration: u64,
@@ -48,13 +48,13 @@ pub struct StablecoinConfig {
     // === Activation ===
     /// Hauteur d'activation du module stablecoin
     pub activation_height: u64,
-    /// Decimales pour ZST (8, comme TSN)
+    /// Decimals pour ZST (8, comme TSN)
     pub zst_decimals: u8,
 
-    // === Distribution des frais ===
-    /// Part des frais vers la reserve (en bps: 8000 = 80%)
+    // === Distribution des fees ===
+    /// Part des fees vers la reserve (en bps: 8000 = 80%)
     pub fee_to_reserve_bps: u64,
-    /// Part des frais vers la tresorerie (en bps: 2000 = 20%)
+    /// Part des fees vers la treasury (en bps: 2000 = 20%)
     pub fee_to_treasury_bps: u64,
 
     // === TWAP ===
@@ -97,7 +97,7 @@ impl Default for StablecoinConfig {
 }
 
 impl StablecoinConfig {
-    /// Configuration pour les tests (quorum reduit, etc.)
+    /// Configuration pour les tests (quorum reduces, etc.)
     pub fn testnet() -> Self {
         Self {
             oracle_quorum: 1,

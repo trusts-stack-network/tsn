@@ -35,7 +35,7 @@ impl Handshake {
         if message.starts_with(b"TSN_HANDSHAKE") {
             self.add_node(addr).await;
         } else {
-            warn!("Message inconnu recu de {}", addr);
+            warn!("Message inconnu received de {}", addr);
         }
     }
 
@@ -48,7 +48,7 @@ impl Handshake {
     }
 }
 
-// Gestion des errors
+// Gestion des erreurs
 async fn handle_error(err: std::io::Error) {
     warn!("Erreur network : {}", err);
 }

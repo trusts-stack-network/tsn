@@ -1,16 +1,16 @@
 //! SLH-DSA (SPHINCS+) signature verification for consensus
 //! 
-//! Implemente la verification des signatures SLH-DSA-SHA2-128s comme remplacement
-//! de ML-DSA-65. SLH-DSA offre une security post-quantique basee sur les fonctions de hachage.
+//! Implements la verification des signatures SLH-DSA-SHA2-128s comme remplacement
+//! de ML-DSA-65. SLH-DSA offre une security post-quantique based sur les fonctions de hachage.
 
 use sha2::{Sha256, Digest};
 use thiserror::Error;
 
-/// Taille de la signature SLH-DSA-SHA2-128s (in bytes)
+/// Taille de la signature SLH-DSA-SHA2-128s (en octets)
 pub const SLH_DSA_SIGNATURE_SIZE: usize = 7856;
-/// Taille de la key publique SLH-DSA (in bytes)
+/// Taille de la key publique SLH-DSA (en octets)
 pub const SLH_DSA_PUBLIC_KEY_SIZE: usize = 64;
-/// Taille de la key private SLH-DSA (in bytes)  
+/// Taille de la key private SLH-DSA (en bytes)  
 pub const SLH_DSA_SECRET_KEY_SIZE: usize = 128;
 
 /// Type alias pour les signatures SLH-DSA
@@ -31,24 +31,24 @@ pub enum SignatureError {
     AlgorithmError(String),
 }
 
-/// Verificateur de signatures SLH-DSA
+/// Verifier de signatures SLH-DSA
 pub struct SlhDsaVerifier;
 
 impl SlhDsaVerifier {
-    /// Creates a nouveau verificateur
+    /// Creates un nouveau verifier
     pub fn new() -> Self {
         Self
     }
 
-    /// Verifie une signature SLH-DSA-SHA2-128s
+    /// Verifies une signature SLH-DSA-SHA2-128s
     /// 
     /// # Arguments
-    /// * `message` - Le message signe (hache en interne avec SHA-256)
-    /// * `signature` - La signature SLH-DSA (7856 octets)
-    /// * `public_key` - La key publique (64 octets)
+    /// * `message` - The signed message (hashed internally with SHA-256)
+    /// * `signature` - The SLH-DSA signature (7856 bytes)
+    /// * `public_key` - The public key (64 bytes)
     /// 
     /// # Returns
-    /// Ok(()) si la signature est valide, Err(SignatureError) sinon
+    /// Ok(()) si la signature est valid, Err(SignatureError) sinon
     pub fn verify(
         &self,
         message: &[u8],
@@ -70,18 +70,18 @@ impl SlhDsaVerifier {
             });
         }
 
-        // Hachage du message avec SHA-256 (pre-requis SLH-DSA)
+        // Hachage du message avec SHA-256 (prerequisite SLH-DSA)
         let message_hash = Sha256::digest(message);
         
         // Verification de la signature SLH-DSA
-        // Note: Dans une implementation reelle, usesr pqcrypto-sphincsplus ou similaire
+        // Note: Dans une implementation real, utiliser pqcrypto-sphincsplus ou similaire
         // Ici on simule la logique de verification
         self.verify_slh_dsa_sha2_128s(&message_hash, signature, public_key)
     }
 
     /// Verification interne SLH-DSA-SHA2-128s
     /// 
-    /// SLH-DSA-SHA2-128s uses:
+    /// SLH-DSA-SHA2-128s utilise:
     /// - H: SHA-256 (256 bits)
     /// - PRF: SHA-256 (256 bits)  
     /// - H_msg: SHA-256 (256 bits)

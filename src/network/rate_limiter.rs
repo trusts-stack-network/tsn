@@ -1,9 +1,9 @@
 //! Rate limiting for TSN P2P network
 //!
 //! Implementation robuste avec:
-//! - Token bucket algorithm pour le rate limiting precis
+//! - Token bucket algorithm pour le rate limiting precise
 //! - Sliding window pour la detection de bursts
-//! - Nettoyage automatique des entrees inactives
+//! - Cleanup automatique des entries inactive
 //! - Support IPv4/IPv6
 
 use std::collections::HashMap;
@@ -16,15 +16,15 @@ use tracing::{debug, trace, warn};
 /// Configuration du rate limiter
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RateLimitConfig {
-    /// Requetes maximum par seconde (sustained rate)
+    /// Requests maximum par seconde (sustained rate)
     pub max_requests_per_second: u32,
-    /// Taille du burst autorise (peak rate)
+    /// Taille du burst authorized (peak rate)
     pub burst_size: u32,
-    /// Duration de bannissement after depassement
+    /// Duration de bannissement after overflow
     pub ban_duration: Duration,
-    /// Intervalle de nettoyage des entrees inactives
+    /// Intervalle de cleanup des entries inactive
     pub cleanup_interval: Duration,
-    /// Duration d'inactivity avant suppression d'une entree
+    /// Duration d'inactivity avant deletion d'une entry
     pub inactive_timeout: Duration,
 }
 
@@ -43,15 +43,15 @@ impl Default for RateLimitConfig {
 /// State d'un bucket token pour un peer
 #[derive(Debug, Clone)]
 struct TokenBucket {
-    /// Tokens disponibles currentlement
+    /// Tokens availables currently
     tokens: f64,
     /// Dernier refill des tokens
     last_refill: Instant,
-    /// Derniere activity (pour cleanup)
+    /// Last activity (pour cleanup)
     last_activity: Instant,
     /// Timestamp du ban si applicable
     banned_until: Option<Instant>,
-    /// Nombre de violations consecutives
+    /// Nombre de violations consecutive
     violation_count: u32,
 }
 
@@ -67,7 +67,7 @@ impl TokenBucket {
         }
     }
 
-    /// Checks if le peer est currentlement banni
+    /// Verifies si le peer est currently banni
     fn is_banned(&self, now: Instant) -> bool {
         match self.banned_until {
             Some(until) => now < until,
@@ -75,7 +75,7 @@ impl TokenBucket {
         }
     }
 
-    /// Met a jour le nombre de tokens disponibles
+    /// Met up to date le nombre de tokens availables
     fn refill(&mut self, rate_per_sec: f64, burst_size: f64, now: Instant) {
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();
         self.tokens = (self.tokens + elapsed * rate_per_sec).min(burst_size);
@@ -93,7 +93,7 @@ impl TokenBucket {
         }
     }
 
-    /// Marque une violation et retourne true si le peer doit be banni
+    /// Marque une violation et returns true si le peer doit be banni
     fn record_violation(&mut self, ban_duration: Duration) -> bool {
         self.violation_count += 1;
         
@@ -112,7 +112,7 @@ impl TokenBucket {
         self.violation_count >= 3 // Ban permanent after 3 violations
     }
 
-    /// Reinitialise les violations after une period sans probleme
+    /// Resets les violations after une period sans problem
     fn clear_violations(&mut self) {
         self.violation_count = 0;
         self.banned_until = None;
@@ -127,7 +127,7 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    /// Creates a nouveau rate limiter avec la configuration donnee
+    /// Creates un nouveau rate limiter avec la configuration data
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
             config,
@@ -135,23 +135,23 @@ impl RateLimiter {
         }
     }
 
-    /// Creates a rate limiter avec la configuration by default
+    /// Creates un rate limiter avec la configuration by default
     pub fn default() -> Self {
         Self::new(RateLimitConfig::default())
     }
 
-    /// Checks if une request est autorisee pour ce peer
-    /// Retourne true si la request est autorisee, false si rate limited
+    /// Verifies si une request est authorized pour ce peer
+    /// Returns true si la request est authorized, false si rate limited
     pub async fn check(&self, addr: &SocketAddr) -> bool {
         let mut buckets = self.buckets.write().await;
         let now = Instant::now();
 
-        // Recupere ou creates le bucket
+        // Retrieves ou creates le bucket
         let bucket = buckets.entry(*addr).or_insert_with(|| {
             TokenBucket::new(self.config.burst_size)
         });
 
-        // Checks if banni
+        // Verifies si banni
         if bucket.is_banned(now) {
             trace!("Peer {} is banned", addr);
             return false;
@@ -166,7 +166,7 @@ impl RateLimiter {
 
         // Tente de consommer un token
         if bucket.try_consume() {
-            // Reinitialise les violations si le peer se comporte bien
+            // Resets les violations si le peer se comporte bien
             if bucket.violation_count > 0 && bucket.tokens > self.config.burst_size as f64 * 0.5 {
                 bucket.clear_violations();
             }
@@ -190,7 +190,7 @@ impl RateLimiter {
         }
     }
 
-    /// Checks if un peer est currentlement banni
+    /// Verifies si un peer est currently banni
     pub async fn is_banned(&self, addr: &SocketAddr) -> bool {
         let buckets = self.buckets.read().await;
         match buckets.get(addr) {
@@ -210,7 +210,7 @@ impl RateLimiter {
         debug!("Peer {} manually banned for {:?}", addr, duration);
     }
 
-    /// Debannit un peer
+    /// Unbans un peer
     pub async fn unban_peer(&self, addr: &SocketAddr) {
         let mut buckets = self.buckets.write().await;
         if let Some(bucket) = buckets.get_mut(addr) {
@@ -220,7 +220,7 @@ impl RateLimiter {
         }
     }
 
-    /// Recupere les statistiques d'un peer
+    /// Retrieves les statistiques d'un peer
     pub async fn get_peer_stats(&self, addr: &SocketAddr) -> Option<PeerRateStats> {
         let buckets = self.buckets.read().await;
         buckets.get(addr).map(|bucket| PeerRateStats {
@@ -232,7 +232,7 @@ impl RateLimiter {
         })
     }
 
-    /// Cleans up the entrees inactives
+    /// Nettoie les entries inactive
     pub async fn cleanup(&self) {
         let mut buckets = self.buckets.write().await;
         let now = Instant::now();
@@ -254,7 +254,7 @@ impl RateLimiter {
         }
     }
 
-    /// Starts the task de nettoyage periodic
+    /// Starts la task de cleanup periodic
     pub fn start_cleanup_task(self: Arc<Self>) {
         let interval = self.config.cleanup_interval;
         tokio::spawn(async move {
@@ -266,12 +266,12 @@ impl RateLimiter {
         });
     }
 
-    /// Nombre de peers trackes
+    /// Nombre de peers tracked
     pub async fn peer_count(&self) -> usize {
         self.buckets.read().await.len()
     }
 
-    /// Liste des peers currentlement bannis
+    /// Liste des peers currently bannis
     pub async fn get_banned_peers(&self) -> Vec<(SocketAddr, Instant)> {
         let buckets = self.buckets.read().await;
         let now = Instant::now();
@@ -299,7 +299,7 @@ pub struct PeerRateStats {
     pub last_activity: Instant,
 }
 
-/// Rate limiter pour messages specifiques (gossip, sync, etc.)
+/// Rate limiter pour messages specific (gossip, sync, etc.)
 #[derive(Debug)]
 pub struct MessageRateLimiter {
     /// Rate limiter pour les messages gossip
@@ -311,7 +311,7 @@ pub struct MessageRateLimiter {
 }
 
 impl MessageRateLimiter {
-    /// Cree des rate limiters avec des configurations adaptees a chaque type
+    /// Creates des rate limiters avec des configurations adapted to chaque type
     pub fn new() -> Self {
         Self {
             gossip: RateLimiter::new(RateLimitConfig {
@@ -338,7 +338,7 @@ impl MessageRateLimiter {
         }
     }
 
-    /// Starts thes tasks de nettoyage pour tous les limiters
+    /// Starts les tasks de cleanup pour tous les limiters
     pub fn start_cleanup_tasks(self: Arc<Self>) {
         let this = Arc::clone(&self);
         tokio::spawn(async move {

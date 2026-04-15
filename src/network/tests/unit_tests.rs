@@ -1,6 +1,6 @@
-//! Tests unitaires isoles pour le module network TSN
+//! Tests unitaires isolated pour le module network TSN
 //! 
-//! Tests sans dependances externes, avec mocks et timeouts appropries.
+//! Tests sans dependencies externes, avec mocks et timeouts appropriate.
 
 use std::time::Duration;
 use tokio::time::timeout;
@@ -12,7 +12,7 @@ use crate::network::protocol::{
 };
 use crate::network::NetworkError;
 
-/// Test: encodage/decodage basique de HandshakeData
+/// Test: encoding/decoding basique de HandshakeData
 #[test]
 fn test_basic_handshake_encode_decode() {
     let handshake = HandshakeData {
@@ -51,7 +51,7 @@ fn test_basic_handshake_encode_decode() {
     }
 }
 
-/// Test: encodage/decodage de HandshakeAck
+/// Test: encoding/decoding de HandshakeAck
 #[test]
 fn test_handshake_ack_encode_decode() {
     let msg = TsnMessage::HandshakeAck {
@@ -148,7 +148,7 @@ fn test_empty_capabilities() {
     }
 }
 
-/// Test: differentes versions de protocole
+/// Test: different versions de protocole
 #[test]
 fn test_protocol_versions() {
     let versions = vec![
@@ -186,7 +186,7 @@ fn test_protocol_versions() {
     }
 }
 
-/// Test: differents ports d'ecoute
+/// Test: different ports d'listening
 #[test]
 fn test_listen_ports() {
     let ports = vec![1, 80, 443, 8080, 9333, 65535];
@@ -217,7 +217,7 @@ fn test_listen_ports() {
     }
 }
 
-/// Test: differents node_id
+/// Test: different node_id
 #[test]
 fn test_node_ids() {
     let node_ids = vec![
@@ -295,7 +295,7 @@ fn test_extreme_timestamps() {
     }
 }
 
-/// Test: HandshakeAck avec differents states
+/// Test: HandshakeAck avec different states
 #[test]
 fn test_handshake_ack_states() {
     let states = vec![true, false];
@@ -323,7 +323,7 @@ fn test_handshake_ack_states() {
     }
 }
 
-/// Test: buffer insuffisant pour un message complete
+/// Test: buffer insuffisant pour un message complet
 #[test]
 fn test_insufficient_buffer() {
     let handshake = HandshakeData {
@@ -337,7 +337,7 @@ fn test_insufficient_buffer() {
     let msg = TsnMessage::Handshake(handshake);
     let encoded = encode_message(&msg).expect("Encoding should succeed");
     
-    // Prend seulement les premiers bytes
+    // Prend onlyment les premiers bytes
     let partial = &encoded[..encoded.len().min(10)];
     let mut buf = BytesMut::from(partial);
     
@@ -345,10 +345,10 @@ fn test_insufficient_buffer() {
     
     match result {
         Ok(None) => {
-            // Comportement attendu : pas assez of data
+            // Comportement attendu : pas enough of data
         }
         Ok(Some(_)) => {
-            panic!("Ne devrait pas decoder avec un buffer insuffisant");
+            panic!("Ne should pas decode avec un buffer insufficient");
         }
         Err(_) => {
             // Erreur acceptable
@@ -368,7 +368,7 @@ fn test_empty_buffer() {
             // Comportement attendu
         }
         Ok(Some(_)) => {
-            panic!("Ne devrait pas decoder un buffer vide");
+            panic!("Ne should pas decode un buffer vide");
         }
         Err(_) => {
             // Erreur acceptable
@@ -410,7 +410,7 @@ fn test_all_message_types_roundtrip() {
         
         assert!(consumed > 0, "Should consume bytes for message {}", i);
         
-        // Checks that le message decode correspond a l'original
+        // Verifies que le message decoded matches to l'original
         match (&original_msg, &decoded_msg) {
             (TsnMessage::Handshake(orig), TsnMessage::Handshake(dec)) => {
                 assert_eq!(orig.version.0, dec.version.0);
@@ -434,7 +434,7 @@ fn test_all_message_types_roundtrip() {
 /// Test: timeout avec operation async mock
 #[tokio::test]
 async fn test_timeout_with_mock_operation() {
-    // Operation qui reussit dans les temps
+    // Operation qui succeeds dans les temps
     let result = timeout(Duration::from_millis(100), async {
         tokio::time::sleep(Duration::from_millis(50)).await;
         Ok::<i32, NetworkError>(42)
@@ -454,10 +454,10 @@ async fn test_timeout_with_mock_operation() {
     assert!(result.is_err()); // Timeout
 }
 
-/// Test: gestion d'error avec NetworkError
+/// Test: gestion d'erreur avec NetworkError
 #[tokio::test]
 async fn test_network_error_handling() {
-    // Simule differents types d'errors network
+    // Simule different types d'errors network
     let errors = vec![
         NetworkError::ConnectionFailed,
         NetworkError::Timeout,
@@ -475,7 +475,7 @@ async fn test_network_error_handling() {
         
         assert!(result.is_ok()); // Pas de timeout
         let inner_result = result.unwrap();
-        assert!(inner_result.is_err()); // Mais error network
+        assert!(inner_result.is_err()); // Mais erreur network
     }
 }
 

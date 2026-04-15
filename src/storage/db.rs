@@ -34,7 +34,7 @@ impl Default for FaucetClaim {
 /// Uses separate trees for different data types:
 /// - blocks: hash -> block data
 /// - block_heights: height -> hash
-/// - nullifiers: nullifier -> () (existence check)
+/// - nullifiers: nullifier -> () (existsnce check)
 /// - accounts: address -> account data
 /// - metadata: key -> value
 /// - faucet_claims: pk_hash -> FaucetClaim
@@ -138,7 +138,7 @@ impl Database {
     }
 
     /// Load all block hashes in order (sequential scan, no deserialization).
-    /// Returns a Vec of (height, hash) pairs sorted by height.
+    /// Returns a Vec of (height, hash) peers sorted by height.
     pub fn load_all_block_hashes(&self) -> Result<Vec<[u8; 32]>, DatabaseError> {
         let mut hashes = Vec::new();
         for entry in self.block_heights.iter() {
@@ -232,7 +232,7 @@ impl Database {
     }
 
     /// v2.0.9: Atomically replace all nullifiers using sled batch.
-    /// Prevents incompletee state if crash occurs during reorg.
+    /// Prevents incomplete state if crash occurs during reorg.
     pub fn replace_nullifiers_atomic(&self, new_nullifiers: &[[u8; 32]]) -> Result<(), DatabaseError> {
         // Clear then batch-insert in one flush
         self.nullifiers.clear()?;

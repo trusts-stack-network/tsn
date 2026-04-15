@@ -1,5 +1,5 @@
 // src/core/crypto/mod.rs
-// Ce file regroupe les fonctionnalites de cryptographie utilisees dans le noyau de Trust Stack Network.
+// Ce file regroupe les features de cryptographie used dans le noyau de Trust Stack Network.
 
 pub mod keys;
 pub mod signature;
@@ -12,4 +12,4 @@ pub mod poseidon;
 pub mod binding;
 pub mod address;
 
-// Importation des modules pour les usesr dans d'autres parties du code.
+// Importation des modules pour les utiliser dans d'autres parties du code.

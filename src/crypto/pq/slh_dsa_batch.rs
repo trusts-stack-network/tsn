@@ -1,28 +1,28 @@
 //! Verification batch des signatures SLH-DSA — Optimisation post-quantique
 //!
-//! Implementation optimisee pour checksr N signatures SLH-DSA en parallele.
-//! Utilise le parallelisme avec rayon quand disponible, sinon fallback sequentiel.
+//! Implementation optimized pour verify N signatures SLH-DSA en parallel.
+//! Utilise le parallelism avec rayon quand available, sinon fallback sequential.
 //!
 //! Security :
-//! - Constant-time : aucune branche sur les data secrets
-//! - Early abort : arret des la first signature invalid (optimisation)
-//! - Memory safety : zeroize des buffers temporaires
+//! - Constant-time : no branche sur les data secret
+//! - Early abort : shutdown from la first signature invalid (optimisation)
+//! - Memory safety : zeroize des buffers temporarys
 //!
 //! Performances attendues :
-//! - Sequentiel : O(N) × temps_verification_unitaire
-//! - Parallele : O(N/cores) × temps_verification_unitaire + overhead
-//! - Speedup theorique : ~cores × 0.8 (overhead network/sync)
+//! - Sequential : O(N) × temps_verification_unitaire
+//! - Parallel : O(N/cores) × temps_verification_unitaire + overhead
+//! - Speedup theoretical : ~cores × 0.8 (overhead network/sync)
 //!
 //! References :
 //! - FIPS 205 (2024) — pas de specification batch, implementation TSN
-//! - "Batch Verification of SPHINCS+" (non publie, design TSN)
+//! - "Batch Verification of SPHINCS+" (non published, design TSN)
 
 use super::slh_dsa::{PublicKey, Signature};
 
-/// Resultat de verification batch
+/// Result de verification batch
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchVerificationResult {
-    /// Toutes les signatures sont valides
+    /// Toutes les signatures sont valids
     pub all_valid: bool,
     /// Indices des signatures invalids (si any)
     pub invalid_indices: Vec<usize>,
@@ -32,25 +32,25 @@ pub struct BatchVerificationResult {
     pub verification_time_us: u64,
 }
 
-/// Entree pour la verification batch
+/// Entry pour la verification batch
 #[derive(Debug, Clone)]
 pub struct BatchVerificationEntry<'a> {
     /// Key publique du signataire
     pub public_key: &'a PublicKey,
-    /// Message signe
+    /// Message signed
     pub message: &'a [u8],
-    /// Signature a checksr
+    /// Signature to verify
     pub signature: &'a Signature,
 }
 
 /// Configuration de la verification batch
 #[derive(Debug, Clone)]
 pub struct BatchVerificationConfig {
-    /// Utiliser le parallelisme (si rayon disponible)
+    /// Utiliser le parallelism (si rayon available)
     pub use_parallel: bool,
-    /// Arret anticipe a la first error
+    /// Stopping anticipated to la first error
     pub early_abort: bool,
-    /// Taille de chunk pour le parallelisme
+    /// Taille de chunk pour le parallelism
     pub chunk_size: Option<usize>,
 }
 
@@ -64,10 +64,10 @@ impl Default for BatchVerificationConfig {
     }
 }
 
-/// Verification batch optimisee des signatures SLH-DSA
+/// Verification batch optimized des signatures SLH-DSA
 ///
 /// # Arguments
-/// * `entries` - Slice des entrees (key publique, message, signature)
+/// * `entries` - Slice des entries (key public, message, signature)
 /// * `config` - Configuration de verification
 ///
 /// # Retour
@@ -76,7 +76,7 @@ impl Default for BatchVerificationConfig {
 /// # Security
 /// - Constant-time : pas de branche sur le contenu des signatures
 /// - Early abort : optimisation performance sans leak d'information
-/// - Zeroize : nettoyage des buffers temporaires
+/// - Zeroize : nettoyage des buffers temporarys
 ///
 /// # Exemple
 /// ```rust
@@ -141,7 +141,7 @@ pub fn verify_batch(
     }
 }
 
-/// Verification sequentielle (fallback)
+/// Verification sequential (fallback)
 fn verify_batch_sequential(
     entries: &[BatchVerificationEntry],
     early_abort: bool,
@@ -163,7 +163,7 @@ fn verify_batch_sequential(
     invalid_indices
 }
 
-/// Verification parallele avec threads std (fallback sans rayon)
+/// Verification parallel avec threads std (fallback sans rayon)
 fn verify_batch_parallel(
     entries: &[BatchVerificationEntry],
     early_abort: bool,
@@ -173,7 +173,7 @@ fn verify_batch_parallel(
     use std::thread;
 
     if entries.len() <= chunk_size {
-        // Pas assez d'entrees pour justifier le parallelisme
+        // Pas enough d'entries pour justifier le parallelism
         return verify_batch_sequential(entries, early_abort);
     }
 
@@ -231,7 +231,7 @@ fn verify_batch_parallel(
         }
     }
     
-    // Attendre tous les threads
+    // Wait tous les threads
     for handle in handles {
         let _ = handle.join();
     }
@@ -241,15 +241,15 @@ fn verify_batch_parallel(
     result
 }
 
-/// Verification batch simplifiee (API de convenance)
+/// Verification batch simplified (API de convenance)
 ///
-/// Utilise la configuration by default et retourne seulement le booleen.
+/// Utilise la configuration by default et returns onlyment le boolean.
 ///
 /// # Arguments
-/// * `entries` - Slice des entrees a checksr
+/// * `entries` - Slice des entries to verify
 ///
 /// # Retour
-/// * `true` si toutes les signatures sont valides, `false` sinon
+/// * `true` si toutes les signatures sont valids, `false` sinon
 pub fn verify_batch_simple(entries: &[BatchVerificationEntry]) -> bool {
     verify_batch(entries, &BatchVerificationConfig::default()).all_valid
 }
@@ -259,18 +259,18 @@ pub fn verify_batch_simple(entries: &[BatchVerificationEntry]) -> bool {
 pub struct BatchVerificationStats {
     /// Nombre de signatures par seconde
     pub signatures_per_second: f64,
-    /// Speedup par rapport a la verification sequentielle
+    /// Speedup par rapport to la verification sequential
     pub speedup_factor: f64,
     /// Utilisation CPU moyenne (estimation)
     pub cpu_utilization: f64,
 }
 
-/// Benchmark de performance batch vs sequentiel
+/// Benchmark de performance batch vs sequential
 ///
-/// Utile pour optimiser la configuration sur differentes architectures.
+/// Utile pour optimiser la configuration sur different architectures.
 ///
 /// # Arguments
-/// * `entries` - Entrees de test
+/// * `entries` - Entries de test
 /// * `iterations` - Nombre d'iterations pour la moyenne
 ///
 /// # Retour
@@ -287,14 +287,14 @@ pub fn benchmark_batch_verification(
         };
     }
 
-    // Benchmark sequentiel
+    // Benchmark sequential
     let start_seq = std::time::Instant::now();
     for _ in 0..iterations {
         let _ = verify_batch_sequential(entries, false);
     }
     let seq_time = start_seq.elapsed();
 
-    // Benchmark parallele
+    // Benchmark parallel
     let start_par = std::time::Instant::now();
     for _ in 0..iterations {
         let config = BatchVerificationConfig {
@@ -398,7 +398,7 @@ mod tests {
     fn test_batch_verification_with_invalid() {
         let (_, public_keys, messages, signatures) = create_test_entries(3);
         
-        // Create a signature invalid en modifiant le message
+        // Create une signature invalid en modifiant le message
         let wrong_message = b"message incorrect";
         
         let entries = vec![
@@ -439,7 +439,7 @@ mod tests {
             },
             BatchVerificationEntry {
                 public_key: &public_keys[1],
-                message: wrong_message, // Second also invalid
+                message: wrong_message, // Second aussi invalid
                 signature: &signatures[1],
             },
             BatchVerificationEntry {
@@ -457,7 +457,7 @@ mod tests {
         let result = verify_batch(&entries, &config);
         assert!(!result.all_valid);
         assert_eq!(result.total_count, 3);
-        // Early abort : seulement la first error detectee
+        // Early abort : onlyment la first error detectede
         assert_eq!(result.invalid_indices, vec![0]);
     }
 
@@ -475,7 +475,7 @@ mod tests {
             },
             BatchVerificationEntry {
                 public_key: &public_keys[1],
-                message: wrong_message, // Second also invalid
+                message: wrong_message, // Second aussi invalid
                 signature: &signatures[1],
             },
             BatchVerificationEntry {
@@ -493,7 +493,7 @@ mod tests {
         let result = verify_batch(&entries, &config);
         assert!(!result.all_valid);
         assert_eq!(result.total_count, 3);
-        // Pas d'early abort : toutes les errors detectees
+        // Pas d'early abort : toutes les errors detectedes
         assert_eq!(result.invalid_indices, vec![0, 1]);
     }
 
@@ -538,7 +538,7 @@ mod tests {
         let stats = benchmark_batch_verification(&entries, 3);
         
         assert!(stats.signatures_per_second > 0.0);
-        assert!(stats.speedup_factor >= 1.0); // Au minimum egal au sequentiel
+        assert!(stats.speedup_factor >= 1.0); // Au minimum equal au sequential
         assert!(stats.cpu_utilization >= 0.0 && stats.cpu_utilization <= 1.0);
     }
 
@@ -555,7 +555,7 @@ mod tests {
             .collect();
 
         let config = BatchVerificationConfig {
-            use_parallel: false, // Force sequentiel
+            use_parallel: false, // Force sequential
             early_abort: false,
             chunk_size: None,
         };

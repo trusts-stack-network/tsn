@@ -40,7 +40,7 @@ pub struct BlockHeader {
     pub merkle_root: [u8; BLOCK_HASH_SIZE],
 
     /// Commitment tree root after applying this block.
-    /// Allows light clients to verify note existence.
+    /// Allows light clients to verify note existsnce.
     #[serde(with = "hex_array")]
     pub commitment_root: [u8; BLOCK_HASH_SIZE],
 
@@ -178,7 +178,7 @@ impl BlockHeaderHashPrefix {
     }
 }
 
-/// A completee shielded block with header, transactions, and coinbase.
+/// A complete shielded block with header, transactions, and coinbase.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShieldedBlock {
     pub header: BlockHeader,

@@ -1,12 +1,12 @@
 //! Adaptateur SLH-DSA utilisant la crate FIPS 204 officielle
 //!
-//! Ce module provides une interface unifiee pour les signatures SLH-DSA (SPHINCS+)
+//! Ce module fournit une interface unified pour les signatures SLH-DSA (SPHINCS+)
 //! en utilisant l'implementation FIPS 205 officielle via la crate `fips204`.
 //!
 //! # Parameters de security
 //! - SLH-DSA-SHA2-128s: 128 bits de security classique, 64 bits post-quantique
 //! - Key publique: 32 octets
-//! - Key secret: 64 octets  
+//! - Key secret: 64 bytes  
 //! - Signature: ~7.8KB
 //!
 //! # References
@@ -31,13 +31,13 @@ pub enum SlhDsaAdapterError {
     SigningFailed(String),
     #[error("Failure de verification SLH-DSA")]
     VerificationFailed,
-    #[error("Format de key publique invalid (attendu {expected} octets, recu {actual})")]
+    #[error("Format de key publique invalid (attendu {expected} octets, received {actual})")]
     InvalidPublicKeyFormat { expected: usize, actual: usize },
-    #[error("Format de key secret invalid (attendu {expected} octets, recu {actual})")]
+    #[error("Format de key secret invalid (attendu {expected} bytes, received {actual})")]
     InvalidSecretKeyFormat { expected: usize, actual: usize },
-    #[error("Format de signature invalid (attendu {expected} octets, recu {actual})")]
+    #[error("Format de signature invalid (attendu {expected} octets, received {actual})")]
     InvalidSignatureFormat { expected: usize, actual: usize },
-    #[error("Key secret corrompue ou invalid")]
+    #[error("Key secret corrupted ou invalid")]
     CorruptedSecretKey,
 }
 
@@ -46,7 +46,7 @@ pub const PUBLIC_KEY_SIZE: usize = slh_dsa::PK_LEN;
 pub const SECRET_KEY_SIZE: usize = slh_dsa::SK_LEN;
 pub const SIGNATURE_SIZE: usize = slh_dsa::SIG_LEN;
 
-/// Key publique SLH-DSA avec serialization securisee
+/// Key public SLH-DSA avec serialization secure
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicKey {
     /// Bytes de la key publique (32 octets pour SLH-DSA-SHA2-128s)
@@ -56,7 +56,7 @@ pub struct PublicKey {
 /// Key secret SLH-DSA avec protection memory
 #[derive(Clone, Debug, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct SecretKey {
-    /// Bytes de la key secret (64 octets pour SLH-DSA-SHA2-128s)
+    /// Bytes de la key secret (64 bytes pour SLH-DSA-SHA2-128s)
     #[zeroize(skip)]
     pub bytes: [u8; SECRET_KEY_SIZE],
 }
@@ -69,7 +69,7 @@ pub struct Signature {
 }
 
 impl PublicKey {
-    /// Creates a key publique a partir de bytes bruts
+    /// Creates une key public to partir de bytes bruts
     ///
     /// # Arguments
     /// * `bytes` - Bytes de la key publique (doit faire exactement 32 octets)
@@ -94,14 +94,14 @@ impl PublicKey {
         self.bytes
     }
 
-    /// Verifie une signature avec cette key publique
+    /// Verifies une signature avec cette key public
     ///
     /// # Arguments
-    /// * `message` - Message signe
-    /// * `signature` - Signature a checksr
+    /// * `message` - Message signed
+    /// * `signature` - Signature to verify
     ///
     /// # Security
-    /// Utilise l'implementation FIPS 205 officielle resistante aux attaques temporelles
+    /// Utilise l'implementation FIPS 205 officielle resistant aux attaques temporelles
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), SlhDsaAdapterError> {
         if signature.bytes.len() != SIGNATURE_SIZE {
             return Err(SlhDsaAdapterError::InvalidSignatureFormat {
@@ -124,11 +124,11 @@ impl PublicKey {
 }
 
 impl SecretKey {
-    /// Generates ae nouvelle paire de keys SLH-DSA
+    /// Generates une new paire de keys SLH-DSA
     ///
     /// # Security
-    /// Utilise `OsRng` pour la generation cryptographiquement securisee
-    /// La key secret est automatiquement zeroized a la destruction
+    /// Utilise `OsRng` pour la generation cryptographiquement secure
+    /// La key secret est automatically zeroized to la destruction
     pub fn generate() -> Result<(Self, PublicKey), SlhDsaAdapterError> {
         let mut rng = OsRng;
         
@@ -142,16 +142,16 @@ impl SecretKey {
         Ok((secret_key, public_key))
     }
 
-    /// Creates a key secret a partir de bytes bruts
+    /// Creates une key secret to partir de bytes bruts
     ///
     /// # Arguments
-    /// * `bytes` - Bytes de la key secret (doit faire exactement 64 octets)
+    /// * `bytes` - Bytes de la key secret (doit faire exactement 64 bytes)
     ///
     /// # Erreurs
     /// Retourne `InvalidSecretKeyFormat` si la taille est incorrecte
     ///
     /// # Security
-    /// Les bytes d'entree doivent provenir d'une source cryptographiquement securisee
+    /// Les bytes d'entry doivent provenir d'une source cryptographiquement secure
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SlhDsaAdapterError> {
         if bytes.len() != SECRET_KEY_SIZE {
             return Err(SlhDsaAdapterError::InvalidSecretKeyFormat {
@@ -168,15 +168,15 @@ impl SecretKey {
     /// Exporte la key secret en bytes
     ///
     /// # Security
-    /// L'appelant est responsable de zeroizer les bytes retournes
+    /// L'appelant est responsable de zeroizer les bytes returneds
     pub fn to_bytes(&self) -> [u8; SECRET_KEY_SIZE] {
         self.bytes
     }
 
-    /// Derive la key publique a partir de cette key secret
+    /// Derives la key public to partir de cette key secret
     ///
     /// # Erreurs
-    /// Retourne `CorruptedSecretKey` si la key secret est invalid
+    /// Returns `CorruptedSecretKey` si la key secret est invalid
     pub fn derive_public_key(&self) -> Result<PublicKey, SlhDsaAdapterError> {
         let sk = slh_dsa::SecretKey::try_from_bytes(self.bytes)
             .map_err(|_| SlhDsaAdapterError::CorruptedSecretKey)?;
@@ -188,11 +188,11 @@ impl SecretKey {
     /// Signe un message avec cette key secret
     ///
     /// # Arguments
-    /// * `message` - Message a signer
+    /// * `message` - Message to signer
     ///
     /// # Security
     /// - Utilise l'implementation FIPS 205 officielle
-    /// - Chaque signature uses une randomisation fraiche
+    /// - Chaque signature utilise une randomisation fresh
     /// - Resistant aux attaques par canaux auxiliaires
     pub fn sign(&self, message: &[u8]) -> Result<Signature, SlhDsaAdapterError> {
         let mut rng = OsRng;
@@ -210,7 +210,7 @@ impl SecretKey {
 }
 
 impl Signature {
-    /// Creates a signature a partir de bytes bruts
+    /// Creates une signature to partir de bytes bruts
     ///
     /// # Arguments
     /// * `bytes` - Bytes de la signature (doit faire exactement ~7.8KB)
@@ -235,12 +235,12 @@ impl Signature {
         &self.bytes
     }
 
-    /// Retourne la taille de la signature in bytes
+    /// Retourne la taille de la signature en octets
     pub fn len(&self) -> usize {
         self.bytes.len()
     }
 
-    /// Checks if la signature est vide
+    /// Verifies si la signature est vide
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
@@ -249,14 +249,14 @@ impl Signature {
 /// Signeur SLH-DSA pour l'integration avec le consensus TSN
 ///
 /// Fournit une interface haut niveau pour signer des messages avec
-/// gestion d'state et protection contre la reutilisation de keys.
+/// gestion d'state et protection contre la reuse de keys.
 pub struct SlhDsaSigner {
     secret_key: SecretKey,
     signature_count: u64,
 }
 
 impl SlhDsaSigner {
-    /// Creates a nouveau signeur avec une key secret
+    /// Creates un nouveau signeur avec une key secret
     pub fn new(secret_key: SecretKey) -> Self {
         Self {
             secret_key,
@@ -264,20 +264,20 @@ impl SlhDsaSigner {
         }
     }
 
-    /// Generates a nouveau signeur avec une paire de keys fraiche
+    /// Generates un nouveau signeur avec une paire de keys fresh
     pub fn generate() -> Result<(Self, PublicKey), SlhDsaAdapterError> {
         let (sk, pk) = SecretKey::generate()?;
         let signer = Self::new(sk);
         Ok((signer, pk))
     }
 
-    /// Signe un message et incremente le compteur
+    /// Signe un message et increments le compteur
     ///
     /// # Arguments
-    /// * `message` - Message a signer
+    /// * `message` - Message to signer
     ///
     /// # Retour
-    /// Tuple (signature, compteur) pour tracabilite
+    /// Tuple (signature, compteur) pour traceability
     pub fn sign_with_counter(&mut self, message: &[u8]) -> Result<(Signature, u64), SlhDsaAdapterError> {
         let signature = self.secret_key.sign(message)?;
         let counter = self.signature_count;
@@ -285,46 +285,46 @@ impl SlhDsaSigner {
         Ok((signature, counter))
     }
 
-    /// Gets the key publique associee
+    /// Gets la key public associated
     pub fn public_key(&self) -> Result<PublicKey, SlhDsaAdapterError> {
         self.secret_key.derive_public_key()
     }
 
-    /// Gets the nombre de signatures effectuees
+    /// Gets le nombre de signatures performedes
     pub fn signature_count(&self) -> u64 {
         self.signature_count
     }
 }
 
-/// Verificateur SLH-DSA pour l'integration avec le consensus TSN
+/// Verifier SLH-DSA pour l'integration avec le consensus TSN
 pub struct SlhDsaVerifier {
     public_key: PublicKey,
 }
 
 impl SlhDsaVerifier {
-    /// Creates a nouveau verificateur avec une key publique
+    /// Creates un nouveau verifier avec une key public
     pub fn new(public_key: PublicKey) -> Self {
         Self { public_key }
     }
 
-    /// Verifie une signature
+    /// Verifies une signature
     ///
     /// # Arguments
-    /// * `message` - Message signe
-    /// * `signature` - Signature a checksr
+    /// * `message` - Message signed
+    /// * `signature` - Signature to verify
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), SlhDsaAdapterError> {
         self.public_key.verify(message, signature)
     }
 
-    /// Verifie une signature avec compteur (pour audit)
+    /// Verifies une signature avec compteur (pour audit)
     ///
     /// # Arguments
-    /// * `message` - Message signe
-    /// * `signature` - Signature a checksr
+    /// * `message` - Message signed
+    /// * `signature` - Signature to verify
     /// * `expected_counter` - Compteur attendu (pour detection de replay)
     ///
     /// # Note
-    /// Le compteur doit be inclus dans le message signe pour be verified
+    /// Le compteur doit be inclus dans le message signed pour be verified
     pub fn verify_with_counter(
         &self,
         message: &[u8],
@@ -334,14 +334,14 @@ impl SlhDsaVerifier {
         // Verification basique de la signature
         self.verify(message, signature)?;
         
-        // TODO: Implementer la verification du compteur si inclus dans le message
-        // Pour l'instant, on accepte toutes les signatures valides
-        let _ = expected_counter; // Avoids le warning unused
+        // TODO: Implement la verification du compteur si inclus dans le message
+        // Pour l'instant, on accepte toutes les signatures valids
+        let _ = expected_counter; // Avoid le warning unused
         
         Ok(())
     }
 
-    /// Gets the key publique utilisee par ce verificateur
+    /// Gets la key public used par ce verifier
     pub fn public_key(&self) -> &PublicKey {
         &self.public_key
     }
@@ -362,7 +362,7 @@ impl PublicKey {
 pub mod constants {
     use super::*;
     
-    /// Checks that les tailles correspondent aux specifications FIPS 205
+    /// Verifies que les tailles matchesent aux specifications FIPS 205
     pub const fn validate_sizes() {
         // Compilation-time assertions
         assert!(PUBLIC_KEY_SIZE == 32, "SLH-DSA-SHA2-128s public key must be 32 bytes");
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_size_constants() {
-        // Verification que les constantes correspondent a FIPS 205
+        // Verification que les constantes matchesent to FIPS 205
         constants::validate_sizes();
         
         assert_eq!(PUBLIC_KEY_SIZE, 32);
@@ -392,7 +392,7 @@ mod tests {
         assert_eq!(sk.bytes.len(), SECRET_KEY_SIZE);
         assert_eq!(pk.bytes.len(), PUBLIC_KEY_SIZE);
         
-        // Check that la key publique peut be derivee
+        // Verify que la key public peut be derived
         let derived_pk = sk.derive_public_key()?;
         assert_eq!(pk.bytes, derived_pk.bytes);
         
@@ -422,10 +422,10 @@ mod tests {
         
         let signature = sk.sign(message)?;
         
-        // La signature doit be valide pour le message original
+        // La signature doit be valid pour le message original
         pk.verify(message, &signature)?;
         
-        // La signature doit fail pour un mauvais message
+        // La signature doit failsr pour un mauvais message
         assert!(pk.verify(wrong_message, &signature).is_err());
         
         Ok(())
@@ -490,7 +490,7 @@ mod tests {
     fn test_serialization() -> Result<(), SlhDsaAdapterError> {
         let (sk, pk) = SecretKey::generate()?;
         
-        // Test serialization/deserialization key publique
+        // Test serialization/deserialization key public
         let pk_bytes = pk.to_bytes();
         let pk_restored = PublicKey::from_bytes(&pk_bytes)?;
         assert_eq!(pk.bytes, pk_restored.bytes);
@@ -508,13 +508,13 @@ mod tests {
         let (mut sk, _) = SecretKey::generate().unwrap();
         let original_bytes = sk.bytes;
         
-        // Check that la key n'est pas nulle initialement
+        // Verify que la key n'est pas nulle initially
         assert_ne!(original_bytes, [0u8; SECRET_KEY_SIZE]);
         
         // Zeroize explicite
         sk.zeroize();
         
-        // Check that les bytes sont maintenant zero
+        // Verify que les bytes sont now zero
         // Note: Cette verification peut ne pas fonctionner si le compilateur optimise
         // mais c'est un test conceptuel de l'interface zeroize
         assert_eq!(sk.bytes, [0u8; SECRET_KEY_SIZE]);

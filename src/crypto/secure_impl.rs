@@ -1,10 +1,10 @@
-//! Implementation securisee utilisant subtle et primitives modernes
+//! Implementation secure utilisant subtle et primitives modernes
 //!
 //! SECURITY: Ce module remplace toutes les operations cryptographiques
-//! potentiellement dangereuses par des versions securisees:
-//! - Pas de unwrap() dans les fonctions de chiffrement/dechiffrement
-//! - Comparaison en temps constant pour avoid les attaques par timing
-//! - Gestion d'errors explicite pour tous les cas limites
+//! potentiellement dangereuses par des versions secure:
+//! - Pas de unwrap() dans les fonctions de encryption/decryption
+//! - Comparaison en temps constant pour avoidr les attaques par timing
+//! - Gestion d'erreurs explicite pour tous les cas limits
 //!
 //! Toutes les fonctions retournent Result au lieu de paniquer.
 

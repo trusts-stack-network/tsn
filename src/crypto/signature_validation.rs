@@ -1,7 +1,7 @@
 //! System de validation de signatures SLH-DSA pour TSN
 //!
 //! Module de haut niveau pour la validation de signatures dans le contexte TSN.
-//! Integre la validation batch, la mise en cache et les politiques de security.
+//! Integrates la validation batch, la mise en cache et les politiques de security.
 //!
 //! References :
 //! - FIPS PUB 205 (2024) – https://doi.org/10.6028/NIST.FIPS.205
@@ -21,20 +21,20 @@ pub enum ValidationSystemError {
     #[error("Erreur de validation : {0}")]
     Validation(#[from] ValidationError),
     
-    #[error("Cache plein : impossible d'ajouter de nouvelles entrees")]
+    #[error("Cache plein : unable d'add de news entries")]
     CacheFull,
     
-    #[error("Validation batch echouee : {failed}/{total} signatures invalids")]
+    #[error("Validation batch failed : {failed}/{total} signatures invalids")]
     BatchValidationFailed { failed: usize, total: usize },
     
-    #[error("Limite de throughput depassee : {current}/{limit} validations par seconde")]
+    #[error("Limite de throughput exceedede : {current}/{limit} validations par seconde")]
     RateLimitExceeded { current: u32, limit: u32 },
     
     #[error("Signature en liste noire : hash {hash}")]
     BlacklistedSignature { hash: String },
 }
 
-/// Entree de cache pour les results de validation
+/// Entry de cache pour les results de validation
 #[derive(Debug, Clone)]
 struct CacheEntry {
     result: ValidationResult,
@@ -49,7 +49,7 @@ pub struct ValidationSystemConfig {
     pub validator_config: ValidatorConfig,
     /// Taille maximale du cache (0 = pas de cache)
     pub cache_size: usize,
-    /// TTL des entrees de cache en secondes
+    /// TTL des entries de cache en secondes
     pub cache_ttl_seconds: u64,
     /// Limite de throughput (validations par seconde, 0 = pas de limite)
     pub rate_limit_per_second: u32,
@@ -81,7 +81,7 @@ pub struct ValidationSystem {
     blacklist: Arc<Mutex<HashSet<String>>>,
 }
 
-/// Rate limiter simple base sur une fenbe glissante
+/// Rate limiter simple based sur une window glissante
 #[derive(Debug)]
 struct RateLimiter {
     requests: Vec<Instant>,
@@ -101,7 +101,7 @@ impl RateLimiter {
     fn check_rate_limit(&mut self) -> bool {
         let now = Instant::now();
         
-        // Nettoyer les oldnes requests
+        // Clean up les anciennes requests
         self.requests.retain(|&time| now.duration_since(time) < self.window);
         
         if self.requests.len() >= self.limit as usize {
@@ -116,12 +116,12 @@ impl RateLimiter {
 use std::collections::HashSet;
 
 impl ValidationSystem {
-    /// Creates a nouveau system de validation
+    /// Creates un nouveau system de validation
     pub fn new() -> Self {
         Self::with_config(ValidationSystemConfig::default())
     }
 
-    /// Creates a nouveau system avec configuration personnalisee
+    /// Creates un nouveau system avec configuration custom
     pub fn with_config(config: ValidationSystemConfig) -> Self {
         let validator = SignatureValidator::with_config(config.validator_config.clone());
         let rate_limiter = if config.rate_limit_per_second > 0 {
@@ -234,7 +234,7 @@ impl ValidationSystem {
             }
         }
 
-        // Si trop d'echecs, on considere le batch comme echoue
+        // Si trop d'failures, on considers le batch comme failed
         if failed_count > signatures.len() / 2 {
             return Err(ValidationSystemError::BatchValidationFailed {
                 failed: failed_count,
@@ -245,7 +245,7 @@ impl ValidationSystem {
         Ok(results)
     }
 
-    /// Ajoute une signature a la blacklist
+    /// Adds une signature to la blacklist
     pub fn blacklist_signature(&self, message: &[u8], signature_bytes: &[u8], public_key_bytes: &[u8]) {
         let cache_key = self.compute_cache_key(message, signature_bytes, public_key_bytes);
         
@@ -261,7 +261,7 @@ impl ValidationSystem {
         }
     }
 
-    /// Nettoie le cache des entrees expirees
+    /// Nettoie le cache des entries expireds
     pub fn cleanup_cache(&self) {
         if self.config.cache_size == 0 {
             return;
@@ -290,7 +290,7 @@ impl ValidationSystem {
             CacheStats {
                 size: cache.len(),
                 max_size: self.config.cache_size,
-                hit_ratio: 0.0, // TODO: implementer le tracking des hits/misses
+                hit_ratio: 0.0, // TODO: implement le tracking des hits/misses
             }
         };
 
@@ -306,7 +306,7 @@ impl ValidationSystem {
         }
     }
 
-    /// Remet a zero toutes les statistiques
+    /// Remet to zero toutes les statistiques
     pub fn reset_statistics(&self) {
         {
             let mut validator = self.validator.lock().unwrap();
@@ -334,10 +334,10 @@ impl ValidationSystem {
         hasher.update(public_key);
         let hash = hasher.finalize();
         
-        hex::encode(&hash[..16]) // 32 caracteres hex
+        hex::encode(&hash[..16]) // 32 hex characters
     }
 
-    /// Checks the cache pour une key donnee
+    /// Verifies le cache pour une key data
     fn check_cache(&self, cache_key: &str) -> Option<ValidationResult> {
         let mut cache = self.cache.lock().unwrap();
         
@@ -347,12 +347,12 @@ impl ValidationSystem {
                 .unwrap()
                 .as_secs();
 
-            // Check the expiration
+            // Verify l'expiration
             if now - entry.timestamp < self.config.cache_ttl_seconds {
                 entry.access_count += 1;
                 return Some(entry.result.clone());
             } else {
-                // Entree expiree, la supprimer
+                // Entry expired, la delete
                 cache.remove(cache_key);
             }
         }
@@ -364,9 +364,9 @@ impl ValidationSystem {
     fn cache_result(&self, cache_key: &str, result: &ValidationResult) {
         let mut cache = self.cache.lock().unwrap();
         
-        // Check the taille du cache
+        // Verify la taille du cache
         if cache.len() >= self.config.cache_size {
-            // Eviction LRU simple : supprimer l'entree la plus old
+            // Eviction LRU simple : delete l'entry la plus ancienne
             if let Some((oldest_key, _)) = cache.iter()
                 .min_by_key(|(_, entry)| entry.timestamp)
                 .map(|(k, v)| (k.clone(), v.timestamp)) {
@@ -395,7 +395,7 @@ pub struct CacheStats {
     pub hit_ratio: f64,
 }
 
-/// Statistiques completes du system de validation
+/// Statistiques completees du system de validation
 #[derive(Debug, Clone)]
 pub struct ValidationSystemStats {
     pub validator_metrics: super::signature_validator::ValidatorMetrics,
@@ -499,7 +499,7 @@ mod tests {
         let message = b"Blacklisted message";
         let signature = secret_key.sign(message);
 
-        // First validation reussie
+        // First validation successful
         let result = system.validate_signature(
             message,
             &signature.to_bytes(),
@@ -507,10 +507,10 @@ mod tests {
         ).unwrap();
         assert!(result.is_valid);
 
-        // Ajouter a la blacklist
+        // Add to blacklist
         system.blacklist_signature(message, &signature.to_bytes(), &public_key.to_bytes());
 
-        // Second validation fails (blacklistee)
+        // Second validation fails (blacklisted)
         let result = system.validate_signature(
             message,
             &signature.to_bytes(),
@@ -548,7 +548,7 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // Troisieme validation devrait be rate-limitee
+        // Third validation should be rate-limited
         let message = b"Rate limited message";
         let signature = secret_key.sign(message);
         
@@ -609,13 +609,13 @@ mod tests {
             &public_key.to_bytes(),
         ).unwrap();
 
-        // Attendre l'expiration
+        // Wait l'expiration
         std::thread::sleep(Duration::from_secs(2));
 
         // Nettoyer le cache
         system.cleanup_cache();
 
-        // Check that le cache est vide
+        // Verify que le cache est vide
         let stats = system.get_statistics();
         assert_eq!(stats.cache_stats.size, 0);
     }

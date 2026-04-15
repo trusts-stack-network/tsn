@@ -56,7 +56,7 @@ use tokio::time::Duration;
 /// - Seeds connus (seed1-4.tsnchain.com) → "seed1", "seed2", etc.
 /// - Autres URLs → "peer:" + 8 premiers hex d'un hash SHA-256
 ///
-/// L'URL originale reste utilisee en interne ; seul l'affichage change.
+/// L'URL originale reste used en interne ; seul l'affichage change.
 ///
 /// Returns true if this peer string is a contactable HTTP URL (not a hashed peer ID).
 /// Hashed peer IDs like "peer:a1b2c3d4" are display-only and must never be used for HTTP requests.
@@ -73,7 +73,7 @@ pub fn peer_id(url: &str) -> String {
         }
     }
 
-    // Hash SHA-256 de l'URL → 8 premiers caracteres hex
+    // Hash SHA-256 de l'URL → 8 firsts characters hex
     use sha2::{Sha256, Digest};
     let mut hasher = Sha256::new();
     hasher.update(url.as_bytes());

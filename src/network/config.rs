@@ -8,17 +8,17 @@ pub struct NetworkConfig {
     pub protocol_version: u32,
     /// ID du network (mainnet, testnet, etc.)
     pub network_id: String,
-    /// Adresse d'ecoute
+    /// Listening address
     pub listen_addr: SocketAddr,
-    /// Port d'ecoute
+    /// Port d'listening
     pub listen_port: u16,
     /// Liste des seed nodes
     pub seed_nodes: Vec<String>,
-    /// Capabilities annoncees
+    /// Capabilities announced
     pub capabilities: Vec<String>,
     /// Timeout de connection
     pub connection_timeout_secs: u64,
-    /// Max pairs actifs
+    /// Max peers actifs
     pub max_peers: usize,
 }
 

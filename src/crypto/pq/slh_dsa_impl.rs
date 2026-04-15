@@ -122,7 +122,7 @@ impl SecretKey {
                     },
                 )
             }
-            // For other parameter sets, we'd use the corresponding module
+            // For other parameter sets, we'd use the matchesing module
             // For now, we default to 128s for implementation
             _ => Self::generate_rng(rng, SlhDsaParameterSet::Sha2_128s),
         }

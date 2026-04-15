@@ -73,7 +73,7 @@ fn parse_g1(coords: &[String]) -> Result<G1Affine, String> {
 /// Parse a G2 point from snarkjs format [[x0, x1], [y0, y1], [z0, z1]] (projective).
 fn parse_g2(coords: &[Vec<String>]) -> Result<G2Affine, String> {
     if coords.len() != 3 {
-        return Err("G2 point must have 3 coordinate pairs".to_string());
+        return Err("G2 point must have 3 coordinate peers".to_string());
     }
 
     let x = Fq2::new(parse_fq(&coords[0][0])?, parse_fq(&coords[0][1])?);

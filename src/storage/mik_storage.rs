@@ -146,7 +146,7 @@ impl MikStorage {
         }
     }
 
-    /// Store the completee MIK state.
+    /// Store the complete MIK state.
     pub fn store_mik_state(&self, state: &MikState) -> Result<(), MikStorageError> {
         // Store each MIK
         for mik in state.miks.values() {
@@ -181,7 +181,7 @@ impl MikStorage {
         Ok(())
     }
 
-    /// Load the completee MIK state.
+    /// Load the complete MIK state.
     pub fn load_mik_state(&self) -> Result<MikState, MikStorageError> {
         // Load configuration
         let config = if let Some(config_data) = self.config_tree.get(storage_keys::MIK_CONFIG_KEY)? {

@@ -3,18 +3,18 @@
 //! MITIGATIONS:
 //! - Comparaisons en temps constant via `subtle`
 //! - Zeroization explicite des secrets
-//! - Pas de branches sur data secrets
-//! - Alignment memory pour avoid les cache-line splits
+//! - Pas de branches sur data secret
+//! - Alignment memory pour avoidr les cache-line splits
 
 use subtle::{Choice, ConstantTimeEq, ConstantTimeGreater};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use rand::{RngCore, CryptoRng};
 
-/// Erreur constant-time (pas de distinction de cas d'error)
+/// Erreur constant-time (pas de distinction de cas d'erreur)
 #[derive(Debug, Clone, Copy)]
 pub struct CryptoError;
 
-/// Key symetrique securisee (zeroized automatiquement)
+/// Key symetric secure (zeroized automatically)
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct SecureKey {
     #[zeroize(skip)]
@@ -23,7 +23,7 @@ pub struct SecureKey {
 }
 
 /// Comparaison MAC en temps constant
-/// VULNERABILITY PREVIOUS: `mac1 == mac2` vulnerable a timing attack
+/// PREVIOUS VULNERABILITY: `mac1 == mac2` vulnerable to timing attack
 /// MITIGATION: Utilisation de subtle::ConstantTimeEq
 pub fn verify_mac(mac1: &[u8], mac2: &[u8]) -> Choice {
     if mac1.len() != mac2.len() {
@@ -32,7 +32,7 @@ pub fn verify_mac(mac1: &[u8], mac2: &[u8]) -> Choice {
     mac1.ct_eq(mac2)
 }
 
-/// Derivation de key resistante aux side-channels
+/// Derivation de key resistant aux side-channels
 pub fn derive_key_scrypt(password: &[u8], salt: &[u8]) -> Result<SecureKey, CryptoError> {
     // Parameters conservateurs pour resistance brute-force
     let params = scrypt::Params::new(15, 8, 1, 32)
@@ -49,7 +49,7 @@ pub fn derive_key_scrypt(password: &[u8], salt: &[u8]) -> Result<SecureKey, Cryp
 }
 
 /// Validation de padding PKCS#7 en temps constant
-/// VULNERABILITY: Timing differences revelent padding invalid
+/// VULNERABILITY: Timing differences reveal padding invalid
 pub fn verify_padding_constant_time(data: &[u8], block_size: usize) -> Choice {
     if data.is_empty() || data.len() % block_size != 0 {
         return Choice::from(0);

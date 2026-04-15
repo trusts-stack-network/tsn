@@ -278,7 +278,7 @@ pub fn verify_batch(
         .collect();
     
     let success_count = results.iter().filter(|r| matches!(r, Ok(true))).count();
-    debug!(success_count, total = results.len(), "Batch verification completee");
+    debug!(success_count, total = results.len(), "Batch verification complete");
     
     results
 }

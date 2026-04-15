@@ -1,6 +1,6 @@
 //! Layer de formatage JSON pour tracing
 //!
-//! Ce module provides un layer personnalise pour le crate `tracing`
+//! This module provides a custom layer for the `tracing` crate
 //! that formats events as structured JSON.
 
 use std::collections::HashMap;
@@ -18,12 +18,12 @@ use tracing_subscriber::registry::LookupSpan;
 
 use super::Result;
 
-/// JSON output format for logs
+/// Format de sortie JSON pour les logs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonFormat {
-    /// JSON compact (une ligne par event)
+    /// Compact JSON (one line per event)
     Compact,
-    /// JSON pretty-printe (pour le developpement)
+    /// Pretty-printed JSON (for development)
     Pretty,
 }
 
@@ -43,7 +43,7 @@ pub struct JsonLayer<W> {
 }
 
 impl<W: Write + Send + 'static> JsonLayer<W> {
-    /// Creates a nouveau layer JSON
+    /// Creates un nouveau layer JSON
     pub fn new(writer: W) -> Self {
         Self {
             writer: Mutex::new(writer),
@@ -54,7 +54,7 @@ impl<W: Write + Send + 'static> JsonLayer<W> {
         }
     }
 
-    /// Defines the output format
+    /// Sets the output format
     pub fn with_format(mut self, format: JsonFormat) -> Self {
         self.format = format;
         self
@@ -101,7 +101,7 @@ impl<W: Write + Send + 'static> JsonLayer<W> {
             log_entry.target = Some(event.metadata().target().to_string());
         }
 
-        // Nom de l'event
+        // Event name
         log_entry.name = event.metadata().name().to_string();
 
         // Thread info
@@ -112,7 +112,7 @@ impl<W: Write + Send + 'static> JsonLayer<W> {
             }
         }
 
-        // Champs de l'event
+        // Event fields
         let mut visitor = JsonVisitor::default();
         event.record(&mut visitor);
         log_entry.fields = visitor.fields;
@@ -131,7 +131,7 @@ impl<W: Write + Send + 'static> JsonLayer<W> {
             }
         }
 
-        // Serialize according to format
+        // Serialize selon le format
         match self.format {
             JsonFormat::Compact => serde_json::to_string(&log_entry),
             JsonFormat::Pretty => serde_json::to_string_pretty(&log_entry),
@@ -149,7 +149,7 @@ where
         event: &Event,
         ctx: Context<'S>,
     ) {
-        // Create a formatting context
+        // Create un contexte de formatage
         let fmt_ctx = FmtContext::new(&ctx,
             &tracing_subscriber::fmt::format::DefaultFields::default(),
         );
@@ -166,34 +166,34 @@ where
                 }
             }
             Err(_) => {
-                // Ignore serialization errors
+                // Ignorer les erreurs de serialization
             }
         }
     }
 }
 
-/// JSON format log entry
+/// JSON log entry
 #[derive(Debug, Default, Serialize)]
 struct JsonLogEntry {
     /// Timestamp ISO8601
     timestamp: String,
     /// Niveau de log (TRACE, DEBUG, INFO, WARN, ERROR)
     level: String,
-    /// Log target (module)
+    /// Cible du log (module)
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<String>,
-    /// Nom de l'event
+    /// Event name
     name: String,
-    /// Message formate
+    /// Formatted message
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     /// Champs additionnels
     #[serde(flatten)]
     fields: HashMap<String, serde_json::Value>,
-    /// Thread ID
+    /// ID du thread
     #[serde(skip_serializing_if = "Option::is_none")]
     thread_id: Option<String>,
-    /// Thread name
+    /// Nom du thread
     #[serde(skip_serializing_if = "Option::is_none")]
     thread_name: Option<String>,
     /// Pile de spans
@@ -201,7 +201,7 @@ struct JsonLogEntry {
     spans: Option<Vec<String>>,
 }
 
-/// Visitor for extracting event fields
+/// Visitor to extract fields from an event
 #[derive(Default)]
 struct JsonVisitor {
     fields: HashMap<String, serde_json::Value>,
@@ -216,7 +216,7 @@ impl tracing::field::Visit for JsonVisitor {
         let key = field.name().to_string();
         let json_value = format!("{:?}", value);
         
-        // Le champ "message" est traite specialement
+        // The "message" field is treated specially
         if key == "message" {
             self.message = Some(json_value.trim_matches('"').to_string());
         } else {
@@ -290,7 +290,7 @@ impl tracing::field::Visit for JsonVisitor {
     }
 }
 
-/// JSON formatting layer for console
+/// Layer de formatage JSON pour la console
 pub struct ConsoleJsonLayer {
     format: JsonFormat,
     include_span_context: bool,
@@ -298,7 +298,7 @@ pub struct ConsoleJsonLayer {
 }
 
 impl ConsoleJsonLayer {
-    /// Creates a new JSON layer for console
+    /// Creates un nouveau layer JSON pour la console
     pub fn new() -> Self {
         Self {
             format: JsonFormat::Compact,
@@ -307,7 +307,7 @@ impl ConsoleJsonLayer {
         }
     }
 
-    /// Defines the output format
+    /// Sets the output format
     pub fn with_format(mut self, format: JsonFormat) -> Self {
         self.format = format;
         self
@@ -381,13 +381,13 @@ mod tests {
 
     #[test]
     fn test_json_visitor() {
-        // Ce test checks que le JsonVisitor fonctionne correctement
-        // Note: Complete tests would require a tracing subscriber
+        // Ce test verifies que le JsonVisitor fonctionne correctly
+        // Note: Completee tests would require a tracing subscriber
         
         let mut visitor = JsonVisitor::default();
         
-        // Simuler l'enregistrement de champs
-        // In a real test, one would use event.record()
+        // Simuler l'enregistrement de fields
+        // Dans un vrai test, on utiliserait event.record()
         
         assert!(visitor.fields.is_empty());
         assert!(visitor.message.is_none());
@@ -431,7 +431,7 @@ mod tests {
         let layer = ConsoleJsonLayer::new()
             .with_format(JsonFormat::Pretty);
         
-        // Check that le layer est cree correctement
+        // Verify that the layer is created correctly
         assert_eq!(layer.format, JsonFormat::Pretty);
     }
 }

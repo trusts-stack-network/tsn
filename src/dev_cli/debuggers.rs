@@ -22,7 +22,7 @@ pub async fn validate_transaction_interactive(
     let transaction: Transaction = serde_json::from_str(&transaction_data)
         .with_context(|| "Impossible de parser la transaction JSON")?;
     
-    println!("✅ Transaction chargee : {}", transaction.hash());
+    println!("✅ Transaction loadede : {}", transaction.hash());
     
     if verbose {
         println!("📋 Details de la transaction :");
@@ -38,12 +38,12 @@ pub async fn validate_transaction_interactive(
         println!("❌ Erreur de structure: {}", e);
         return Err(e);
     }
-    println!("✅ Structure valide");
+    println!("✅ Structure valid");
     
     // Step 2: Validation de la signature
     println!("\n🔐 Step 2: Validation de la signature...");
     match verify_transaction_signature(&transaction) {
-        Ok(true) => println!("✅ Signature valide"),
+        Ok(true) => println!("✅ Signature valid"),
         Ok(false) => {
             println!("❌ Signature invalid");
             return Err(anyhow::anyhow!("Signature invalid"));
@@ -54,11 +54,11 @@ pub async fn validate_transaction_interactive(
         }
     }
     
-    // Step 3: Validation des preuves ZK (optional)
+    // Step 3: Validation des preuves ZK (optionnel)
     if !skip_proofs {
         println!("\n🧮 Step 3: Validation des preuves ZK...");
         match verify_transaction_proof(&transaction) {
-            Ok(true) => println!("✅ Preuves ZK valides"),
+            Ok(true) => println!("✅ Preuves ZK valids"),
             Ok(false) => {
                 println!("❌ Preuves ZK invalids");
                 return Err(anyhow::anyhow!("Preuves ZK invalids"));
@@ -69,10 +69,10 @@ pub async fn validate_transaction_interactive(
             }
         }
     } else {
-        println!("\n⏭️  Step 3: Validation des preuves ZK ignoree");
+        println!("\n⏭️  Step 3: Validation des preuves ZK ignored");
     }
     
-    println!("\n🎉 Transaction valide !");
+    println!("\n🎉 Transaction valid !");
     Ok(())
 }
 
@@ -90,7 +90,7 @@ pub async fn validate_block_interactive(
     let block: Block = serde_json::from_str(&block_data)
         .with_context(|| "Impossible de parser le bloc JSON")?;
     
-    println!("✅ Bloc charge : {}", block.hash());
+    println!("✅ Bloc loaded : {}", block.hash());
     
     if verbose {
         println!("📋 Details du bloc :");
@@ -108,7 +108,7 @@ pub async fn validate_block_interactive(
         println!("❌ Erreur de structure: {}", e);
         return Err(e);
     }
-    println!("✅ Structure du bloc valide");
+    println!("✅ Structure du bloc valid");
     
     // Step 2: Validation du proof-of-work
     println!("\n⛏️  Step 2: Validation du proof-of-work...");
@@ -116,7 +116,7 @@ pub async fn validate_block_interactive(
         println!("❌ Proof-of-work invalid: {}", e);
         return Err(e);
     }
-    println!("✅ Proof-of-work valide");
+    println!("✅ Proof-of-work valid");
     
     // Step 3: Validation des transactions
     println!("\n💳 Step 3: Validation des transactions ({})...", block.transactions().len());
@@ -128,7 +128,7 @@ pub async fn validate_block_interactive(
         // Validation de la signature
         match verify_transaction_signature(tx) {
             Ok(true) => {
-                if verbose { println!("    ✅ Signature valide"); }
+                if verbose { println!("    ✅ Signature valid"); }
             }
             Ok(false) => {
                 println!("    ❌ Signature invalid pour tx {}", tx.hash());
@@ -144,7 +144,7 @@ pub async fn validate_block_interactive(
         if !skip_proofs {
             match verify_transaction_proof(tx) {
                 Ok(true) => {
-                    if verbose { println!("    ✅ Preuves ZK valides"); }
+                    if verbose { println!("    ✅ Preuves ZK valids"); }
                 }
                 Ok(false) => {
                     println!("    ❌ Preuves ZK invalids pour tx {}", tx.hash());
@@ -157,9 +157,9 @@ pub async fn validate_block_interactive(
             }
         }
     }
-    println!("✅ Toutes les transactions sont valides");
+    println!("✅ Toutes les transactions sont valids");
     
-    println!("\n🎉 Bloc valide !");
+    println!("\n🎉 Bloc valid !");
     Ok(())
 }
 
@@ -169,21 +169,21 @@ pub async fn trace_transaction_execution(
     node_url: String,
     show_state: bool,
 ) -> Result<()> {
-    println!("🔍 Tracage de la transaction {} sur {}", tx_hash, node_url);
+    println!("🔍 Tracing de la transaction {} sur {}", tx_hash, node_url);
     
     let client = ApiClient::new(&node_url)?;
     
-    // Retrieve the details de la transaction
-    println!("\n📡 Recuperation des details de la transaction...");
+    // Retrieve les details de la transaction
+    println!("\n📡 Retrieval des details de la transaction...");
     let tx_details = client.get_transaction(&tx_hash).await
         .with_context(|| format!("Impossible de retrieve la transaction {}", tx_hash))?;
     
-    println!("✅ Transaction trouvee dans le bloc {}", tx_details.block_hash);
+    println!("✅ Transaction founde dans le bloc {}", tx_details.block_hash);
     println!("📋 Details :");
     println!("  - Status: {:?}", tx_details.status);
     println!("  - Bloc: {} (hauteur {})", tx_details.block_hash, tx_details.block_height);
     println!("  - Index dans le bloc: {}", tx_details.transaction_index);
-    println!("  - Gas utilise: {}", tx_details.gas_used);
+    println!("  - Gas used: {}", tx_details.gas_used);
     println!("  - Frais: {} TSN", tx_details.fee);
     
     if show_state {
@@ -194,20 +194,20 @@ pub async fn trace_transaction_execution(
     }
     
     // Tracer la propagation network
-    println!("\n🌐 Tracage de la propagation network...");
+    println!("\n🌐 Tracing de la propagation network...");
     let propagation_info = client.get_transaction_propagation(&tx_hash).await
         .with_context(|| "Impossible de retrieve les infos de propagation")?;
     
     println!("📊 Statistiques de propagation :");
     println!("  - First vue: {}", propagation_info.first_seen);
-    println!("  - Confirmee: {}", propagation_info.confirmed_at);
-    println!("  - Delai de propagation: {}ms", propagation_info.propagation_delay_ms);
-    println!("  - Noeuds ayant vu la tx: {}", propagation_info.nodes_seen);
+    println!("  - Confirmed: {}", propagation_info.confirmed_at);
+    println!("  - Delay de propagation: {}ms", propagation_info.propagation_delay_ms);
+    println!("  - Nodes ayant vu la tx: {}", propagation_info.nodes_seen);
     
     Ok(())
 }
 
-/// Profiler de performance pour differentes operations
+/// Profiler de performance pour different operations
 pub async fn profile_operation(
     operation: String,
     duration: u64,
@@ -224,13 +224,13 @@ pub async fn profile_operation(
     while Instant::now() < end_time {
         let sample_start = Instant::now();
         
-        // Executer l'operation selon le type
+        // Execute l'operation selon le type
         let result = match operation.as_str() {
             "mining" => profile_mining_operation().await,
             "validation" => profile_validation_operation().await,
             "sync" => profile_sync_operation().await,
             _ => {
-                return Err(anyhow::anyhow!("Operation '{}' non supportee", operation));
+                return Err(anyhow::anyhow!("Operation '{}' non supported", operation));
             }
         };
         
@@ -248,10 +248,10 @@ pub async fn profile_operation(
         samples.push(sample);
         
         if sample_count % 10 == 0 {
-            println!("📈 {} echantillons collectes...", sample_count);
+            println!("📈 {} samples collected...", sample_count);
         }
         
-        // Attendre avant le prochain echantillon
+        // Wait avant le prochain sample
         sleep(Duration::from_millis(100)).await;
     }
     
@@ -262,9 +262,9 @@ pub async fn profile_operation(
     let min_duration = samples.iter().map(|s| s.duration_ms).min().unwrap_or(0);
     let max_duration = samples.iter().map(|s| s.duration_ms).max().unwrap_or(0);
     
-    println!("\n📊 Resultats du profilage :");
+    println!("\n📊 Results du profilage :");
     println!("  - Samples totaux: {}", total_samples);
-    println!("  - Samples reussis: {} ({:.1}%)", successful_samples, 
+    println!("  - Samples successfuls: {} ({:.1}%)", successful_samples, 
              (successful_samples as f64 / total_samples as f64) * 100.0);
     println!("  - Duration moyenne: {}ms", avg_duration);
     println!("  - Duration min/max: {}ms / {}ms", min_duration, max_duration);
@@ -283,9 +283,9 @@ pub async fn profile_operation(
     
     let json_data = serde_json::to_string_pretty(&profile_data)?;
     std::fs::write(&output_file, json_data)
-        .with_context(|| format!("Impossible d'ecrire le file {:?}", output_file))?;
+        .with_context(|| format!("Impossible d'write le file {:?}", output_file))?;
     
-    println!("💾 Data de profilage sauvegardees dans {:?}", output_file);
+    println!("💾 Data de profilage savedes dans {:?}", output_file);
     
     Ok(())
 }
@@ -296,7 +296,7 @@ pub async fn analyze_memory_usage(
     interval: u64,
     duration: u64,
 ) -> Result<()> {
-    println!("🧠 Analyse de la memory sur {} (echantillonnage: {}s, duration: {}s)", 
+    println!("🧠 Analyse de la memory sur {} (samplenage: {}s, duration: {}s)", 
              node_url, interval, duration);
     
     let client = ApiClient::new(&node_url)?;
@@ -308,7 +308,7 @@ pub async fn analyze_memory_usage(
     while Instant::now() < end_time {
         let sample_start = Instant::now();
         
-        // Retrieve the stats memory du node
+        // Retrieve les stats memory du node
         match client.get_memory_stats().await {
             Ok(stats) => {
                 samples.push(MemorySample {
@@ -327,7 +327,7 @@ pub async fn analyze_memory_usage(
                          stats.mempool_transactions);
             }
             Err(e) => {
-                println!("⚠️  Erreur lors de la recuperation des stats: {}", e);
+                println!("⚠️  Error lors de la retrieval des stats: {}", e);
             }
         }
         
@@ -345,7 +345,7 @@ pub async fn analyze_memory_usage(
         println!("  - Heap moyen/max: {}MB / {}MB", avg_heap, max_heap);
         println!("  - RSS moyen/max: {}MB / {}MB", avg_rss, max_rss);
         
-        // Detecter les fuites potentielles
+        // Detect les fuites potentielles
         if samples.len() >= 10 {
             let first_half_avg = samples[..samples.len()/2].iter()
                 .map(|s| s.heap_used_mb).sum::<u64>() / (samples.len()/2) as u64;
@@ -353,7 +353,7 @@ pub async fn analyze_memory_usage(
                 .map(|s| s.heap_used_mb).sum::<u64>() / (samples.len()/2) as u64;
             
             if second_half_avg > first_half_avg * 110 / 100 {
-                println!("⚠️  Fuite memory potentielle detectee (+{}MB)", 
+                println!("⚠️  Fuite memory potentielle detectede (+{}MB)", 
                          second_half_avg - first_half_avg);
             }
         }

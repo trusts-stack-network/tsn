@@ -40,20 +40,20 @@ async fn test_network() {
                         if rate_limiter.allow_request() {
                             tokio::spawn(async move {
                                 handshake(&mut stream).await.unwrap();
-                                // Traitement des requests
+                                // Processing des requests
                             });
                         } else {
-                            // Refus de la request due a rate limiting
+                            // Refus de la request due to rate limiting
                             stream.shutdown().await.unwrap();
                         }
                     }
                     Err(e) => {
-                        warn!("Erreur d'acceptation de request: {}", e);
+                        warn!("Error d'acceptation de request: {}", e);
                     }
                 }
             }
             _ = interval(Duration::from_secs(60)) => {
-                // Mise a jour des seed nodes
+                // Update des seed nodes
                 nodes = discover_nodes().await;
             }
         }

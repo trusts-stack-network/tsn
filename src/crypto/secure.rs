@@ -1,11 +1,11 @@
-//! Implementation securisee de primitives cryptographiques
+//! Implementation secure de primitives cryptographiques
 //! 
-//! Regles appliquees:
+//! Rules appliedes:
 //! - Constant-time operations via `subtle`
 //! - Zeroization automatique via `ZeroizeOnDrop`
-//! - AEAD uniquement (pas de padding oracle possible)
-//! - RNG system securise
-//! - Aucun unwrap/expect - errors propagees via Result
+//! - AEAD only (pas de padding oracle possible)
+//! - RNG system secure
+//! - No unwrap/expect - errors propagatedes via Result
 
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng, generic_array::GenericArray},
@@ -17,7 +17,7 @@ use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use thiserror::Error;
 
-/// Erreurs cryptographiques securisees
+/// Errors cryptographiques secure
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum CryptoError {
     #[error("Invalid key size")]
@@ -38,7 +38,7 @@ pub enum CryptoError {
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Key secret protegee en memory
+/// Key secret protected en memory
 #[derive(Clone)]
 pub struct SecretKey {
     bytes: Vec<u8>,
@@ -85,7 +85,7 @@ struct SecretGuard;
 
 impl Drop for SecretGuard {
     fn drop(&mut self) {
-        // Logique additionnelle if needed
+        // Logique additionnelle si necessary
     }
 }
 
@@ -115,7 +115,7 @@ pub fn encrypt_aes_gcm(
     Ok(result)
 }
 
-/// Dechiffrement AEAD AES-256-GCM
+/// Decryption AEAD AES-256-GCM
 #[must_use]
 pub fn decrypt_aes_gcm(
     key: &SecretKey,
@@ -170,7 +170,7 @@ pub fn verify_hmac_sha256(key: &[u8], message: &[u8], expected: &[u8]) -> Result
     Ok(computed.ct_eq(&expected_array).into())
 }
 
-/// Generation de nonce securisee
+/// Generation de nonce secure
 #[must_use]
 pub fn generate_nonce(size: usize) -> Result<Vec<u8>, CryptoError> {
     let mut nonce = vec![0u8; size];

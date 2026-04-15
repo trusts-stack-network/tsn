@@ -60,8 +60,8 @@ fn mine_block_single(block: &mut ShieldedBlock) -> u64 {
 
         // Update timestamp periodically to avoid stale blocks
         if attempts % 1_000_000 == 0 {
-            // SECURITY FIX: Remplacement de unwrap() par une gestion d'error securisee
-            // Un panic ici arreterait le mining complete
+            // SECURITY FIX: Remplacement de unwrap() par une gestion d'error secure
+            // Un panic ici shutdownerait le mining complet
             if let Ok(duration) = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH) {
                 block.header.timestamp = duration.as_secs();
@@ -207,7 +207,7 @@ impl Drop for MiningPool {
 
         self.senders.clear();
 
-        // SECURITY FIX: Gestion securisee du Mutex poisoning
+        // SECURITY FIX: Gestion secure du Mutex poisoning
         if let Ok(mut handles) = self.handles.lock() {
             for handle in handles.drain(..) {
                 let _ = handle.join();

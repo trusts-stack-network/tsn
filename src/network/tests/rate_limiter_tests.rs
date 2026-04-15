@@ -1,6 +1,6 @@
 //! Tests unitaires pour le rate limiter TSN
 //! 
-//! Tests isoles avec controle total du temps et des parameters.
+//! Tests isolated avec control total du temps et des parameters.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -8,20 +8,20 @@ use tokio::time::{advance, pause, Instant};
 
 use crate::network::rate_limiter::{RateLimiter, RateLimitConfig};
 
-/// Test basique: un rate limiter frais accepte les requests
+/// Test basique: un rate limiter fees accepts les requests
 #[tokio::test]
 async fn test_rate_limiter_accepts_initial_requests() {
     let config = RateLimitConfig::default();
     let mut limiter = RateLimiter::new(config);
     let addr: SocketAddr = "127.0.0.1:8001".parse().unwrap();
 
-    // Les firsts requests devraient be acceptees
+    // Les firsts requests devraient be acceptsdes
     for _ in 0..10 {
         assert!(limiter.check(&addr), "Fresh rate limiter should accept requests");
     }
 }
 
-/// Test: le rate limiter bloque after depassement du seuil
+/// Test: le rate limiter bloque after overflow du seuil
 #[tokio::test]
 async fn test_rate_limiter_blocks_after_threshold() {
     let config = RateLimitConfig {
@@ -31,16 +31,16 @@ async fn test_rate_limiter_blocks_after_threshold() {
     let mut limiter = RateLimiter::new(config);
     let addr: SocketAddr = "127.0.0.1:8002".parse().unwrap();
 
-    // Accepte les 5 firsts requests
+    // Accepts the first 5 requests
     for i in 0..5 {
         assert!(limiter.check(&addr), "Request {} should be allowed", i + 1);
     }
 
-    // Bloque la 6eme
+    // Bloque la 6th
     assert!(!limiter.check(&addr), "6th request should be rate limited");
 }
 
-/// Test: le rate limiter reinitialise after 1 seconde
+/// Test: le rate limiter resets after 1 seconde
 #[tokio::test]
 async fn test_rate_limiter_resets_after_window() {
     pause();
@@ -61,7 +61,7 @@ async fn test_rate_limiter_resets_after_window() {
     // Avance le temps de 1 seconde
     advance(Duration::from_secs(1)).await;
 
-    // Le quota devrait be reinitialise
+    // Le quota should be reset
     assert!(limiter.check(&addr), "Should accept after window reset");
 }
 
@@ -77,23 +77,23 @@ async fn test_rate_limiter_per_peer_isolation() {
     let addr1: SocketAddr = "127.0.0.1:8004".parse().unwrap();
     let addr2: SocketAddr = "127.0.0.1:8005".parse().unwrap();
 
-    // Exhausts le quota du premier peer
+    // Exhausts le quota du first pair
     assert!(limiter.check(&addr1));
     assert!(limiter.check(&addr1));
     assert!(!limiter.check(&addr1), "Peer 1 should be rate limited");
 
-    // Le second pair devrait toujours avoir son quota
+    // Le second pair should toujours avoir son quota
     assert!(limiter.check(&addr2), "Peer 2 should not be affected");
     assert!(limiter.check(&addr2));
 }
 
-/// Test: gestion de nombreux pairs simultanes
+/// Test: gestion de nombreux peers simultaneouss
 #[tokio::test]
 async fn test_rate_limiter_many_peers() {
     let config = RateLimitConfig::default();
     let mut limiter = RateLimiter::new(config);
 
-    // Cree 1000 pairs differents
+    // Creates 1000 peers different
     for i in 0..1000 {
         let addr: SocketAddr = format!("127.0.0.1:{}", 9000 + i).parse().unwrap();
         assert!(limiter.check(&addr), "Peer {} should be accepted", i);
@@ -143,7 +143,7 @@ async fn test_rate_limiter_burst() {
         assert!(limiter.check(&addr), "Burst request {} should be allowed", i);
     }
     
-    // La 1001eme devrait be bloquee
+    // La 1001st should be blockede
     assert!(!limiter.check(&addr), "1001st request should be blocked");
 }
 
@@ -157,11 +157,11 @@ async fn test_rate_limiter_zero_threshold() {
     let mut limiter = RateLimiter::new(config);
     let addr: SocketAddr = "127.0.0.1:8008".parse().unwrap();
 
-    // Toutes les requests devraient be bloquees
+    // Toutes les requests devraient be blockedes
     assert!(!limiter.check(&addr), "Zero threshold should block all");
 }
 
-/// Test: comportement avec max_requests_per_second very eleve
+/// Test: comportement avec max_requests_per_second very high
 #[tokio::test]
 async fn test_rate_limiter_high_threshold() {
     let config = RateLimitConfig {

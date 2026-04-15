@@ -62,7 +62,7 @@ impl PowValidator {
         }
     }
     
-    /// Validate the proof-of-work for a completee shielded block.
+    /// Validate the proof-of-work for a complete shielded block.
     /// This is the main validation entry point.
     pub fn validate_block_pow(
         &self, 

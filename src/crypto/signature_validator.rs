@@ -1,11 +1,11 @@
 //! Validateur de signatures SLH-DSA pour TSN
 //!
-//! Module de validation centralise pour les signatures post-quantique
-//! conformement a FIPS 205. Fournit une API unifiee pour la validation
-//! avec metrics de performance et gestion d'errors securisee.
+//! Module de validation centralized pour les signatures post-quantique
+//! in accordance to FIPS 205. Fournit une API unified pour la validation
+//! avec metrics de performance et gestion d'errors secure.
 //!
 //! # Security
-//! - Aucune information sensible n'est exposee dans les messages d'error
+//! - No information sensible n'est exposed dans les messages d'error
 //! - Validation en temps constant pour les comparaisons critiques
 //! - Protection contre les attaques par canal auxiliaire
 //!
@@ -17,24 +17,24 @@ use thiserror::Error;
 
 use super::pq::slh_dsa::{verify_signature, PK_BYTES, SIG_BYTES};
 
-/// Resultat de validation d'une signature
+/// Result de validation d'une signature
 /// 
-/// Structure compatible avec l'API existante - uses `is_valid` pour
-/// determiner si la signature est valide.
+/// Structure compatible avec l'API existante - utilise `is_valid` pour
+/// determine si la signature est valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ValidationResult {
-    /// Indique si la signature est valide
+    /// Indique si la signature est valid
     pub is_valid: bool,
     /// Temps de verification en microsecondes
     pub verification_time_us: u64,
-    /// Taille du message in bytes
+    /// Taille du message en octets
     pub message_size: usize,
-    /// Prefixe du hash du message (8 premiers octets)
+    /// Prefix du hash du message (8 firsts bytes)
     pub message_hash_prefix: [u8; 8],
 }
 
 impl ValidationResult {
-    /// Creates a result valide
+    /// Creates un result valid
     pub fn valid(verification_time_us: u64, message_size: usize, message_hash_prefix: [u8; 8]) -> Self {
         Self {
             is_valid: true,
@@ -44,7 +44,7 @@ impl ValidationResult {
         }
     }
 
-    /// Creates a result invalid
+    /// Creates un result invalid
     pub fn invalid(message_size: usize) -> Self {
         Self {
             is_valid: false,
@@ -58,17 +58,17 @@ impl ValidationResult {
 /// Erreurs de validation des signatures
 /// 
 /// # Security
-/// Les messages d'error ne contiennent aucune information sensible
+/// Les messages d'erreur ne contiennent no information sensible
 /// sur les keys, signatures ou data internes.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     #[error("Signature invalid : format incorrect")]
     InvalidSignatureFormat,
     
-    #[error("Invalid public key : taille incorrecte")]
+    #[error("Key publique invalid : taille incorrecte")]
     InvalidPublicKeySize,
     
-    #[error("Invalid public key : format incorrect")]
+    #[error("Key publique invalid : format incorrect")]
     InvalidPublicKeyFormat,
     
     #[error("Message vide")]
@@ -77,13 +77,13 @@ pub enum ValidationError {
     #[error("Message trop long : {size} octets (max {max})")]
     MessageTooLong { size: usize, max: usize },
     
-    #[error("Verification cryptographique echouee")]
+    #[error("Verification cryptographique failed")]
     VerificationFailed,
     
     #[error("Erreur interne de validation")]
     InternalValidationError,
     
-    #[error("Niveau de security non supporte")]
+    #[error("Niveau de security non supported")]
     UnsupportedSecurityLevel,
 }
 
@@ -92,9 +92,9 @@ pub enum ValidationError {
 pub struct ValidatorConfig {
     /// Niveau de security (128, 192, 256)
     pub security_level: u32,
-    /// Taille maximale de message in bytes
+    /// Taille maximale de message en octets
     pub max_message_size: usize,
-    /// Activer les verifications supplementaires
+    /// Enable additional verifications
     pub strict_mode: bool,
     /// Collecter les metrics de performance
     pub collect_metrics: bool,
@@ -112,13 +112,13 @@ impl Default for ValidatorConfig {
 }
 
 impl ValidatorConfig {
-    /// Creates a configuration avec un niveau de security specifique
+    /// Creates une configuration avec un niveau de security specific
     /// 
     /// # Arguments
     /// * `security_level` - Niveau de security (128, 192, ou 256)
     /// 
     /// # Errors
-    /// Retourne une error si le niveau de security n'est pas supporte
+    /// Returns une error si le niveau de security n'est pas supported
     pub fn with_security_level(security_level: u32) -> Result<Self, ValidationError> {
         match security_level {
             128 | 192 | 256 => Ok(Self {
@@ -137,9 +137,9 @@ impl ValidatorConfig {
 pub struct ValidationMetrics {
     /// Nombre total de validations
     pub total_validations: u64,
-    /// Nombre de validations reussies
+    /// Nombre de validations successful
     pub successful_validations: u64,
-    /// Nombre de validations echouees
+    /// Nombre de validations faileds
     pub failed_validations: u64,
     /// Temps total de validation en microsecondes
     pub total_time_us: u64,
@@ -150,7 +150,7 @@ pub struct ValidationMetrics {
 }
 
 impl ValidationMetrics {
-    /// Met a jour les metrics avec un nouveau result
+    /// Met up to date les metrics avec un nouveau result
     fn record_validation(&mut self, success: bool, duration_us: u64) {
         self.total_validations += 1;
         if success {
@@ -185,12 +185,12 @@ pub struct SignatureValidator {
 }
 
 impl SignatureValidator {
-    /// Creates a nouveau validateur avec la configuration by default
+    /// Creates un nouveau validateur avec la configuration by default
     pub fn new() -> Self {
         Self::with_config(ValidatorConfig::default())
     }
 
-    /// Creates a validateur avec une configuration personnalisee
+    /// Creates un validateur avec une configuration custom
     pub fn with_config(config: ValidatorConfig) -> Self {
         Self {
             config,
@@ -201,13 +201,13 @@ impl SignatureValidator {
     /// Valide une signature SLH-DSA
     ///
     /// # Arguments
-    /// * `message` - Le message signe
+    /// * `message` - Le message signed
     /// * `signature_bytes` - La signature (SIG_BYTES octets)
     /// * `public_key_bytes` - La key publique (PK_BYTES octets)
     ///
     /// # Returns
     /// * `Ok(ValidationResult)` - Le result de validation avec metrics
-    /// * `Err(ValidationError)` - Une error de validation
+    /// * `Err(ValidationError)` - Une erreur de validation
     ///
     /// # Security
     /// Cette fonction effectue une validation en temps constant pour
@@ -220,7 +220,7 @@ impl SignatureValidator {
     ) -> Result<ValidationResult, ValidationError> {
         let start = Instant::now();
 
-        // Validation des entrees
+        // Validation des entries
         if message.is_empty() {
             return Err(ValidationError::EmptyMessage);
         }
@@ -240,7 +240,7 @@ impl SignatureValidator {
             return Err(ValidationError::InvalidPublicKeySize);
         }
 
-        // Calcul du hash du message pour le prefixe
+        // Calculation du hash du message pour le prefix
         use sha2::{Sha256, Digest};
         let message_hash = Sha256::digest(message);
         let mut message_hash_prefix = [0u8; 8];
@@ -268,16 +268,16 @@ impl SignatureValidator {
         Ok(result)
     }
 
-    /// Valide une signature de maniere synchrone (sans metrics)
+    /// Valide une signature de manner synchrone (sans metrics)
     ///
-    /// Version optimisee pour les cas ou les metrics ne sont pas necessarys.
+    /// Version optimized pour les cas where les metrics ne sont pas necessary.
     pub fn validate_fast(
         &self,
         message: &[u8],
         signature_bytes: &[u8],
         public_key_bytes: &[u8],
     ) -> Result<bool, ValidationError> {
-        // Validation des entrees (same logique que validate)
+        // Validation des entries (same logique que validate)
         if message.is_empty() {
             return Err(ValidationError::EmptyMessage);
         }
@@ -302,12 +302,12 @@ impl SignatureValidator {
             .map_err(|_| ValidationError::VerificationFailed)
     }
 
-    /// Retourne les metrics currentles
+    /// Retourne les metrics actuelles
     pub fn metrics(&self) -> ValidationMetrics {
         self.metrics.clone()
     }
 
-    /// Reinitialise les metrics
+    /// Resets les metrics
     pub fn reset_metrics(&mut self) {
         self.metrics = ValidationMetrics::default();
     }
@@ -326,7 +326,7 @@ impl Default for SignatureValidator {
 
 /// Validation rapide sans instanciation de validateur
 ///
-/// Fonction utilitaire pour les cas simples ou une validation
+/// Fonction utilitaire pour les cas simples where une validation
 /// unique est necessary.
 pub fn quick_validate(
     message: &[u8],
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_validator_config_with_security_level() {
-        // Niveaux valides
+        // Niveaux valids
         assert!(ValidatorConfig::with_security_level(128).is_ok());
         assert!(ValidatorConfig::with_security_level(192).is_ok());
         assert!(ValidatorConfig::with_security_level(256).is_ok());

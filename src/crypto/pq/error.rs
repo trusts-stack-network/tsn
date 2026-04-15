@@ -1,4 +1,4 @@
-// Module pour les errors liees aux primitives cryptographiques post-quantiques
+// Module pour les errors related aux primitives cryptographiques post-quantiques
 
 #[derive(Debug)]
 pub enum Error {

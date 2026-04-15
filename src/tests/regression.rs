@@ -1,6 +1,6 @@
 //! Tests de regression pour les modules core, consensus et crypto
 //!
-//! Ces tests checksnt que les modifications du code ne cassent pas
+//! Ces tests verifiesnt que les modifications du code ne cassent pas
 //! les invariants fondamentaux du protocole TSN.
 
 use crate::core::{ShieldedBlock, BlockHeader, ShieldedTransaction, CoinbaseTransaction};
@@ -73,7 +73,7 @@ mod core_regression {
         
         // Hash connu pour cette configuration (regression)
         let expected_hash = "a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7";
-        // Note: remplacer par le hash reel une fois calcule
+        // Note: remplacer par le hash real une fois calculationated
         assert_eq!(hash1.len(), 32, "Hash must be 32 bytes");
     }
 
@@ -88,11 +88,11 @@ mod core_regression {
             nullifier_root: [3u8; 32],
             state_root: [0u8; 32],
             timestamp: 1234567890,
-            difficulty: 8, // 8 bits of zeros requis
+            difficulty: 8, // 8 zero bits required
             nonce: 0,
         };
 
-        // Chercher un nonce valide (simulation de mining)
+        // Chercher un nonce valid (simulation de mining)
         let mut found_valid = false;
         for nonce in 0..100000 {
             header.nonce = nonce;
@@ -105,7 +105,7 @@ mod core_regression {
         assert!(found_valid, "Should find a valid nonce for difficulty 8");
     }
 
-    /// Test de regression : les transactions vides doivent be valides
+    /// Test de regression : les transactions vides doivent be valids
     #[test]
     fn test_empty_transaction_validity() {
         let coinbase = CoinbaseTransaction {
@@ -113,7 +113,7 @@ mod core_regression {
             memo: "Genesis block".to_string(),
         };
 
-        // Une transaction coinbase vide doit be serialisable
+        // Une transaction coinbase vide doit be serializable
         let serialized = serde_json::to_string(&coinbase).expect("Coinbase serialization failed");
         let _deserialized: CoinbaseTransaction = serde_json::from_str(&serialized)
             .expect("Coinbase deserialization failed");
@@ -125,7 +125,7 @@ mod core_regression {
 mod consensus_regression {
     use super::*;
 
-    /// Test de regression : ForkChoice doit gerer le bloc genesis
+    /// Test de regression : ForkChoice doit handle le bloc genesis
     #[test]
     fn test_fork_choice_genesis_handling() {
         let genesis_header = BlockHeader {
@@ -158,7 +158,7 @@ mod consensus_regression {
         assert_eq!(tip_info.cumulative_work, 1, "Genesis cumulative work should equal difficulty");
     }
 
-    /// Test de regression : la chain la plus longue doit be selectionnee
+    /// Test de regression : la chain la plus long doit be selectede
     #[test]
     fn test_longest_chain_selection() {
         let genesis_header = BlockHeader {
@@ -185,7 +185,7 @@ mod consensus_regression {
         let mut fork_choice = ForkChoice::new(genesis_block.clone());
         let genesis_hash = genesis_block.hash();
 
-        // Create a bloc enfant avec plus de travail
+        // Create un bloc enfant avec plus de travail
         let child_header = BlockHeader {
             version: 1,
             prev_hash: genesis_hash,
@@ -217,7 +217,7 @@ mod consensus_regression {
         assert_eq!(tip_info.tip_hash, child_block.hash(), "Tip hash should match child block");
     }
 
-    /// Test de regression : les blocs orphelins doivent be stockes
+    /// Test de regression : les blocs orphelins doivent be stored
     #[test]
     fn test_orphan_block_handling() {
         let genesis_header = BlockHeader {
@@ -243,7 +243,7 @@ mod consensus_regression {
 
         let mut fork_choice = ForkChoice::new(genesis_block);
 
-        // Create a bloc orphelin (parent inconnu)
+        // Create un bloc orphelin (parent inconnu)
         let orphan_header = BlockHeader {
             version: 1,
             prev_hash: [99u8; 32], // Parent inexistant
@@ -271,7 +271,7 @@ mod consensus_regression {
         assert!(result.is_ok(), "Adding orphan should not fail");
         assert!(!result.unwrap(), "Orphan should not become canonical tip");
         
-        // Mais il doit be stocke comme orphelin
+        // Mais il doit be stored comme orphelin
         assert_eq!(fork_choice.orphans().len(), 1, "Should have one orphan block");
         assert!(fork_choice.orphans().contains_key(&orphan_block.hash()), 
                "Orphan should be stored by hash");
@@ -283,12 +283,12 @@ mod consensus_regression {
 mod state_regression {
     use super::*;
 
-    /// Test de regression : l'state initial doit be valide
+    /// Test de regression : l'state initial doit be valid
     #[test]
     fn test_initial_state_validity() {
         let state = State::new();
         
-        // L'state initial doit avoir des propertys coherentes
+        // L'state initial doit avoir des properties consistent
         assert_eq!(state.get_height(), 0, "Initial state height should be 0");
         assert!(state.get_commitment_tree().is_empty(), "Initial commitment tree should be empty");
         assert!(state.get_nullifier_set().is_empty(), "Initial nullifier set should be empty");
@@ -329,7 +329,7 @@ mod state_regression {
     fn test_state_validation_regression() {
         let state = State::new();
         
-        // Create a bloc avec des racines incoherentes
+        // Create un bloc avec des racines inconsistent
         let invalid_block = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
@@ -378,7 +378,7 @@ mod crypto_regression {
                   "Keys generated from same seed must be identical");
     }
 
-    /// Test de regression : les signatures doivent be verifiables
+    /// Test de regression : les signatures doivent be verifiable
     #[test]
     fn test_signature_verification_regression() {
         let spending_key = SpendingKey::generate();
@@ -415,7 +415,7 @@ mod crypto_regression {
         tree.append(commitment2);
         let root_after_two = tree.root();
         
-        // Les racines doivent be differentes
+        // Les racines doivent be different
         assert_ne!(empty_root, root_after_one, "Root must change after insertion");
         assert_ne!(root_after_one, root_after_two, "Root must change after second insertion");
         
@@ -441,10 +441,10 @@ mod crypto_regression {
                   "Different position must produce different nullifier");
     }
 
-    /// Test de regression : les preuves ZK doivent be verifiables
+    /// Test de regression : les preuves ZK doivent be verifiable
     #[test]
     fn test_zk_proof_verification() {
-        // Note: ce test requires une implementation complete des preuves ZK
+        // Note: ce test requires une implementation completee des preuves ZK
         // Pour l'instant, on teste juste la structure
         
         let proof_data = vec![0u8; 192]; // Taille typique d'une preuve Groth16
@@ -470,10 +470,10 @@ mod integration_regression {
     /// Test de regression : pipeline complete bloc -> state -> consensus
     #[test]
     fn test_full_pipeline_regression() {
-        // Create a state initial
+        // Create un state initial
         let mut state = State::new();
         
-        // Create a bloc genesis
+        // Create un bloc genesis
         let genesis_block = ShieldedBlock {
             header: BlockHeader {
                 version: 1,
@@ -493,21 +493,21 @@ mod integration_regression {
             },
         };
 
-        // Appliquer le bloc a l'state
+        // Apply le bloc to l'state
         let apply_result = state.apply_block(&genesis_block);
         assert!(apply_result.is_ok(), "Genesis block application should succeed");
 
-        // Create the fork choice avec le same bloc
+        // Create le fork choice avec le same bloc
         let fork_choice = ForkChoice::new(genesis_block.clone());
         
-        // Check the consistency
+        // Verify la consistency
         assert_eq!(state.get_height(), 1, "State height should be 1");
         
         let tip_info = fork_choice.canonical_tip().unwrap();
         assert_eq!(tip_info.height, 0, "Fork choice genesis height should be 0");
         
-        // Note: il y a une difference intentionnelle ici - l'state compte a partir de 1,
-        // le fork choice a partir de 0. C'est un invariant a maintenir.
+        // Note: il y a une difference intentionnelle ici - l'state compte to partir de 1,
+        // le fork choice to partir de 0. C'est un invariant to maintenir.
     }
 
     /// Test de regression : consistency des hashes entre modules
@@ -532,7 +532,7 @@ mod integration_regression {
             },
         };
 
-        // Le hash du bloc doit be coherent
+        // Le hash du bloc doit be consistent
         let hash1 = block.hash();
         let hash2 = block.header.hash();
         

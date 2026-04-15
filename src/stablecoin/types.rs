@@ -10,7 +10,7 @@ pub enum AssetType {
     TSN = 0,
     /// ZST Gold Stable (1 ZST = 1g XAU)
     ZST = 1,
-    /// ZRS Reserve Share (absorbe la volatilite)
+    /// ZRS Reserve Share (absorbe la volatility)
     ZRS = 2,
 }
 
@@ -24,7 +24,7 @@ impl std::fmt::Display for AssetType {
     }
 }
 
-/// Prix soumis par un operateur d'oracle
+/// Prix soumis par un operator d'oracle
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OraclePrice {
     /// Prix de l'or en microdollars (ex: 2_300_000_000 = $2300.00)
@@ -35,35 +35,35 @@ pub struct OraclePrice {
     pub timestamp: u64,
     /// Hauteur du bloc de soumission
     pub block_height: u64,
-    /// Key publique de l'operateur d'oracle
+    /// Key public de l'operator d'oracle
     pub oracle_id: [u8; 32],
     /// Signature ML-DSA-65
     pub signature: Vec<u8>,
 }
 
-/// Niveau de confiance du prix agrege
+/// Niveau de confiance du prix aggregated
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PriceConfidence {
-    /// >= 4 oracles, faible deviation
+    /// >= 4 oracles, low deviation
     High,
-    /// 3 oracles ou deviation moderee
+    /// 3 oracles or moderate deviation
     Medium,
-    /// Quorum minimum, deviation elevee
+    /// Quorum minimum, deviation high
     Low,
-    /// Prix expire
+    /// Prix expired
     Stale,
 }
 
-/// Prix agrege after median + TWAP
+/// Prix aggregated after median + TWAP
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AggregatedPrice {
     /// Combien de micro-TSN pour 1g d'or
     /// Ex: si 1 TSN = $1.50 et 1g or = $95, alors tsn_per_xau = 63_333_333 (~63.33 TSN)
-    /// Stocke avec 6 decimales de precision (micro-unites)
+    /// Stored avec 6 decimals de precision (micro-units)
     pub tsn_per_xau: u64,
     /// Timestamp du prix
     pub timestamp: u64,
-    /// Nombre d'oracles ayant contribue
+    /// Nombre d'oracles ayant contributed
     pub oracle_count: u8,
     /// Niveau de confiance
     pub confidence: PriceConfidence,
@@ -83,21 +83,21 @@ impl Default for AggregatedPrice {
 /// State global de la reserve du protocole ZST
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReserveState {
-    /// Total TSN dans la reserve (en unites atomiques, 8 decimales)
+    /// Total TSN dans la reserve (en units atomiques, 8 decimals)
     pub reserve_tsn: u128,
     /// Total ZST en circulation
     pub supply_zst: u128,
     /// Total ZRS en circulation
     pub supply_zrs: u128,
-    /// Dernier prix agrege
+    /// Last prix aggregated
     pub last_price: AggregatedPrice,
-    /// Frais accumules pour la tresorerie
+    /// Frais accumulated pour la treasury
     pub treasury_tsn: u128,
-    /// Hauteur du dernier bloc traite
+    /// Hauteur du last bloc processed
     pub last_block_height: u64,
     /// Timestamp d'activation du circuit breaker (0 = inactif)
     pub circuit_breaker_activated: u64,
-    /// Montant ZST brule dans le bloc courant (pour cooldown)
+    /// Montant ZST burned dans le bloc courant (pour cooldown)
     pub current_block_burned_zst: u128,
     /// Hauteur du bloc courant pour le tracking cooldown
     pub current_block_height: u64,
@@ -122,13 +122,13 @@ impl Default for ReserveState {
 /// Action stablecoin possible
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StablecoinAction {
-    /// Deposer TSN → recevoir ZST
+    /// Deposit TSN → recevoir ZST
     MintZST,
-    /// Bruler ZST → retrieve TSN
+    /// Burn ZST → retrieve TSN
     BurnZST,
-    /// Deposer TSN → recevoir ZRS
+    /// Deposit TSN → recevoir ZRS
     MintZRS,
-    /// Bruler ZRS → retrieve TSN
+    /// Burn ZRS → retrieve TSN
     BurnZRS,
 }
 
@@ -143,31 +143,31 @@ impl std::fmt::Display for StablecoinAction {
     }
 }
 
-/// Requete de mint/burn
+/// Request de mint/burn
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MintBurnRequest {
-    /// Action demandee
+    /// Requested action
     pub action: StablecoinAction,
-    /// Montant d'entree (en unites atomiques)
+    /// Montant d'entry (en units atomiques)
     pub amount_in: u128,
     /// Montant minimum de sortie (slippage protection)
     pub min_amount_out: u128,
-    /// Hauteur du bloc du prix oracle utilise
+    /// Hauteur du bloc du prix oracle used
     pub price_ref: u64,
 }
 
-/// Resultat d'une operation mint/burn
+/// Result d'une operation mint/burn
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MintBurnResult {
-    /// Action effectuee
+    /// Action performed
     pub action: StablecoinAction,
-    /// Montant d'entree consomme
+    /// Montant d'entry consumed
     pub amount_in: u128,
     /// Montant de sortie produit
     pub amount_out: u128,
-    /// Frais preleves (en TSN)
+    /// Frais prhighs (en TSN)
     pub fee: u128,
-    /// Frais vers la tresorerie (20%)
+    /// Frais vers la treasury (20%)
     pub fee_treasury: u128,
     /// Frais vers la reserve (80%)
     pub fee_reserve: u128,
@@ -175,7 +175,7 @@ pub struct MintBurnResult {
     pub ratio_before: u64,
     /// Reserve ratio after l'operation
     pub ratio_after: u64,
-    /// Prix oracle utilise (TSN par XAU)
+    /// Prix oracle used (TSN par XAU)
     pub price_used: u64,
 }
 
@@ -184,15 +184,15 @@ pub struct MintBurnResult {
 pub struct ShieldedMintBurn {
     /// Action
     pub action: StablecoinAction,
-    /// Nullifiers des notes detruites
+    /// Nullifiers des notes destroyed
     pub nullifiers_in: Vec<[u8; 32]>,
-    /// Commitments des notes creees
+    /// Commitments des notes created
     pub commitments_out: Vec<[u8; 32]>,
-    /// Hauteur du bloc du prix oracle utilise
+    /// Hauteur du bloc du prix oracle used
     pub price_ref_height: u64,
     /// Preuve Plonky3
     pub proof: Vec<u8>,
-    /// Commitment des frais
+    /// Commitment des fees
     pub fee_commitment: [u8; 32],
 }
 
@@ -215,4 +215,4 @@ pub enum StablecoinTx {
 pub const DECIMALS: u32 = 8;
 pub const ATOMIC_UNIT: u128 = 100_000_000; // 10^8
 pub const BPS_SCALE: u64 = 10_000; // 100% = 10000 bps
-pub const MICRO_UNIT: u64 = 1_000_000; // Pour les prix en micro-unites
+pub const MICRO_UNIT: u64 = 1_000_000; // Pour les prix en micro-units

@@ -1,8 +1,8 @@
-//! Adapter for ML-DSA-65 → SLH-DSA migration
+//! Adaptateur pour la migration ML-DSA-65 → SLH-DSA
 //! 
-//! SLH-DSA (FIPS 205) is a single-use signature based on hash functions.
-//! Unlike ML-DSA, each key pair can only sign a limited number of messages.
-//! This constraint requires rigorous state management in consensus.
+//! SLH-DSA (FIPS 205) est une signature to usage unique based sur des fonctions de hachage.
+//! Contrairement to ML-DSA, chaque paire de keys ne peut signer qu'un nombre limited de messages.
+//! Cette contrainte requires une gestion d'state rigoureuse dans le consensus.
 //!
 //! ## References
 //! - FIPS 205: Stateless Hash-Based Digital Signature Standard
@@ -15,13 +15,13 @@ use crate::crypto::pq::slh_dsa_impl::{PublicKey as SlhDsaPublicKey, Signature as
 use crate::core::transaction::Transaction;
 use crate::core::block::{Block, BlockHeader};
 
-/// Parameters SLH-DSA selectionnes
-/// Necessite validation crypto avant deploiement
+/// Parameters SLH-DSA selecteds
+/// Requires validation crypto avant deployment
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SlhDsaParams {
     /// Security 128 bits, tailles compactes
     Sha2_128s,
-    /// 128-bit security, fast performance
+    /// Security 128 bits, performances rapides
     Sha2_128f,
     /// Security 192 bits, tailles compactes
     Sha2_192s,
@@ -40,7 +40,7 @@ impl SlhDsaParams {
         }
     }
     
-    /// Taille attendue de la signature in bytes
+    /// Taille attendue de la signature en octets
     pub fn signature_size(&self) -> usize {
         match self {
             SlhDsaParams::Sha2_128s => 7856,
@@ -50,7 +50,7 @@ impl SlhDsaParams {
         }
     }
     
-    /// Taille attendue de la key publique in bytes
+    /// Taille attendue de la key publique en octets
     pub fn public_key_size(&self) -> usize {
         match self {
             SlhDsaParams::Sha2_128s => 32,
@@ -64,13 +64,13 @@ impl SlhDsaParams {
 /// Erreurs de validation SLH-DSA
 #[derive(Error, Debug, Clone)]
 pub enum SlhDsaError {
-    #[error("Signing key already used: {0:?}")]
+    #[error("Key de signature already used: {0:?}")]
     KeyAlreadyUsed(VerificationKey),
     
     #[error("Limite de signatures atteinte pour la key: {0:?}")]
     SignatureLimitReached(VerificationKey),
     
-    #[error("Parameters SLH-DSA non supportes: {0:?}")]
+    #[error("Parameters SLH-DSA non supported: {0:?}")]
     UnsupportedParams(SlhDsaParams),
     
     #[error("State de signature invalid")]
@@ -79,10 +79,10 @@ pub enum SlhDsaError {
     #[error("Erreur de verification: {0}")]
     VerificationFailed(String),
     
-    #[error("Invalid signature size: expected {expected}, got {actual}")]
+    #[error("Taille de signature invalid: attendu {expected}, received {actual}")]
     InvalidSignatureSize { expected: usize, actual: usize },
     
-    #[error("Invalid public key size: attendu {expected}, recu {actual}")]
+    #[error("Taille de key publique invalid: attendu {expected}, received {actual}")]
     InvalidPublicKeySize { expected: usize, actual: usize },
 }
 
@@ -94,10 +94,10 @@ impl From<CryptoSlhDsaError> for SlhDsaError {
 
 /// State de gestion des signatures SLH-DSA
 /// 
-/// Invariant: Une key de verification ne peut apparaitre qu'une fois dans `used_keys`
+/// Invariant: Une key de verification ne peut appear qu'une fois dans `used_keys`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlhDsaState {
-    /// Ensemble des keys already utilisees pour signer
+    /// Ensemble des keys already used pour signer
     used_keys: std::collections::HashSet<VerificationKey>,
     /// Compteur de signatures par key
     signature_count: std::collections::HashMap<VerificationKey, u32>,
@@ -106,7 +106,7 @@ pub struct SlhDsaState {
 }
 
 impl SlhDsaState {
-    /// Creates a nouvel state avec les parameters specifies
+    /// Creates un nouvel state avec les parameters specifieds
     pub fn new(params: SlhDsaParams) -> Self {
         Self {
             used_keys: std::collections::HashSet::new(),
@@ -115,15 +115,15 @@ impl SlhDsaState {
         }
     }
     
-    /// Checks if une key peut encore signer
+    /// Verifies si une key peut encore signer
     pub fn can_sign(&self, vk: &VerificationKey) -> bool {
         !self.used_keys.contains(vk)
     }
     
-    /// Marque une key comme utilisee
+    /// Marque une key comme used
     /// 
     /// # Panics
-    /// Si la key est already utilisee - c'est une violation critique du protocole
+    /// Si la key est already used - c'est une violation critique du protocole
     pub fn mark_key_used(&mut self, vk: VerificationKey) -> Result<(), SlhDsaError> {
         if self.used_keys.contains(&vk) {
             return Err(SlhDsaError::KeyAlreadyUsed(vk));
@@ -134,7 +134,7 @@ impl SlhDsaState {
         Ok(())
     }
     
-    /// Gets the nombre de signatures pour une key
+    /// Obtient le nombre de signatures pour une key
     pub fn signature_count(&self, vk: &VerificationKey) -> u32 {
         self.signature_count.get(vk).copied().unwrap_or(0)
     }
@@ -151,7 +151,7 @@ pub struct SlhDsaConsensus {
 }
 
 impl SlhDsaConsensus {
-    /// Creates a nouveau validateur avec l'state initial
+    /// Creates un nouveau validateur avec l'state initial
     pub fn new(state: SlhDsaState) -> Self {
         Self { state }
     }
@@ -159,16 +159,16 @@ impl SlhDsaConsensus {
     /// Valide une transaction avec signature SLH-DSA
     /// 
     /// # Invariants verifieds
-    /// - La key de signature n'a pas ete reutilisee
-    /// - La signature est cryptographiquement valide
-    /// - Les parameters correspondent a ceux du network
+    /// - La key de signature n'a pas been reused
+    /// - La signature est cryptographiquement valid
+    /// - Les parameters matchesent to ceux du network
     pub fn validate_transaction(
         &self,
         tx: &Transaction,
         vk: &VerificationKey,
         signature: &[u8],
     ) -> Result<(), SlhDsaError> {
-        // Verification anti-reutilisation
+        // Verification anti-reuse
         if !self.state.can_sign(vk) {
             return Err(SlhDsaError::KeyAlreadyUsed(vk.clone()));
         }
@@ -179,18 +179,18 @@ impl SlhDsaConsensus {
         Ok(())
     }
     
-    /// Valide l'en-tete de bloc avec signature SLH-DSA
+    /// Valide the header de bloc avec signature SLH-DSA
     pub fn validate_block_header(
         &self,
         header: &BlockHeader,
         vk: &VerificationKey,
         signature: &[u8],
     ) -> Result<(), SlhDsaError> {
-        // Serialise l'en-tete pour la verification
+        // Serializes the header pour la verification
         let header_bytes = bincode::serialize(header)
             .map_err(|e| SlhDsaError::VerificationFailed(format!("Serialization error: {}", e)))?;
         
-        // Verification anti-reutilisation
+        // Verification anti-reuse
         if !self.state.can_sign(vk) {
             return Err(SlhDsaError::KeyAlreadyUsed(vk.clone()));
         }
@@ -201,14 +201,14 @@ impl SlhDsaConsensus {
         Ok(())
     }
     
-    /// Verifie une signature SLH-DSA sur des data serializedes
+    /// Verifies une signature SLH-DSA sur des data serializedes
     fn verify_signature_bytes(
         &self,
         data: &[u8],
         vk: &VerificationKey,
         signature: &[u8],
     ) -> Result<(), SlhDsaError> {
-        // Checks the taille de la signature
+        // Verifies la taille de la signature
         let expected_size = self.state.params().signature_size();
         if signature.len() != expected_size {
             return Err(SlhDsaError::InvalidSignatureSize {
@@ -227,7 +227,7 @@ impl SlhDsaConsensus {
             });
         }
         
-        // Creates thes types SLH-DSA pour la verification
+        // Creates les types SLH-DSA pour la verification
         let pk = SlhDsaPublicKey::from_bytes(pk_bytes)
             .map_err(|e| SlhDsaError::VerificationFailed(format!("Invalid public key: {}", e)))?;
         
@@ -247,7 +247,7 @@ impl SlhDsaConsensus {
         vk: &VerificationKey,
         signature: &[u8],
     ) -> Result<(), SlhDsaError> {
-        // Serialise la transaction pour la verification
+        // Serializes la transaction pour la verification
         let tx_bytes = bincode::serialize(data)
             .map_err(|e| SlhDsaError::VerificationFailed(format!("Serialization error: {}", e)))?;
         
@@ -258,13 +258,13 @@ impl SlhDsaConsensus {
     /// 
     /// # Security Warning
     /// Cette fonction consomme une key de signature (one-time use).
-    /// Ne jamais reusesr une key after signature.
+    /// Ne jamais reuse une key after signature.
     pub fn sign_data(
         &self,
         data: &[u8],
         signing_key: &crate::crypto::pq::slh_dsa_impl::SecretKey,
     ) -> Result<Vec<u8>, SlhDsaError> {
-        // Checks that la key n'a pas already ete utilisee
+        // Verifies que la key n'a pas already been used
         let public_key = signing_key.public_key();
         let vk = VerificationKey::from_bytes(public_key.as_bytes())
             .map_err(|e| SlhDsaError::VerificationFailed(format!("Invalid key: {}", e)))?;
@@ -273,7 +273,7 @@ impl SlhDsaConsensus {
             return Err(SlhDsaError::KeyAlreadyUsed(vk));
         }
         
-        // Performs the signature via le module crypto SLH-DSA
+        // Effectue la signature via le module crypto SLH-DSA
         let signature = crate::crypto::pq::slh_dsa_impl::sign(signing_key, data)
             .map_err(|e| SlhDsaError::from(e))?;
         
@@ -291,10 +291,10 @@ mod tests {
         let mut state = SlhDsaState::new(SlhDsaParams::Sha2_128s);
         let vk = VerificationKey::from_bytes(&[0u8; 32]).unwrap();
         
-        // First utilisation doit reussir
+        // First utilisation doit succeed
         state.mark_key_used(vk.clone()).unwrap();
         
-        // Second utilisation doit fail
+        // Second utilisation doit failsr
         assert!(matches!(
             state.mark_key_used(vk.clone()),
             Err(SlhDsaError::KeyAlreadyUsed(_))
@@ -309,10 +309,10 @@ mod tests {
         let vk = VerificationKey::from_bytes(&[1u8; 32]).unwrap();
         let tx = Transaction::default();
         
-        // Simuler une first validation reussie
-        // (dans la vraie implementation, cela mettrait a jour l'state)
+        // Simuler une first validation successful
+        // (dans la vraie implementation, cela mettrait up to date l'state)
         
-        // Second validation avec la same key doit fail
+        // Second validation avec la same key doit failsr
         // Note: Cette logique requiresra une mutation de l'state
     }
     
@@ -329,7 +329,7 @@ mod tests {
     
     #[test]
     fn test_signature_size_validation() {
-        // Teste que les tailles de signature sont correctement definies
+        // Teste que les tailles de signature sont correctly definedes
         assert_eq!(SlhDsaParams::Sha2_128s.signature_size(), 7856);
         assert_eq!(SlhDsaParams::Sha2_128f.signature_size(), 17088);
         assert_eq!(SlhDsaParams::Sha2_192s.signature_size(), 16224);
@@ -338,7 +338,7 @@ mod tests {
     
     #[test]
     fn test_public_key_size_validation() {
-        // Teste que les tailles de key publique sont correctement definies
+        // Teste que les tailles de key public sont correctly definedes
         assert_eq!(SlhDsaParams::Sha2_128s.public_key_size(), 32);
         assert_eq!(SlhDsaParams::Sha2_128f.public_key_size(), 32);
         assert_eq!(SlhDsaParams::Sha2_192s.public_key_size(), 48);

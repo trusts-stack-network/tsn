@@ -66,7 +66,7 @@ impl SignatureVerifier {
     pub fn verify_transaction_signature(&self, tx: &Transaction) -> Result<(), ConsensusError> {
         let tx_hash = tx.hash();
         
-        // Verifie chaque signature de depense
+        // Verifie chaque signature de spending
         for (i, spend) in tx.spends.iter().enumerate() {
             let signature = SlhDsaSignature::from_bytes(&spend.signature)
                 .map_err(|_| ConsensusError::InvalidSignature(
@@ -93,7 +93,7 @@ impl SignatureVerifier {
         Ok(())
     }
 
-    /// Verifie qu'une key publique est valide pour le consensus current
+    /// Verifie qu'une key publique est valid pour le consensus actuel
     pub fn validate_public_key(&self, key: &PublicKey) -> Result<(), ConsensusError> {
         match key {
             PublicKey::SlhDsa(_) => Ok(()),
@@ -180,13 +180,13 @@ mod tests {
     #[test]
     fn test_reject_non_slh_dsa_key() {
         let verifier = SignatureVerifier::new();
-        // Creates a fausse key non-SLH (simulee ici)
+        // Creates a fake non-SLH key (simulated here)
         let invalid_key = PublicKey::from_bytes(&[0u8; 32]).unwrap_or_else(|_| {
             // Fallback pour le test
             PublicKey::SlhDsa(create_test_keypair().public)
         });
         
-        // Force une error en creant une key invalid
+        // Force une error en creating une key invalid
         assert!(verifier.validate_public_key(&invalid_key).is_err());
     }
 
@@ -228,7 +228,7 @@ mod tests {
         let verifier = SignatureVerifier::new();
         let (tx1, _) = create_test_transaction();
         let mut tx2 = tx1.clone();
-        tx2.spends[0].signature = tx1.spends[0].signature.clone(); // Same signature mais differentes tx
+        tx2.spends[0].signature = tx1.spends[0].signature.clone(); // Same signature mais different tx
         
         let block = Block {
             header: BlockHeader {

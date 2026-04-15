@@ -26,6 +26,17 @@ impl KeyPair {
         }
     }
 
+    /// Generate a keypair deterministically from a 32-byte seed.
+    /// The same seed always produces the same keypair.
+    pub fn from_seed(seed: &[u8; 32]) -> Self {
+        use fips204::traits::KeyGen;
+        let (public_key, secret_key) = ml_dsa_65::KG::keygen_from_seed(seed);
+        Self {
+            public_key,
+            secret_key,
+        }
+    }
+
     /// Reconstruct a keypair from raw bytes.
     pub fn from_bytes(public_key: &[u8], secret_key: &[u8]) -> Result<Self, KeyError> {
         let pk_array: [u8; PUBLIC_KEY_SIZE] = public_key
@@ -113,7 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn test_different_keypairs() {
+    fn test_different_keypeers() {
         let kp1 = KeyPair::generate();
         let kp2 = KeyPair::generate();
 

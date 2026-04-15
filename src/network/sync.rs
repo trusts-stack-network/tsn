@@ -259,7 +259,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
         info!("Local height is 0, attempting snapshot sync from {}", peer_id(peer_url));
         match attempt_snapshot_sync(&state, &client, peer_url).await {
             Ok(height) if height > 0 => {
-                info!("Snapshot sync completee: jumped to height {} from {}", height, peer_id(peer_url));
+                info!("Snapshot sync complete: jumped to height {} from {}", height, peer_id(peer_url));
                 return Ok(height);
             }
             _ => {
@@ -300,7 +300,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 state.last_reorg_height.store(ancestor, std::sync::atomic::Ordering::Relaxed);
                 state.reorg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if let Some(cancel) = state.mining_cancel.read().unwrap().as_ref() {
-                    warn!("MINING_CANCEL=true reason=step8_rollback ancestor={} peer={}", ancestor, peer_id(peer_url));
+                    debug!("Mining cancelled for rollback to ancestor={}, peer={}", ancestor, peer_id(peer_url));
                     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
 
@@ -310,7 +310,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 if let Err(e) = chain.rollback_to_height(ancestor) {
                     let err_msg = format!("{}", e);
                     if err_msg.contains("below finalized height") {
-                        // Finalization prevents rollback — reset completeely and fast-sync
+                        // Finalization prevents rollback — reset completely and fast-sync
                         warn!("Rollback blocked by finalization (ancestor={}, error={}). Wiping chain for fresh sync.", ancestor, err_msg);
                         chain.reset_for_snapshot_resync();
                         drop(chain);
@@ -337,9 +337,9 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                         ancestor, post_orphan_height, post_orphan_height - ancestor
                     );
                 }
-                warn!(
-                    "SYNC_DEBUG: POST_ROLLBACK sync_from={} ancestor={} post_orphan={}",
-                    post_orphan_height, ancestor, post_orphan_height
+                debug!(
+                    "Post-rollback: sync_from={} ancestor={}",
+                    post_orphan_height, ancestor
                 );
                 // Use post-orphan height as sync start point.
                 // Without this, we re-download blocks already added by process_orphans
@@ -406,8 +406,8 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
 
         let mut batch_added = 0u64;
 
-        warn!(
-            "SYNC_DEBUG: SYNC_BATCH_START from_height={} batch_size={} peer={}",
+        debug!(
+            "Sync batch: from={} size={} peer={}",
             current_sync_height, batch_size, peer_id(peer_url)
         );
 
@@ -449,8 +449,8 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
             }
         }
 
-        warn!(
-            "SYNC_DEBUG: SYNC_BATCH_END added={}/{} synced_total={}",
+        debug!(
+            "Sync batch done: added={}/{} total={}",
             batch_added, batch_size, synced
         );
 
@@ -464,12 +464,13 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
         // Use headers to find the real ancestor instead of looping forever.
         if batch_size > 0 && batch_added == 0 {
             consecutive_empty_batches += 1;
-            warn!(
-                "Got {} blocks from {} but none accepted (attempt {}/3) — chains diverged",
+            state.metric_empty_batches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            info!(
+                "Sync: {} blocks from {} but none accepted (attempt {}) — diverged",
                 batch_size, peer_id(peer_url), consecutive_empty_batches
             );
 
-            if consecutive_empty_batches >= 3 {
+            if consecutive_empty_batches >= 1 {
                 // Three strikes — this peer's chain is incompatible with ours
                 if recovery_attempted {
                     // BUG FIX: Don't ban the peer — the fork may be legitimate.
@@ -482,18 +483,22 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                     break;
                 }
                 recovery_attempted = true;
-                warn!("3 consecutive empty batches from {} — attempting header-based recovery", peer_id(peer_url));
+                let recovery_start = std::time::Instant::now();
+                info!("Empty batch from {} — attempting header-based recovery", peer_id(peer_url));
 
                 // Acquire reorg_lock BEFORE searching for ancestor to prevent race conditions
                 let _recovery_reorg_guard = state.reorg_lock.write().await;
                 if let Some(cancel) = state.mining_cancel.read().unwrap().as_ref() {
-                    warn!("MINING_CANCEL=true reason=recovery_rollback peer={}", peer_id(peer_url));
+                    debug!("Mining cancelled for recovery rollback, peer={}", peer_id(peer_url));
                     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
 
                 match find_common_ancestor_headers(&state, &client, peer_url, current_sync_height, peer_info.height).await {
                     Ok(ancestor) => {
-                        info!("Header recovery found ancestor at {} — rolling back", ancestor);
+                        let recovery_ms = recovery_start.elapsed().as_millis() as u64;
+                        state.metric_fork_recoveries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        state.metric_recovery_time_ms.fetch_add(recovery_ms, std::sync::atomic::Ordering::Relaxed);
+                        info!("Fork recovery: ancestor={} took={}ms", ancestor, recovery_ms);
                         state.last_reorg_height.store(ancestor, std::sync::atomic::Ordering::Relaxed);
                         state.reorg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -619,7 +624,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
         // permanently stalling the miner.
         if is_fork {
             warn!(
-                "SYNC_DEBUG: sync_completee is_fork=true synced={} — NOT cancelling mining (cancel only during rollback)",
+                "SYNC_DEBUG: sync_complete is_fork=true synced={} — NOT cancelling mining (cancel only during rollback)",
                 synced
             );
         }
@@ -636,7 +641,7 @@ enum ForkDetection {
     NoFork,
     /// Fork detected — ancestor_height is where chains diverged.
     ForkDetected { ancestor_height: u64 },
-    /// Chains are completeely incompatible (no common ancestor in range).
+    /// Chains are completely incompatible (no common ancestor in range).
     Incompatible,
 }
 
@@ -725,9 +730,9 @@ async fn detect_fork_via_headers(
         }
         _ => ForkDetection::NoFork, // All headers match — no fork
     };
-    warn!(
-        "SYNC_DEBUG: detect_fork_via_headers peer={} start={} got={} headers best_match={:?} earliest_mismatch={:?} result={:?}",
-        peer_id(peer_url), start, peer_headers.len(), best_match, earliest_mismatch, result
+    debug!(
+        "Fork check: peer={} headers={} match={:?} mismatch={:?} result={:?}",
+        peer_id(peer_url), peer_headers.len(), best_match, earliest_mismatch, result
     );
     result
 }

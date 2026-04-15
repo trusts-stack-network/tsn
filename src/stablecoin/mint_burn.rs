@@ -22,7 +22,7 @@ impl MintBurnManager {
         &self.engine
     }
 
-    /// Execute un mint ZST: depose TSN, recoit ZST
+    /// Executes un mint ZST: deposits TSN, receives ZST
     pub fn execute_mint_zst(
         &self,
         state: &mut ReserveState,
@@ -33,7 +33,7 @@ impl MintBurnManager {
 
         let result = self.engine.simulate_mint_zst(state, request.amount_in)?;
 
-        // Verifier slippage
+        // Verify slippage
         if result.amount_out < request.min_amount_out {
             return Err(StablecoinError::SlippageExceeded {
                 actual: result.amount_out,
@@ -41,7 +41,7 @@ impl MintBurnManager {
             });
         }
 
-        // Appliquer sur l'state
+        // Apply sur l'state
         state.reserve_tsn += result.amount_in - result.fee + result.fee_reserve;
         state.treasury_tsn += result.fee_treasury;
         state.supply_zst += result.amount_out;
@@ -49,7 +49,7 @@ impl MintBurnManager {
         Ok(result)
     }
 
-    /// Execute un burn ZST: brule ZST, retrieves TSN
+    /// Executes un burn ZST: burns ZST, retrieves TSN
     pub fn execute_burn_zst(
         &self,
         state: &mut ReserveState,
@@ -58,10 +58,10 @@ impl MintBurnManager {
     ) -> Result<MintBurnResult, StablecoinError> {
         self.validate_common(state, current_timestamp)?;
 
-        // Verifier circuit breaker (sauf en mode survie ou burn ZST reste OK)
+        // Verify circuit breaker (sauf en mode survie where burn ZST reste OK)
         let is_survival = self.is_circuit_breaker_active(state, current_timestamp);
         if is_survival {
-            // En mode survie, seul le burn ZST est autorise, mais avec frais max
+            // En mode survie, seul le burn ZST est authorized, mais avec fees max
         }
 
         let result =
@@ -75,7 +75,7 @@ impl MintBurnManager {
             });
         }
 
-        // Appliquer sur l'state
+        // Apply sur l'state
         let tsn_gross = self
             .engine
             .zst_to_tsn(request.amount_in, state.last_price.tsn_per_xau)?;
@@ -85,7 +85,7 @@ impl MintBurnManager {
         state.supply_zst -= request.amount_in;
         state.current_block_burned_zst += request.amount_in;
 
-        // Check if on doit activer le circuit breaker
+        // Verify si on doit activer le circuit breaker
         let ratio = self.engine.calculate_ratio(state)?;
         if ratio < self.engine.config.circuit_breaker_ratio
             && state.circuit_breaker_activated == 0
@@ -96,7 +96,7 @@ impl MintBurnManager {
         Ok(result)
     }
 
-    /// Execute un mint ZRS: depose TSN, recoit ZRS
+    /// Executes un mint ZRS: deposits TSN, receives ZRS
     pub fn execute_mint_zrs(
         &self,
         state: &mut ReserveState,
@@ -124,7 +124,7 @@ impl MintBurnManager {
         Ok(result)
     }
 
-    /// Execute un burn ZRS: brule ZRS, retrieves TSN
+    /// Executes un burn ZRS: burns ZRS, retrieves TSN
     pub fn execute_burn_zrs(
         &self,
         state: &mut ReserveState,
@@ -159,7 +159,7 @@ impl MintBurnManager {
         Ok(result)
     }
 
-    /// Dispatch une request vers la bonne methode
+    /// Dispatch une request vers la bonne method
     pub fn execute(
         &self,
         state: &mut ReserveState,
@@ -174,13 +174,13 @@ impl MintBurnManager {
         }
     }
 
-    /// Reinitialise le tracking cooldown pour un nouveau bloc
+    /// Resets le tracking cooldown pour un nouveau bloc
     pub fn new_block(&self, state: &mut ReserveState, block_height: u64) {
         state.current_block_burned_zst = 0;
         state.current_block_height = block_height;
     }
 
-    /// Desactive le circuit breaker si expire
+    /// Disables le circuit breaker si expired
     pub fn check_circuit_breaker_expiry(&self, state: &mut ReserveState, current_timestamp: u64) {
         if state.circuit_breaker_activated > 0 {
             let expiry =
@@ -191,7 +191,7 @@ impl MintBurnManager {
         }
     }
 
-    // --- Helpers prives ---
+    // --- Helpers privates ---
 
     fn validate_common(
         &self,

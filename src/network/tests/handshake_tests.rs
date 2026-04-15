@@ -1,6 +1,6 @@
 //! Tests unitaires pour le handshake TSN
 //! 
-//! Tests isoles utilisant des mocks de transport.
+//! Tests isolated utilisant des mocks de transport.
 
 use std::time::Duration;
 use tokio::time::timeout;
@@ -12,7 +12,7 @@ use crate::network::protocol::{
 };
 use crate::network::NetworkError;
 
-/// Test: encodage/decodage d'un handshake basique
+/// Test: encoding/decoding d'un handshake basique
 #[test]
 fn test_handshake_encode_decode() {
     let handshake = HandshakeData {
@@ -124,7 +124,7 @@ fn test_handshake_ack() {
     }
 }
 
-/// Test: handshake ack rejete
+/// Test: handshake ack rejected
 #[test]
 fn test_handshake_ack_rejected() {
     let msg = TsnMessage::HandshakeAck {
@@ -151,7 +151,7 @@ fn test_handshake_ack_rejected() {
 async fn test_handshake_timeout() {
     // Simule un handshake qui timeout
     let result = timeout(Duration::from_millis(50), async {
-        // Simule un delai plus long que le timeout
+        // Simule un delay plus long que le timeout
         tokio::time::sleep(Duration::from_millis(100)).await;
         Ok::<(), NetworkError>(())
     }).await;
@@ -189,7 +189,7 @@ fn test_handshake_random_node_id() {
     }
 }
 
-/// Test: port d'ecoute 0 (ephemeral)
+/// Test: port d'listening 0 (ephemeral)
 #[test]
 fn test_handshake_ephemeral_port() {
     let handshake = HandshakeData {
@@ -214,7 +214,7 @@ fn test_handshake_ephemeral_port() {
     }
 }
 
-/// Test: port d'ecoute maximum (65535)
+/// Test: port d'listening maximum (65535)
 #[test]
 fn test_handshake_max_port() {
     let handshake = HandshakeData {

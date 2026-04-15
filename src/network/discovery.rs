@@ -6,20 +6,20 @@ use tracing::{info, debug, warn};
 use crate::network::api::AppState;
 use crate::network::peer_id;
 
-/// Intervalle entre les tentatives de decouverte
+/// Intervalle entre les tentatives de discovery
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Timeout pour les requests HTTP de decouverte
+/// Timeout pour les requests HTTP de discovery
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Max retry attempts avant d'activer le circuit breaker
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 
-/// Limite maximale de peers a decouvrir
+/// Limite maximale de peers to discover
 #[allow(dead_code)]
 const MAX_PEERS: usize = 50;
 
-/// Duration minimum avant de reessayer quand le circuit breaker est ouvert
+/// Duration minimum avant de retry quand le circuit breaker est ouvert
 const CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(300); // 5 minutes
 
 /// State du circuit breaker
@@ -31,7 +31,7 @@ enum CircuitState {
     HalfOpen, // Testing if service is back up
 }
 
-/// Circuit breaker pour avoid les retry loops infinis
+/// Circuit breaker pour avoidr les retry loops infinis
 #[derive(Debug)]
 #[allow(dead_code)]
 struct CircuitBreaker {
@@ -48,7 +48,7 @@ impl CircuitBreaker {
             state: CircuitState::Closed,
             failure_count: 0,
             last_failure_time: None,
-            success_threshold: 1, // Une reussite suffit pour fermer le circuit
+            success_threshold: 1, // Une success suffit pour close le circuit
             failure_threshold: MAX_RETRY_ATTEMPTS,
         }
     }
@@ -101,7 +101,7 @@ impl CircuitBreaker {
     }
 }
 
-/// Decouverte de pairs via gossip avec circuit breaker
+/// Discovery de peers via gossip avec circuit breaker
 pub async fn discovery_loop(state: Arc<AppState>) {
     let mut ticker = interval(DISCOVERY_INTERVAL);
     let client = reqwest::Client::builder()
@@ -116,7 +116,7 @@ pub async fn discovery_loop(state: Arc<AppState>) {
     loop {
         ticker.tick().await;
 
-        // Check if le circuit breaker allows de continuer
+        // Verify si le circuit breaker allows de continuer
         let can_proceed = {
             let mut cb = circuit_breaker.lock().unwrap();
             cb.can_proceed()
@@ -127,13 +127,13 @@ pub async fn discovery_loop(state: Arc<AppState>) {
             continue;
         }
 
-        // Recupere la liste des pairs connus
+        // Retrieves la liste des peers connus
         let peers: Vec<String> = {
             let peers_guard = state.peers.read().unwrap();
             peers_guard.clone()
         };
 
-        // Annonce a chaque pair et decouvre de nouveaux pairs
+        // Annonce to chaque pair et discovers de nouveaux peers
         for peer in &peers {
             if !crate::network::is_contactable_peer(peer) { continue; }
             // Announce ourselves to the peer
@@ -195,7 +195,7 @@ pub async fn discovery_loop(state: Arc<AppState>) {
     }
 }
 
-/// Annonce ce node a un pair via POST /peers
+/// Annonce ce node to un pair via POST /peers
 async fn announce_to_peer(
     client: &reqwest::Client,
     peer: &str,
@@ -219,7 +219,7 @@ async fn announce_to_peer(
     Ok(())
 }
 
-/// Decouvre de nouveaux pairs via GET /peers
+/// Discovers de nouveaux peers via GET /peers
 async fn discover_peers(
     client: &reqwest::Client,
     peer: &str,
@@ -266,7 +266,7 @@ impl PeerInfo {
     }
 }
 
-/// Gestionnaire de decouverte
+/// Gestionnaire de discovery
 pub struct PeerDiscovery {
     known_peers: Vec<PeerInfo>,
 }

@@ -1,9 +1,9 @@
-//! Operations cryptographiques securisees contre les side-channels
+//! Operations cryptographiques secure contre les side-channels
 //! 
-//! Ce module implemente:
+//! Ce module implements:
 //! - Comparaison constant-time
 //! - Masquage de memory
-//! - Generation securisee de nonces
+//! - Generation secure de nonces
 
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -19,7 +19,7 @@ pub enum CryptoError {
     nonceReuseDetected,
 }
 
-/// Key symetrique securisee (effacee automatiquement)
+/// Key symetric secure (erased automatically)
 #[derive(Clone)]
 pub struct SecretKey {
     bytes: Box<[u8]>,
@@ -32,7 +32,7 @@ impl SecretKey {
         }
         let mut bytes = vec![0u8; size].into_boxed_slice();
         // Note: Dans une vraie implementation, remplir avec RNG ici
-        // Pour les tests, on laisse a 0 mais on documente
+        // Pour les tests, on laisse to 0 mais on documente
         Ok(Self { bytes })
     }
     
@@ -45,7 +45,7 @@ impl SecretKey {
         Ok(Self { bytes })
     }
     
-    /// Comparaison constant-time - CRITIQUE pour prevenir les timing attacks
+    /// Comparison constant-time - CRITIQUE pour prevent les timing attacks
     pub fn ct_eq(&self, other: &Self) -> bool {
         if self.bytes.len() != other.bytes.len() {
             return false;
@@ -58,4 +58,4 @@ impl SecretKey {
         if mask.len() != self.bytes.len() {
             return Err(CryptoError::InvalidInput("Mask size mismatch"));
         }
-        // Acces sequentiel uniquement - pas d'indexation par valeur
+        // Sequential access only - no value indexing

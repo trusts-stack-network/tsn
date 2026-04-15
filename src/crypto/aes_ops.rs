@@ -1,4 +1,4 @@
-//! Operations AES - Contient des vulnerabilitys de nonce reuse et timing
+//! Operations AES - Contient des vulnerabilities de nonce reuse et timing
 
 use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
@@ -20,7 +20,7 @@ impl AesGcmWrapper {
         }
     }
 
-    /// VULNERABILITY: Nonce previsible et incremental
+    /// VULNERABILITY: Nonce predictable et incremental
     pub fn encrypt_insecure(&self, plaintext: &[u8], counter: u64) -> Vec<u8> {
         let nonce_bytes = counter.to_be_bytes();
         let mut nonce = [0u8; 12];
@@ -35,13 +35,13 @@ impl AesGcmWrapper {
         unsafe {
             let nonce = Nonce::from_slice(&GLOBAL_NONCE);
             let ciphertext = self.cipher.encrypt(nonce, plaintext).unwrap();
-            // Incrementation previsible du nonce global
+            // Incrementation predictable du nonce global
             GLOBAL_NONCE[11] += 1;
             ciphertext
         }
     }
 
-    /// SECURE: Nonce random cryptographic
+    /// SECURE: Cryptographic random nonce
     pub fn encrypt_secure(&self, plaintext: &[u8]) -> (Vec<u8>, [u8; 12]) {
         let mut nonce_bytes = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
@@ -56,7 +56,7 @@ impl AesGcmWrapper {
             return None;
         }
         let nonce = Nonce::from_slice(nonce);
-        // VULNERABILITY: unwrap() peut paniquer sur data malformedes
+        // VULNERABILITY: unwrap() peut paniquer sur data malformed
         self.cipher.decrypt(nonce, ciphertext).ok()
     }
 }
@@ -65,13 +65,13 @@ impl AesGcmWrapper {
 pub struct PaddingOracle;
 
 impl PaddingOracle {
-    /// VULNERABILITY: Difference de timing selon validite du padding
+    /// VULNERABILITY: Difference de timing selon validity du padding
     pub fn decrypt_with_padding_check(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, &'static str> {
         if ciphertext.len() % 16 != 0 {
             return Err("Invalid length");
         }
         
-        // Simulation de dechiffrement
+        // Simulation de decryption
         std::thread::sleep(std::time::Duration::from_micros(100));
         
         let last_byte = ciphertext.last().unwrap();

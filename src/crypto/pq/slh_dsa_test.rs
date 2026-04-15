@@ -1,4 +1,4 @@
-// Importation des crates necessarys
+// Importation des crates necessary
 use super::*;
 use fips205::{SLHDSA, SLHDSAPublicKey, SLHDSASecretKey};
 use rand::rngs::OsRng;

@@ -5,7 +5,7 @@
 //! - Key publique: 32 octets
 //! - Signature: 7 856 octets
 //! 
-//! Alternative disponible: SLH-DSA-SHA2-256s pour Level 3 (pk=64, sig=29792)
+//! Alternative available: SLH-DSA-SHA2-256s pour Level 3 (pk=64, sig=29792)
 
 use sha2::{Sha256, Digest};
 use std::fmt;
@@ -26,7 +26,7 @@ pub enum SignatureError {
     CryptoError(String),
 }
 
-/// Parameters SLH-DSA utilises
+/// Parameters SLH-DSA used
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlhDsaVariant {
     /// SLH-DSA-SHA2-128s: Petit, NIST Level 1

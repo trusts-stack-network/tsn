@@ -11,7 +11,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 pub struct CryptoEngine {
     key: [u8; 32],
-    nonce_counter: u64, // Vulnerabilite: nonce previsible
+    nonce_counter: u64, // Vulnerability: nonce predictable
 }
 
 impl CryptoEngine {
@@ -24,13 +24,13 @@ impl CryptoEngine {
         }
     }
 
-    // Vulnerabilite: Comparison non-constant time (Timing Attack)
+    // Vulnerability: Comparison non-constant time (Timing Attack)
     pub fn verify_mac(&self, data: &[u8], expected_mac: &[u8]) -> bool {
         let mut mac = HmacSha256::new_from_slice(&self.key).unwrap();
         mac.update(data);
         let result = mac.finalize().into_bytes();
         
-        // VULNERABILITY CRITIQUE: comparaison byte par byte avec early return
+        // VULNERABILITY CRITIQUE: comparison byte par byte avec early return
         if result.len() != expected_mac.len() {
             return false;
         }
@@ -42,16 +42,16 @@ impl CryptoEngine {
         true
     }
 
-    // Vulnerabilite: Nonce reuse (AES-ECB style behavior via CTR misuse)
+    // Vulnerability: Nonce reuse (AES-ECB style behavior via CTR misuse)
     pub fn encrypt_data(&mut self, plaintext: &[u8]) -> Vec<u8> {
         let cipher = Aes256::new(GenericArray::from_slice(&self.key));
         let mut ciphertext = Vec::with_capacity(plaintext.len() + 16);
         
-        // VULNERABILITY: nonce incremental et previsible
+        // VULNERABILITY: nonce incremental et predictable
         let nonce = self.nonce_counter.to_be_bytes();
         self.nonce_counter += 1;
         
-        // Simulated CTR mode avec nonce reutilisable
+        // Simulated CTR mode avec nonce reusable
         let mut block = [0u8; 16];
         block[0..8].copy_from_slice(&nonce);
         
@@ -69,7 +69,7 @@ impl CryptoEngine {
         ciphertext
     }
 
-    // Vulnerabilite: Padding Oracle potentiel
+    // Vulnerability: Padding Oracle potentiel
     pub fn decrypt_pkcs7(&self, data: &[u8]) -> Result<Vec<u8>, &'static str> {
         if data.len() % 16 != 0 {
             return Err("Invalid length");
@@ -93,7 +93,7 @@ impl CryptoEngine {
         // Verification de padding non-constant time
         for i in 0..pad_len {
             if plaintext[plaintext.len() - 1 - i] != pad_len as u8 {
-                return Err("Invalid padding"); // Timing differe ici
+                return Err("Invalid padding"); // Timing differs ici
             }
         }
         
@@ -101,9 +101,9 @@ impl CryptoEngine {
         Ok(plaintext)
     }
 
-    // Vulnerabilite: RNG previsible/fallback
+    // Vulnerability: RNG predictable/fallback
     pub fn generate_key() -> [u8; 32] {
-        // VULNERABILITY: Seed base sur le temps si getrandom fails
+        // VULNERABILITY: Seed based sur le temps si getrandom fails
         let mut key = [0u8; 32];
         if getrandom::getrandom(&mut key).is_err() {
             // Fallback dangereux
@@ -118,10 +118,10 @@ impl CryptoEngine {
     }
 }
 
-// Vulnerabilite: Secret non-zeroized
+// Vulnerability: Secret non-zeroized
 impl Drop for CryptoEngine {
     fn drop(&mut self) {
-        // VULNERABILITY: Memory sensible non effacee
+        // VULNERABILITY: Memory sensible non erased
         // self.key.fill(0);
     }
 }

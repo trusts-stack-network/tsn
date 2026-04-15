@@ -1,10 +1,10 @@
 //! Limites de taille des messages network TSN
 //!
-//! Ce module definit des limites strictes de taille pour tous les messages
-//! du protocole network afin de prevenir les attaques DoS par messages oversized.
+//! Ce module defines des limits strictes de taille pour tous les messages
+//! du protocole network afin de prevent les attaques DoS par messages oversized.
 //!
-//! Les limites sont definies par type de message pour allowstre une utilisation
-//! optimale de la bande passante tout en maintenant la security.
+//! Les limits sont definedes par type de message pour allowstre une utilisation
+//! optimale de la bande passante tout en now la security.
 
 use bytes::BytesMut;
 use std::time::{Duration, Instant};
@@ -19,16 +19,16 @@ pub const GLOBAL_MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 /// Limite pour les messages de handshake (doit rester petit)
 pub const HANDSHAKE_MAX_SIZE: usize = 16 * 1024; // 16 KB
 
-/// Limite pour les heartbeats (very leger)
+/// Limite pour les heartbeats (very light)
 pub const HEARTBEAT_MAX_SIZE: usize = 1024; // 1 KB
 
-/// Limite pour les echanges de pairs
+/// Limite pour les exchanges de peers
 pub const PEER_EXCHANGE_MAX_SIZE: usize = 256 * 1024; // 256 KB
 
 /// Limite pour les messages of data applicatives
 pub const DATA_MAX_SIZE: usize = 2 * 1024 * 1024; // 2 MB
 
-/// Limite pour les messages de deconnection
+/// Limite pour les messages de disconnection
 pub const DISCONNECT_MAX_SIZE: usize = 4 * 1024; // 4 KB
 
 /// Taille maximale du buffer de lecture par connection
@@ -37,13 +37,13 @@ pub const MAX_READ_BUFFER_SIZE: usize = 8 * 1024 * 1024; // 8 MB
 /// Taille du header de framing (magic + length)
 pub const FRAMING_HEADER_SIZE: usize = 8; // 4 bytes magic + 4 bytes length
 
-/// Timeout pour la lecture d'un message complete
+/// Timeout pour la lecture d'un message complet
 pub const MESSAGE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Nombre maximum de messages par seconde par peer
 pub const MAX_MESSAGES_PER_SECOND: u32 = 1000;
 
-/// Configuration complete des limites de messages
+/// Configuration completee des limits de messages
 #[derive(Debug, Clone, Copy)]
 pub struct MessageLimitsConfig {
     /// Limite globale absolue
@@ -52,11 +52,11 @@ pub struct MessageLimitsConfig {
     pub handshake_max: usize,
     /// Limite pour les heartbeats
     pub heartbeat_max: usize,
-    /// Limite pour les echanges de pairs
+    /// Limite pour les exchanges de peers
     pub peer_exchange_max: usize,
     /// Limite pour les data
     pub data_max: usize,
-    /// Limite pour les deconnections
+    /// Limite pour les disconnections
     pub disconnect_max: usize,
     /// Taille max du buffer de lecture
     pub max_buffer_size: usize,
@@ -79,18 +79,18 @@ impl Default for MessageLimitsConfig {
     }
 }
 
-/// Resultat de la validation de taille
+/// Result de la validation de taille
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SizeValidationResult {
     /// La taille est acceptable
     Accept,
-    /// La taille depasse la limite pour ce type de message
+    /// La taille exceeds la limite pour ce type de message
     Reject { limit: usize, actual: usize },
-    /// La taille depasse la limite globale (attaque DoS suspectee)
+    /// La taille exceeds la limite globale (attaque DoS suspected)
     RejectGlobal { limit: usize, actual: usize },
 }
 
-/// Checks if une taille de payload est acceptable pour un type de message donne
+/// Verifies si une taille de payload est acceptable pour un type de message given
 pub fn validate_message_size(message_type: &str, size: usize) -> SizeValidationResult {
     // Verification de la limite globale en premier
     if size > GLOBAL_MAX_MESSAGE_SIZE {
@@ -100,7 +100,7 @@ pub fn validate_message_size(message_type: &str, size: usize) -> SizeValidationR
         };
     }
 
-    // Limite specifique selon le type de message
+    // Limite specific selon le type de message
     let limit = match message_type {
         "Handshake" => HANDSHAKE_MAX_SIZE,
         "Heartbeat" => HEARTBEAT_MAX_SIZE,
@@ -117,7 +117,7 @@ pub fn validate_message_size(message_type: &str, size: usize) -> SizeValidationR
     }
 }
 
-/// Checks the taille d'un message TSN complete
+/// Verifies la taille d'un message TSN complete
 pub fn check_tsn_message_size(msg: &TsnMessage) -> Result<()> {
     // Estimation de la taille serializede
     let estimated_size = estimate_serialized_size(msg);
@@ -135,14 +135,14 @@ pub fn check_tsn_message_size(msg: &TsnMessage) -> Result<()> {
         SizeValidationResult::Accept => Ok(()),
         SizeValidationResult::Reject { limit, actual } => {
             warn!(
-                "Message {} rejete: taille {} > limite {}",
+                "Message {} rejected: taille {} > limite {}",
                 message_type, actual, limit
             );
             Err(ProtocolError::MessageTooLarge(actual, limit).into())
         }
         SizeValidationResult::RejectGlobal { limit, actual } => {
             error!(
-                "ATTENTION: Message {} depasse la limite globale! {} > {} - Possible attaque DoS",
+                "ATTENTION: Message {} exceeds la limite globale! {} > {} - Possible attaque DoS",
                 message_type, actual, limit
             );
             Err(ProtocolError::MessageTooLarge(actual, limit).into())
@@ -159,7 +159,7 @@ fn estimate_serialized_size(msg: &TsnMessage) -> usize {
             let caps_size = data.capabilities.len() * 8;
             base_size + caps_size + 64 // overhead serialization
         }
-        TsnMessage::Heartbeat { .. } => 32, // Tres petit
+        TsnMessage::Heartbeat { .. } => 32, // Very petit
         TsnMessage::PeerExchange { peers, .. } => {
             // Chaque peer: addr (max 16 bytes IPv6 + 2 port) + node_id (32) + overhead
             let peer_size = 64;
@@ -177,7 +177,7 @@ fn estimate_serialized_size(msg: &TsnMessage) -> usize {
     }
 }
 
-/// Checks if un buffer de lecture depasse la taille maximale autorisee
+/// Verifies si un buffer de lecture exceeds la taille maximale authorized
 pub fn check_buffer_size(buffer: &BytesMut, peer_addr: std::net::SocketAddr) -> Result<()> {
     if buffer.len() > MAX_READ_BUFFER_SIZE {
         error!(
@@ -195,15 +195,15 @@ pub fn check_buffer_size(buffer: &BytesMut, peer_addr: std::net::SocketAddr) -> 
 /// Structure pour tracker les statistiques de taille des messages
 #[derive(Debug)]
 pub struct MessageSizeTracker {
-    /// Nombre de messages acceptes par type
+    /// Nombre de messages accepteds par type
     pub accepted_counts: std::collections::HashMap<String, u64>,
-    /// Nombre de messages rejetes par type
+    /// Nombre de messages rejecteds par type
     pub rejected_counts: std::collections::HashMap<String, u64>,
-    /// Taille totale des data acceptees
+    /// Taille totale des data acceptedes
     pub total_accepted_bytes: u64,
-    /// Taille totale des data rejetees
+    /// Taille totale des data rejectedes
     pub total_rejected_bytes: u64,
-    /// Timestamp de debut du tracking
+    /// Timestamp de start du tracking
     pub started_at: Instant,
 }
 
@@ -214,7 +214,7 @@ impl Default for MessageSizeTracker {
 }
 
 impl MessageSizeTracker {
-    /// Creates a nouveau tracker
+    /// Creates un nouveau tracker
     pub fn new() -> Self {
         Self {
             accepted_counts: std::collections::HashMap::new(),
@@ -225,19 +225,19 @@ impl MessageSizeTracker {
         }
     }
 
-    /// Enregistre un message accepte
+    /// Enregistre un message accepted
     pub fn record_accepted(&mut self, message_type: &str, size: usize) {
         *self.accepted_counts.entry(message_type.to_string()).or_insert(0) += 1;
         self.total_accepted_bytes += size as u64;
     }
 
-    /// Enregistre un message rejete
+    /// Enregistre un message rejected
     pub fn record_rejected(&mut self, message_type: &str, size: usize) {
         *self.rejected_counts.entry(message_type.to_string()).or_insert(0) += 1;
         self.total_rejected_bytes += size as u64;
     }
 
-    /// Retourne les statistiques sous forme de chain
+    /// Returns les statistiques sous forme de chain
     pub fn stats_string(&self) -> String {
         let elapsed = self.started_at.elapsed().as_secs();
         let accepted_msgs: u64 = self.accepted_counts.values().sum();
@@ -252,8 +252,8 @@ impl MessageSizeTracker {
     }
 }
 
-/// Checks the taille declaree dans un header avant lecture complete
-/// Retourne la taille du payload si valide, sinon une error
+/// Verifies la taille declarede dans un header avant lecture completee
+/// Retourne la taille du payload si valid, sinon une erreur
 pub fn validate_framed_message_size(
     declared_size: u32,
     peer_addr: std::net::SocketAddr,
@@ -261,13 +261,13 @@ pub fn validate_framed_message_size(
     let size = declared_size as usize;
     
     if size == 0 {
-        debug!("Message vide recu de {}", peer_addr);
+        debug!("Message vide received de {}", peer_addr);
         return Err(ProtocolError::InvalidPayloadLength(0).into());
     }
     
     if size > GLOBAL_MAX_MESSAGE_SIZE {
         error!(
-            "Message oversize detecte de {}: declare {} > limite {} - Rejet immediat",
+            "Message oversize detected de {}: declared {} > limite {} - Rejet immediate",
             peer_addr, size, GLOBAL_MAX_MESSAGE_SIZE
         );
         return Err(ProtocolError::MessageTooLarge(size, GLOBAL_MAX_MESSAGE_SIZE).into());
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_validate_message_size_reject() {
-        // Heartbeat de 2KB doit be rejete (> 1KB)
+        // Heartbeat de 2KB doit be rejected (> 1KB)
         match validate_message_size("Heartbeat", 2 * 1024) {
             SizeValidationResult::Reject { limit, actual } => {
                 assert_eq!(limit, HEARTBEAT_MAX_SIZE);
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_validate_message_size_reject_global() {
-        // Message de 5MB doit be rejete globalement
+        // Message de 5MB doit be rejected globalement
         match validate_message_size("Data", 5 * 1024 * 1024) {
             SizeValidationResult::RejectGlobal { limit, actual } => {
                 assert_eq!(limit, GLOBAL_MAX_MESSAGE_SIZE);
@@ -322,13 +322,13 @@ mod tests {
 
     #[test]
     fn test_validate_framed_message_size() {
-        // Taille valide
+        // Taille valid
         assert!(validate_framed_message_size(1024, "127.0.0.1:8000".parse().unwrap()).is_ok());
         
         // Taille zero
         assert!(validate_framed_message_size(0, "127.0.0.1:8000".parse().unwrap()).is_err());
         
-        // Taille trop grande
+        // Taille trop large
         assert!(validate_framed_message_size(5 * 1024 * 1024, "127.0.0.1:8000".parse().unwrap()).is_err());
     }
 

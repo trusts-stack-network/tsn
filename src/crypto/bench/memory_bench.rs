@@ -5,8 +5,8 @@
 //! - Verification de preuve
 //! 
 //! Contexte de security:
-//! - La consommation memory doit be O(n) ou n = taille du circuit
-//! - Pas de fuites memory pendant les operations repetees
+//! - La consommation memory doit be O(n) where n = taille du circuit
+//! - Pas de fuites memory pendant les operations repeateds
 //! - Zeroize des secrets after usage
 
 use plonky2::field::goldilocks_field::GoldilocksField;
@@ -23,7 +23,7 @@ type C = PoseidonGoldilocksConfig;
 
 /// Estimateur de memory simple
 /// 
-/// Note: Une implementation complete requiresrait jemalloc ou similar
+/// Note: Une implementation completee requiresrait jemalloc ou similar
 /// pour des statistiques precises d'allocation.
 pub struct MemoryEstimator {
     baseline: usize,
@@ -36,7 +36,7 @@ impl MemoryEstimator {
         }
     }
     
-    /// Retourne l'utilisation memory currentle en KB
+    /// Returns l'utilisation memory actuelle en KB
     /// 
     /// Sur Linux, lit /proc/self/status pour VmRSS
     fn current_usage() -> usize {
@@ -59,13 +59,13 @@ impl MemoryEstimator {
         0 // Fallback
     }
     
-    /// Mesure la memory utilisee pendant l'execution d'une fonction
+    /// Mesure la memory used pendant l'execution d'une fonction
     pub fn measure<T>(&self, f: impl FnOnce() -> T) -> (T, usize) {
         let before = Self::current_usage();
         let result = f();
         let after = Self::current_usage();
         
-        // Soustrait la baseline pour obtenir la memory reellement utilisee
+        // Soustrait la baseline pour get la memory realment used
         let used = if after > self.baseline {
             after.saturating_sub(self.baseline)
         } else {
@@ -81,7 +81,7 @@ fn build_memory_test_circuit() -> plonky2::plonk::circuit_data::CircuitData<F, C
     let config = CircuitConfig::standard_recursion_config();
     let mut builder = CircuitBuilder::<F, D>::new(config);
     
-    // Cree plusieurs gates pour simuler un circuit realiste
+    // Creates multiple gates pour simuler un circuit realistic
     let num_gates = 1000;
     
     let mut prev = builder.add_virtual_target();
@@ -145,7 +145,7 @@ pub fn bench_plonky2_memory_verification() -> crate::crypto::bench::halo2_commit
     let circuit_data = build_memory_test_circuit();
     let verifier_data = circuit_data.verifier_data();
     
-    // Generates ae preuve une fois
+    // Generates une preuve une fois
     let mut pw = PartialWitness::new();
     let initial = circuit_data.prover_only.public_inputs[0];
     pw.set_target(initial, F::from_canonical_u64(42));
@@ -179,7 +179,7 @@ pub fn bench_plonky2_memory_verification() -> crate::crypto::bench::halo2_commit
     )
 }
 
-/// Execute tous les benchmarks memory
+/// Executes tous les benchmarks memory
 pub fn run_memory_benchmarks() -> Vec<crate::crypto::bench::halo2_commitment_bench::BenchmarkResult> {
     println!("╔═══════════════════════════════════════════════════════════════╗");
     println!("║           TSN MEMORY BENCHMARKS                                 ║");
@@ -191,7 +191,7 @@ pub fn run_memory_benchmarks() -> Vec<crate::crypto::bench::halo2_commitment_ben
     results.push(bench_plonky2_memory_generation());
     results.push(bench_plonky2_memory_verification());
     
-    // Affiche les results
+    // Display results
     for result in &results {
         result.print();
     }
@@ -211,7 +211,7 @@ mod tests {
             std::hint::black_box(vec);
         });
         
-        // La memory devrait be > 0 sur Linux
+        // La memory should be > 0 sur Linux
         #[cfg(target_os = "linux")]
         assert!(mem > 0, "Memory usage should be detectable on Linux");
     }

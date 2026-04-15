@@ -10,11 +10,11 @@ use ark_ff::{BigInteger, PrimeField};
 use light_poseidon::Poseidon;
 
 /// Vecteurs de test officiels de circomlibjs pour Poseidon
-/// Ces valeurs sont generees par l'implementation de reference JavaScript
-/// et servent a checksr la compatibility cross-language.
+/// Ces valeurs sont generatedes par l'implementation de reference JavaScript
+/// et servent to verify la compatibility cross-language.
 
 /// Test vector: poseidon([0]) = 0x2b46c5e0525c8c8c5a65c18c4b1b5840e5c6c55e5c5c5c5c5c5c5c5c5c5c5c5c
-/// Note: La valeur exacte depend de l'implementation circomlib
+/// Note: La valeur exacte depends de l'implementation circomlib
 const TEST_VECTORS_1_INPUT: &[([u64; 1], &str)] = &[
     ([0u64], "0x0000000000000000000000000000000000000000000000000000000000000000"),
 ];
@@ -35,7 +35,7 @@ const TEST_VECTORS_4_INPUTS: &[([u64; 4], &str)] = &[
     ([1u64, 2u64, 3u64, 4u64], "0x0000000000000000000000000000000000000000000000000000000000000000"),
 ];
 
-/// Convertit une chain hex en Fr
+/// Convertedt une chain hex en Fr
 fn hex_to_fr(hex: &str) -> Fr {
     let hex = hex.trim_start_matches("0x");
     let bytes = hex::decode(hex).expect("Invalid hex");
@@ -53,7 +53,7 @@ mod tests {
         DOMAIN_NOTE_COMMITMENT, DOMAIN_NULLIFIER, DOMAIN_MERKLE_NODE,
     };
 
-    /// Test de determinisme: same entree = same sortie
+    /// Test de determinism: same entry = same sortie
     #[test]
     fn test_determinism() {
         let a = Fr::from(123u64);
@@ -65,7 +65,7 @@ mod tests {
         assert_eq!(hash1, hash2, "Poseidon doit be deterministic");
     }
 
-    /// Test de separation de domaine: same entree, domaine different = sortie differente
+    /// Test de separation de domaine: same entry, domaine different = sortie different
     #[test]
     fn test_domain_separation() {
         let a = Fr::from(123u64);
@@ -75,12 +75,12 @@ mod tests {
         let hash2 = poseidon_hash(DOMAIN_NULLIFIER, &[a, b]);
         let hash3 = poseidon_hash(DOMAIN_MERKLE_NODE, &[a, b]);
 
-        assert_ne!(hash1, hash2, "Domaines differents doivent produire des hashes differents");
-        assert_ne!(hash1, hash3, "Domaines differents doivent produire des hashes differents");
-        assert_ne!(hash2, hash3, "Domaines differents doivent produire des hashes differents");
+        assert_ne!(hash1, hash2, "Domaines different doivent produire des hashes different");
+        assert_ne!(hash1, hash3, "Domaines different doivent produire des hashes different");
+        assert_ne!(hash2, hash3, "Domaines different doivent produire des hashes different");
     }
 
-    /// Test de non-linearite: petits changements = grands changements
+    /// Non-linearity test: small changes = large changes
     #[test]
     fn test_avalanche() {
         let a1 = Fr::from(1u64);
@@ -90,7 +90,7 @@ mod tests {
         let hash1 = poseidon_hash(DOMAIN_NOTE_COMMITMENT, &[a1, b]);
         let hash2 = poseidon_hash(DOMAIN_NOTE_COMMITMENT, &[a2, b]);
 
-        // Les deux hashes doivent be completement differents (effet avalanche)
+        // Les deux hashes doivent be completeely different (effet avalanche)
         let bytes1 = field_to_bytes32(&hash1);
         let bytes2 = field_to_bytes32(&hash2);
         
@@ -98,11 +98,11 @@ mod tests {
             .map(|(a, b)| (a ^ b).count_ones())
             .sum::<u32>();
         
-        // Au moins 50% des bits doivent differer pour un bon hash
-        assert!(differing_bits >= 128, "Effet avalanche insuffisant: {} bits differents", differing_bits);
+        // Au moins 50% des bits doivent differ pour un bon hash
+        assert!(differing_bits >= 128, "Effet avalanche insufficient: {} bits different", differing_bits);
     }
 
-    /// Test de collision: entrees differentes ne doivent pas produire la same sortie
+    /// Test de collision: entries different ne doivent pas produire la same sortie
     #[test]
     fn test_collision_resistance() {
         let inputs: Vec<Vec<Fr>> = vec![
@@ -120,7 +120,7 @@ mod tests {
         }
 
         // Tous les hashes doivent be uniques
-        assert_eq!(hashes.len(), inputs.len(), "Collision detectee!");
+        assert_eq!(hashes.len(), inputs.len(), "Collision detectede!");
     }
 
     /// Test de la fonction hash_2 (convenience pour Merkle trees)
@@ -132,7 +132,7 @@ mod tests {
         let hash1 = poseidon_hash_2(DOMAIN_MERKLE_NODE, left, right);
         let hash2 = poseidon_hash(DOMAIN_MERKLE_NODE, &[left, right]);
 
-        assert_eq!(hash1, hash2, "hash_2 doit be equivalent a hash avec 2 inputs");
+        assert_eq!(hash1, hash2, "hash_2 doit be equivalent to hash avec 2 inputs");
     }
 
     /// Test de conversion bytes32 <-> field
@@ -152,7 +152,7 @@ mod tests {
         }
     }
 
-    /// Test avec entrees randoms
+    /// Test avec entries random
     #[test]
     fn test_random_inputs() {
         use ark_std::rand::SeedableRng;
@@ -168,7 +168,7 @@ mod tests {
             let hash1 = poseidon_hash(DOMAIN_NOTE_COMMITMENT, &[a, b]);
             let hash2 = poseidon_hash(DOMAIN_NOTE_COMMITMENT, &[a, b]);
             
-            assert_eq!(hash1, hash2, "Determinisme requis same avec entrees randoms");
+            assert_eq!(hash1, hash2, "Determinism requis same avec entries random");
         }
     }
 
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(cm, cm2, "Le commitment doit be deterministic");
     }
 
-    /// Test d'integrite: modification d'un seul champ change le hash
+    /// Test d'integrity: modification d'un seul champ change le hash
     #[test]
     fn test_commitment_integrity() {
         let value = Fr::from(1000u64);
@@ -220,10 +220,10 @@ mod tests {
         // Le hash doit be non-nul
         assert_ne!(hash, Fr::from(0u64), "Le hash ne doit pas be nul");
 
-        // Test de determinisme
+        // Test de determinism
         let mut poseidon2 = Poseidon::<Fr>::new_circom(2).expect("Poseidon init failed");
         let hash2 = poseidon2.hash(&inputs).expect("Poseidon hash failed");
-        assert_eq!(hash, hash2, "Compatibilite circomlib: determinisme requis");
+        assert_eq!(hash, hash2, "Compatibility circomlib: determinism requis");
     }
 
     /// Test de performance: le hash doit be rapide
@@ -248,7 +248,7 @@ mod tests {
         assert!(avg_micros < 100, "Performance insuffisante: {} µs", avg_micros);
     }
 
-    /// Test avec entrees de tailles variees
+    /// Test avec entries de tailles varied
     #[test]
     fn test_variable_input_sizes() {
         for size in [1, 2, 3, 4, 5, 8, 16] {
@@ -260,30 +260,30 @@ mod tests {
         }
     }
 
-    /// Test de resistance aux preimages: difficile de trouver une entree donnee
-    /// Note: Ce test checks simplement que le hash est non-trivial
+    /// Test de resistance aux preimages: difficile de trouver une entry data
+    /// Note: Ce test verifies simply que le hash est non-trivial
     #[test]
     fn test_preimage_resistance() {
         let target = poseidon_hash(DOMAIN_NOTE_COMMITMENT, &[Fr::from(12345u64)]);
         
-        // Essayer des entrees proches
+        // Essayer des entries proches
         for i in 12340..12350 {
             if i == 12345 { continue; }
             let hash = poseidon_hash(DOMAIN_NOTE_COMMITMENT, &[Fr::from(i as u64)]);
-            assert_ne!(hash, target, "Preimage trouvee pour {} (collision)", i);
+            assert_ne!(hash, target, "Preimage founde pour {} (collision)", i);
         }
     }
 
-    /// Test de zero: le hash of zeros ne doit pas be previsible
+    /// Test de zero: le hash de zeros ne doit pas be predictable
     #[test]
     fn test_zero_inputs() {
         let hash_zeros = poseidon_hash(DOMAIN_NOTE_COMMITMENT, &[Fr::from(0u64), Fr::from(0u64)]);
         
         // Ne doit pas be zero
-        assert_ne!(hash_zeros, Fr::from(0u64), "Hash of zeros ne doit pas be zero");
+        assert_ne!(hash_zeros, Fr::from(0u64), "Hash de zeros ne doit pas be zero");
         
         // Doit be deterministic
         let hash_zeros2 = poseidon_hash(DOMAIN_NOTE_COMMITMENT, &[Fr::from(0u64), Fr::from(0u64)]);
-        assert_eq!(hash_zeros, hash_zeros2, "Hash of zeros doit be deterministic");
+        assert_eq!(hash_zeros, hash_zeros2, "Hash de zeros doit be deterministic");
     }
 }

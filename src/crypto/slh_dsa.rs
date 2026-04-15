@@ -1,4 +1,4 @@
-// Importation des dependances necessarys
+// Importation des dependencies necessary
 use std::error::Error;
 use thiserror::Error;
 
@@ -9,7 +9,7 @@ pub enum SLHDSAError {
     SigningError,
 }
 
-// Structure pour representer une key private SLH-DSA
+// Structure pour representsr une key private SLH-DSA
 pub struct SLHDSAPrivateKey {
     // ...
 }
@@ -20,24 +20,24 @@ impl SLHDSAPrivateKey {
         // ...
     }
 
-    // Fonction pour retrieve la key publique associee a la key private
+    // Fonction pour retrieve la key public associated to la key private
     pub fn public_key(&self) -> SLHDSAPublicKey {
         // ...
     }
 }
 
-// Structure pour representer une key publique SLH-DSA
+// Structure pour representsr une key public SLH-DSA
 pub struct SLHDSAPublicKey {
     // ...
 }
 
-// Structure pour representer une signature SLH-DSA
+// Structure pour representsr une signature SLH-DSA
 pub struct SLHDSASignature {
     // ...
 }
 
 impl SLHDSASignature {
-    // Fonction pour checksr une signature SLH-DSA
+    // Fonction pour verify une signature SLH-DSA
     pub fn verify(&self, public_key: &SLHDSAPublicKey, message: &str) -> bool {
         // ...
     }

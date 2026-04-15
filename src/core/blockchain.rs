@@ -264,7 +264,7 @@ impl ShieldedBlockchain {
                         _ => {
                             tracing::error!(
                                 "Missing block hash at height {} during replay ({} of {}). \
-                                 Database is incompletee — will wipe and re-sync from peers.",
+                                 Database is incomplete — will wipe and re-sync from peers.",
                                 h, h - start_height + 1, blocks_to_replay
                             );
                             replay_failed = true;
@@ -277,7 +277,7 @@ impl ShieldedBlockchain {
                         None => {
                             tracing::error!(
                                 "Missing block data at height {} (hash={}) during replay. \
-                                 Database is incompletee — will wipe and re-sync from peers.",
+                                 Database is incomplete — will wipe and re-sync from peers.",
                                 h, hex::encode(&hash[..8])
                             );
                             replay_failed = true;
@@ -304,7 +304,7 @@ impl ShieldedBlockchain {
                     return Self::open(db_path, difficulty);
                 }
 
-                tracing::info!("Replay completee ({} blocks)", blocks_to_replay);
+                tracing::info!("Replay complete ({} blocks)", blocks_to_replay);
             } else {
                 tracing::info!("Snapshot is up-to-date, no replay needed");
             }
@@ -668,7 +668,7 @@ impl ShieldedBlockchain {
         headers
     }
 
-    /// Reset the blockchain for a completee re-sync from network.
+    /// Reset the blockchain for a complete re-sync from network.
     /// Wipes state, height index, and metadata back to genesis.
     /// Used when the node detects it's on an incompatible fork during initial sync.
     pub fn reset_for_resync(&mut self) {
@@ -763,7 +763,7 @@ impl ShieldedBlockchain {
                 if let Some(ref db) = self.db {
                     let _ = db.remove_cumulative_work_from(target_height + 1);
                 }
-                // WAL: clear reorg flag — rollback completeed successfully
+                // WAL: clear reorg flag — rollback completed successfully
                 if let Some(ref db) = self.db {
                     let _ = db.set_metadata("reorg_in_progress", "");
                 }
@@ -794,7 +794,7 @@ impl ShieldedBlockchain {
                     self.height(), hex::encode(&self.latest_hash()[..8]),
                     self.cumulative_work, lru_before
                 );
-                tracing::info!("Rollback completee (instant): height={}", self.height());
+                tracing::info!("Rollback complete (instant): height={}", self.height());
                 return Ok(true);
             }
         }
@@ -887,7 +887,7 @@ impl ShieldedBlockchain {
             let _ = db.remove_cumulative_work_from(target_height + 1);
         }
 
-        // WAL: clear reorg flag — rollback completeed successfully
+        // WAL: clear reorg flag — rollback completed successfully
         if let Some(ref db) = self.db {
             let _ = db.set_metadata("reorg_in_progress", "");
         }
@@ -911,7 +911,7 @@ impl ShieldedBlockchain {
             self.height(), hex::encode(&self.latest_hash()[..8]),
             self.cumulative_work, lru_before
         );
-        tracing::info!("Rollback completee: height={}", self.height());
+        tracing::info!("Rollback complete: height={}", self.height());
         Ok(true)
     }
 
@@ -1207,13 +1207,11 @@ impl ShieldedBlockchain {
 
         // Verify commitment root matches expected
         let mut temp_state = self.state.snapshot();
-        tracing::debug!(
-            "SYNC_DEBUG: VALIDATE_BLOCK h={} state_v1_skip={} state_v1_count={} state_pq_count={}",
-            block.coinbase.height,
-            temp_state.is_v1_tree_skipped(),
-            temp_state.commitment_count(),
-            temp_state.commitment_tree_pq().size(),
-        );
+        let pre_pq_size = temp_state.commitment_tree_pq().size();
+        let pre_pq_root = hex::encode(&temp_state.commitment_root()[..8]);
+        let pre_v1_skip = temp_state.is_v1_tree_skipped();
+        let pre_commit_count = temp_state.commitment_count();
+
         for tx in &block.transactions {
             temp_state.apply_transaction(tx);
         }
@@ -1222,22 +1220,36 @@ impl ShieldedBlockchain {
         }
         temp_state.apply_coinbase(&block.coinbase);
 
-        // v2.0.9: Commitment root validation — WARN on mismatch but don't reject yet.
-        // After fast-sync/snapshot restore, Merkle trees can diverge between nodes.
-        // We log at WARN level to track how often this happens. Once we confirm
-        // tree determinism is fixed (no mismatches in logs), we'll re-enable hard reject.
-        // TODO: Fix tree determinism after snapshot restore to re-enable hard reject.
+        // Commitment root validation — instrumented for diagnosis.
+        // Soft check: WARN on mismatch, accept block. Will be hardened once
+        // tree determinism is proven stable across all nodes.
         {
             let computed = temp_state.commitment_root();
             let expected = block.header.commitment_root;
             if computed != expected {
+                let post_pq_size = temp_state.commitment_tree_pq().size();
+                let txs_v1 = block.transactions.len();
+                let txs_v2 = block.transactions_v2.len();
+                let coinbase_commitments = if block.coinbase.has_dev_fee() { 2 } else { 1 };
+                let expected_insertions = txs_v1 + txs_v2 + coinbase_commitments;
+                let actual_insertions = post_pq_size - pre_pq_size;
                 tracing::warn!(
-                    "COMMITMENT_ROOT_MISMATCH at height {} — computed={}, expected={}, v1_skip={}, pq_count={}. Block accepted (soft check). Fix tree determinism to harden.",
+                    "COMMITMENT_ROOT_MISMATCH h={} computed={} expected={} \
+                     pre_pq=[size={},root={}] post_pq=[size={}] \
+                     v1_skip={} commit_count={} \
+                     txs_v1={} txs_v2={} coinbase_commits={} \
+                     expected_inserts={} actual_inserts={} \
+                     fast_sync_base={} fast_sync_offset={}",
                     block.coinbase.height,
                     hex::encode(&computed[..8]),
                     hex::encode(&expected[..8]),
-                    temp_state.is_v1_tree_skipped(),
-                    temp_state.commitment_tree_pq().size(),
+                    pre_pq_size, pre_pq_root,
+                    post_pq_size,
+                    pre_v1_skip, pre_commit_count,
+                    txs_v1, txs_v2, coinbase_commitments,
+                    expected_insertions, actual_insertions,
+                    self.fast_sync_base_height,
+                    self.fast_sync_commitment_offset,
                 );
             }
         }
@@ -1590,9 +1602,9 @@ impl ShieldedBlockchain {
         );
 
         if should_reorg {
-            tracing::warn!(
-                "SYNC_DEBUG: ACCEPT REORG block={} height={} fork_work={} local_work={}",
-                block_hash_hex, block_height, fork_work, self.cumulative_work
+            tracing::info!(
+                "Reorg accepted: height={} fork_work={} local_work={}",
+                block_height, fork_work, self.cumulative_work
             );
             self.reorganize_to_block(block)?;
             self.process_orphans()?;
@@ -1768,10 +1780,17 @@ impl ShieldedBlockchain {
             }
         }
 
-        tracing::warn!(
-            "SYNC_DEBUG: PROCESS_ORPHANS_DONE promoted={} remaining_orphans={} height={}",
-            promoted, self.orphans.len(), self.height()
-        );
+        if promoted > 0 {
+            tracing::info!(
+                "Orphan promotion: {} blocks promoted, {} remaining, height={}",
+                promoted, self.orphans.len(), self.height()
+            );
+        } else {
+            tracing::debug!(
+                "PROCESS_ORPHANS: 0 promoted, {} remaining, height={}",
+                self.orphans.len(), self.height()
+            );
+        }
         Ok(())
     }
 
@@ -2049,7 +2068,7 @@ impl ShieldedBlockchain {
         // New blocks will repopulate the cache via insert_block_internal.
         self.prev_block_states.clear();
 
-        tracing::info!("Reorg completee: new height {} (lru_purged={})", self.height(), lru_before);
+        tracing::info!("Reorg complete: new height {} (lru_purged={})", self.height(), lru_before);
         Ok(())
     }
 
@@ -2181,6 +2200,7 @@ impl ShieldedBlockchain {
 
         // Calculate commitment root after applying transactions
         let mut temp_state = self.state.snapshot();
+        let miner_pre_pq = temp_state.commitment_tree_pq().size();
         for tx in &transactions {
             temp_state.apply_transaction(tx);
         }
@@ -2189,6 +2209,13 @@ impl ShieldedBlockchain {
         }
         temp_state.apply_coinbase(&coinbase);
         let commitment_root = temp_state.commitment_root();
+        let miner_post_pq = temp_state.commitment_tree_pq().size();
+        tracing::debug!(
+            "Block template: h={} pq_tree=[{} -> {}] root={} fast_sync_base={} fast_sync_offset={}",
+            self.height() + 1, miner_pre_pq, miner_post_pq,
+            hex::encode(&commitment_root[..8]),
+            self.fast_sync_base_height, self.fast_sync_commitment_offset,
+        );
 
         // Nullifier root (simplified - just hash the count for now)
         let nullifier_root = {

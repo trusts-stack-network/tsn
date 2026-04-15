@@ -1,7 +1,7 @@
-//! Tests de regression automatises pour TSN
+//! Tests de regression automated pour TSN
 //!
-//! Cette suite de tests checks les invariants critiques du protocole
-//! et detecte les regressions lors des modifications du codebase.
+//! Cette suite de tests verifies les invariants critiques du protocole
+//! et detects les regressions lors des modifications du codebase.
 
 pub mod regression;
 pub mod integration;

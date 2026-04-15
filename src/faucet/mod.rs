@@ -529,13 +529,13 @@ impl FaucetService {
 
         if total_new_notes > 0 {
             info!(
-                "Faucet scan completee: found {} new notes, balance = {} TSN",
+                "Faucet scan complete: found {} new notes, balance = {} TSN",
                 total_new_notes,
                 self.balance() / 1_000_000_000
             );
         } else {
             info!(
-                "Faucet scan completee: no new notes found (scanned {} blocks)",
+                "Faucet scan complete: no new notes found (scanned {} blocks)",
                 current_height.saturating_sub(start_height) + 1
             );
         }

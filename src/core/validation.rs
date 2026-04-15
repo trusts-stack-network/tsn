@@ -111,7 +111,7 @@ impl Validator {
         &mut self.balance_validator
     }
 
-    /// Validate a completee block against the current state.
+    /// Validate a complete block against the current state.
     ///
     /// This performs comprehensive validation including:
     /// - Block header validation

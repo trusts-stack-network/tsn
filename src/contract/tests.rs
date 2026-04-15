@@ -322,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn test_call_nonexistent_contract() {
+    fn test_call_nonexistsnt_contract() {
         let (executor, _db) = setup_executor();
         let call_tx = ContractCallTransaction {
             contract_address: [0xFF; 32],
@@ -338,6 +338,6 @@ mod tests {
         };
         let result = executor.call(&call_tx, 100, 1700000000);
         assert!(matches!(result, Err(crate::contract::ContractError::ContractNotFound(_))));
-        println!("✅ Nonexistent contract rejected");
+        println!("✅ Nonexistsnt contract rejected");
     }
 }

@@ -1,7 +1,7 @@
 //! Endpoint HTTP pour exposer les metrics Prometheus
 //!
-//! Ce module provides un server HTTP dedie aux metrics,
-//! separe de l'API principale pour des raisons de security.
+//! Ce module fournit un server HTTP dedicated aux metrics,
+//! separated de l'API principale pour des raisons de security.
 
 use crate::metrics::collect_metrics;
 use axum::{
@@ -20,11 +20,11 @@ use tracing::{info, error, warn};
 /// Configuration du server de metrics
 #[derive(Debug, Clone)]
 pub struct MetricsServerConfig {
-    /// Port d'ecoute (defaut: 9090)
+    /// Port d'listening (default: 9090)
     pub port: u16,
-    /// Interface d'ecoute (defaut: 127.0.0.1 pour security)
+    /// Interface d'listening (default: 127.0.0.1 pour security)
     pub bind_address: String,
-    /// Activer CORS (defaut: false)
+    /// Enable CORS (default: false)
     pub enable_cors: bool,
 }
 
@@ -54,18 +54,18 @@ fn default_format() -> String {
     "prometheus".to_string()
 }
 
-/// Serveur HTTP pour les metrics Prometheus
+/// Server HTTP pour les metrics Prometheus
 pub struct MetricsServer {
     config: MetricsServerConfig,
 }
 
 impl MetricsServer {
-    /// Creates a nouveau server de metrics
+    /// Creates un nouveau server de metrics
     pub fn new(config: MetricsServerConfig) -> Self {
         Self { config }
     }
     
-    /// Starts the server de metrics
+    /// Starts le server de metrics
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let app = self.create_router();
         
@@ -74,7 +74,7 @@ impl MetricsServer {
         
         info!(
             bind_address = %bind_addr,
-            "Serveur de metrics TSN demarre"
+            "TSN metrics server started"
         );
         
         axum::serve(listener, app).await?;
@@ -82,14 +82,14 @@ impl MetricsServer {
         Ok(())
     }
     
-    /// Creates the routeur Axum avec tous les endpoints
+    /// Creates le routeur Axum avec tous les endpoints
     fn create_router(&self) -> Router {
         let mut router = Router::new()
             .route("/metrics", get(metrics_handler))
             .route("/health", get(health_handler))
             .route("/ready", get(readiness_handler));
         
-        // Ajouter CORS si active
+        // Add CORS if enabled
         if self.config.enable_cors {
             router = router.layer(CorsLayer::permissive());
         }
@@ -105,7 +105,7 @@ async fn metrics_handler(Query(params): Query<MetricsQuery>) -> Response {
         "json" => json_metrics_handler().await,
         _ => (
             StatusCode::BAD_REQUEST,
-            "Format non supporte. Utilisez 'prometheus' ou 'json'"
+            "Format non supported. Utilisez 'prometheus' ou 'json'"
         ).into_response(),
     }
 }
@@ -209,7 +209,7 @@ async fn health_handler() -> Response {
 
 /// Handler pour le readiness check
 async fn readiness_handler() -> Response {
-    // Check that les metrics sont collectables
+    // Verify que les metrics sont collectables
     match collect_metrics() {
         Ok(_) => {
             let ready_status = serde_json::json!({
@@ -247,7 +247,7 @@ async fn readiness_handler() -> Response {
     }
 }
 
-/// Starts the server de metrics en arriere-plan
+/// Starts le server de metrics en background
 pub async fn start_metrics_server(
     config: MetricsServerConfig
 ) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error + Send + Sync>> {

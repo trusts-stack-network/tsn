@@ -1,7 +1,7 @@
 use crate::crypto::{PublicKey, Signature};
 use thiserror::Error;
 
-// Erreur personnalisee pour les operations sur les transactions
+// Error custom pour les operations sur les transactions
 #[derive(Error, Debug)]
 enum TransactionError {
     #[error("Invalid transaction hash")]
@@ -14,7 +14,7 @@ enum TransactionError {
 pub struct Transaction {
     pub public_key: Vec<u8>,
     pub signature: Vec<u8>,
-    // Autres champs de la transaction...
+    // Autres fields de la transaction...
 }
 
 impl Transaction {

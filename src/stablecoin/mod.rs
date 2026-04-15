@@ -1,8 +1,8 @@
 // ZST — TSN Gold Stable Protocol
-// Module principal du stablecoin indexe sur l'or
+// Module principal du stablecoin indexed sur l'or
 //
-// 3 actifs: TSN (collateral) → ZST (stablecoin or) + ZRS (token de reserve)
-// Modele Djed/Zephyr: surcollateralisation 150-400%, frais dynamiques, circuit breaker
+// 3 assets: TSN (collateral) → ZST (gold stablecoin) + ZRS (reserve token)
+// Model Djed/Zephyr: surcollateralisation 150-400%, fees dynamiques, circuit breaker
 
 pub mod config;
 pub mod errors;

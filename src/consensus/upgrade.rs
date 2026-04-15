@@ -118,7 +118,7 @@ impl UpgradeManager {
                 UpgradeState::LockedIn { lock_height } => {
                     let lh = *lock_height;
                     if current_height >= lh + GRACE_PERIOD {
-                        info!("TUP: Upgrade '{}' ACTIVATED at height {} (grace period completee)",
+                        info!("TUP: Upgrade '{}' ACTIVATED at height {} (grace period complete)",
                             proposal.name, current_height);
                         self.states[i] = UpgradeState::Active {
                             activation_height: lh + GRACE_PERIOD,

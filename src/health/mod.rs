@@ -1,10 +1,10 @@
-//! Multi-level health check system for Trust Stack Network
+//! System de health checks multi-niveaux pour Trust Stack Network
 //!
-//! This module provides completee TSN node health monitoring with:
+//! This module provides comprehensive TSN node health monitoring with:
 //! - Periodic health checks for all modules (storage, network, consensus, crypto)
-//! - Metrics de latence et disponibilite
-//! - Alertes automatiques en cas de degradation
-//! - HTTP endpoint /health for external monitoring
+//! - Latency and availability metrics
+//! - Automatic alerts in case of degradation
+//! - Endpoint HTTP /health pour le monitoring externe
 
 pub mod checks;
 pub mod aggregator;
@@ -39,7 +39,7 @@ pub struct HealthCheckService {
 }
 
 impl HealthCheckService {
-    /// Creates a nouveau service de health checks
+    /// Creates un nouveau service de health checks
     pub fn new(config: HealthCheckConfig) -> Self {
         let aggregator = Arc::new(HealthAggregator::new(config.clone()));
         let reporter = Arc::new(HealthReporter::new(config.alert_channels.clone()));
@@ -63,16 +63,16 @@ impl HealthCheckService {
         }
     }
     
-    /// Starts the service de health checks
+    /// Starts the health checks service
     pub async fn start(&self) -> Result<(), HealthCheckError> {
         let mut running = self.is_running.write().await;
         if *running {
             return Ok(());
         }
         
-        info!("🩺 Starting health check service");
+        info!("🩺 Starting health checks service");
         
-        // Start l'endpoint HTTP si active
+        // Start the HTTP endpoint if enabled
         if let Some(endpoint) = &self.endpoint {
             endpoint.start().await?;
         }
@@ -81,7 +81,7 @@ impl HealthCheckService {
         self.start_health_check_loop().await;
         
         *running = true;
-        info!("✅ Service de health checks demarre");
+        info!("✅ Service de health checks started");
         
         Ok(())
     }
@@ -95,7 +95,7 @@ impl HealthCheckService {
             endpoint.stop().await;
         }
         
-        info!("🛑 Health check service stopped");
+        info!("🛑 Health checks service stopped");
     }
     
     /// Checks if the service is running
@@ -103,7 +103,7 @@ impl HealthCheckService {
         *self.is_running.read().await
     }
     
-    /// Obtient l'agregateur de sante
+    /// Gets the health aggregator
     pub fn aggregator(&self) -> Arc<HealthAggregator> {
         self.aggregator.clone()
     }
@@ -133,14 +133,14 @@ impl HealthCheckService {
                 // Execute all health checks
                 let report = aggregator.run_all_checks().await;
                 
-                // Send alerts if needed
+                // Send alerts if necessary
                 if report.has_critical_issues() {
                     if let Err(e) = reporter.send_alert(&report).await {
-                        error!("Erreur lors de l'envoi des alertes: {}", e);
+                        error!("Erreur lors de l'envoi des alerts: {}", e);
                     }
                 }
                 
-                // Status log
+                // Log du statut
                 if report.overall_status != HealthStatus::Healthy {
                     info!(
                         "Health check status: {:?} ({} issues)",
@@ -153,7 +153,7 @@ impl HealthCheckService {
     }
 }
 
-/// Health check service errors
+/// Erreurs du service de health checks
 #[derive(Debug, thiserror::Error)]
 pub enum HealthCheckError {
     #[error("Service already running")]

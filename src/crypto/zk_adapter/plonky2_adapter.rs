@@ -1,11 +1,11 @@
 //! Adaptateur Plonky2 pour la couche d'abstraction ZK
 //!
 //! Ce module encapsule l'implementation Plonky2 existante et expose
-//! l'interface unifiee ZkProofSystem.
+//! l'interface unified ZkProofSystem.
 //!
 //! ## Security Notes
 //!
-//! - Plonky2 uses FRI (Fast Reed-Solomon IOP) pour la compression
+//! - Plonky2 utilise FRI (Fast Reed-Solomon IOP) pour la compression
 //! - Security level: 128 bits post-quantum
 //! - Proof size: ~45KB pour une transaction standard (2 inputs, 2 outputs)
 //! - Verification time: ~2ms
@@ -30,22 +30,22 @@ use super::{
     ZkProof, ZkProofSystem, ZkSystemVersion, MAX_PROOF_SIZE,
 };
 
-/// Adaptateur Plonky2 implementant le trait ZkProofSystem
+/// Plonky2 adapter implementing the ZkProofSystem trait
 ///
-/// Cette structure encapsule le TransactionProver existant et provides
-/// une interface unifiee pour la generation et verification de preuves.
+/// Cette structure encapsule le TransactionProver existant et fournit
+/// une interface unified pour la generation et verification de preuves.
 pub struct Plonky2Adapter {
     /// Prover Plonky2 sous-jacent
     prover: TransactionProver,
-    /// Cache des circuits pre-compiles
+    /// Cache des circuits pre-compiled
     circuit_cache: CircuitCache,
 }
 
 impl Plonky2Adapter {
-    /// Creates a nouvel adaptateur Plonky2
+    /// Creates un nouvel adaptateur Plonky2
     ///
     /// # Errors
-    /// Retourne une error si le cache de circuits ne peut pas be initialise
+    /// Returns une error si le cache de circuits ne peut pas be initialized
     pub fn new() -> Result<Self, ZkAdapterError> {
         let prover = TransactionProver::new();
         let circuit_cache = CircuitCache::new();
@@ -56,7 +56,7 @@ impl Plonky2Adapter {
         })
     }
 
-    /// Convertit un SpendWitness generique en SpendWitnessPQ
+    /// Convertedt un SpendWitness generic en SpendWitnessPQ
     fn convert_spend_witness(witness: &SpendWitness) -> Result<SpendWitnessPQ, ZkAdapterError> {
         // Convertir le path Merkle
         let merkle_witness = MerkleWitnessPQ {
@@ -75,7 +75,7 @@ impl Plonky2Adapter {
         })
     }
 
-    /// Convertit un OutputWitness generique en OutputWitnessPQ
+    /// Convertedt un OutputWitness generic en OutputWitnessPQ
     fn convert_output_witness(witness: &OutputWitness) -> OutputWitnessPQ {
         OutputWitnessPQ {
             value: witness.value,
@@ -84,7 +84,7 @@ impl Plonky2Adapter {
         }
     }
 
-    /// Convertit les entrees publiques Plonky2 en format generique
+    /// Convertedt les entries publics Plonky2 en format generic
     fn convert_public_inputs(
         inputs: &crate::crypto::pq::proof_pq::TransactionPublicInputs,
     ) -> TransactionPublicInputs {
@@ -96,7 +96,7 @@ impl Plonky2Adapter {
         }
     }
 
-    /// Serialise une preuve Plonky2
+    /// Serializes une preuve Plonky2
     fn serialize_proof(
         proof: &ProofWithPublicInputs<F, C, D>,
     ) -> Result<Vec<u8>, ZkAdapterError> {
@@ -114,7 +114,7 @@ impl Plonky2Adapter {
         Ok(proof_bytes)
     }
 
-    /// Deserialise une preuve Plonky2
+    /// Deserializes une preuve Plonky2
     fn deserialize_proof(
         proof_bytes: &[u8],
     ) -> Result<ProofWithPublicInputs<F, C, D>, ZkAdapterError> {
@@ -131,7 +131,7 @@ impl ZkProofSystem for Plonky2Adapter {
         outputs: &[OutputWitness],
         fee: u64,
     ) -> Result<ZkProof, ZkAdapterError> {
-        // Convertir les temoins
+        // Convert les witnesses
         let spend_witnesses: Vec<SpendWitnessPQ> = spends
             .iter()
             .map(|s| Self::convert_spend_witness(s))
@@ -164,23 +164,23 @@ impl ZkProofSystem for Plonky2Adapter {
                 _ => ZkAdapterError::GenerationFailed(e.to_string()),
             })?;
 
-        // Serialize les entrees publiques
+        // Serialize les entries publics
         let public_inputs_bytes = serde_json::to_vec(&plonky2_proof.public_inputs)
             .map_err(|e| ZkAdapterError::SerializationError(e.to_string()))?;
 
-        // Construire la preuve generique
+        // Construire la preuve generic
         let mut proof = ZkProof::new(
             ZkSystemVersion::Plonky2,
             plonky2_proof.proof_bytes,
             public_inputs_bytes,
         );
 
-        // Ajouter les metadata
+        // Add metadata
         proof.metadata = ProofMetadata {
             proof_size: plonky2_proof.size(),
             constraint_count: Some(self.estimate_constraints(spends.len(), outputs.len())),
             circuit_version: 1, // Version du circuit Plonky2
-            generation_time_ms: None, // Sera rempli par l'appelant si mesure
+            generation_time_ms: None, // Sera rempli par l'appelant si measured
         };
 
         Ok(proof)
@@ -191,7 +191,7 @@ impl ZkProofSystem for Plonky2Adapter {
         proof: &ZkProof,
         public_inputs: &TransactionPublicInputs,
     ) -> Result<bool, ZkAdapterError> {
-        // Check that c'est bien une preuve Plonky2
+        // Verify que c'est bien une preuve Plonky2
         if proof.version != ZkSystemVersion::Plonky2 {
             return Err(ZkAdapterError::UnsupportedSystem(format!(
                 "Expected Plonky2 proof, got {:?}",
@@ -202,12 +202,12 @@ impl ZkProofSystem for Plonky2Adapter {
         // Deserialize la preuve
         let plonky2_proof = Self::deserialize_proof(&proof.proof_data)?;
 
-        // Deserialize les entrees publiques attendues
+        // Deserialize les entries publics attendues
         let expected_inputs: crate::crypto::pq::proof_pq::TransactionPublicInputs =
             serde_json::from_slice(&proof.public_inputs)
                 .map_err(|e| ZkAdapterError::SerializationError(e.to_string()))?;
 
-        // Check that les entrees publiques correspondent
+        // Verify que les entries publics matchesent
         let provided_inputs = crate::crypto::pq::proof_pq::TransactionPublicInputs {
             merkle_roots: public_inputs.merkle_roots.clone(),
             nullifiers: public_inputs.nullifiers.clone(),
@@ -221,11 +221,11 @@ impl ZkProofSystem for Plonky2Adapter {
             ));
         }
 
-        // Determiner la forme du circuit a partir des entrees
+        // Determine la forme du circuit to partir des entries
         let num_spends = public_inputs.nullifiers.len();
         let num_outputs = public_inputs.note_commitments.len();
 
-        // Retrieve le circuit correspondant
+        // Retrieve le circuit matchesant
         let circuit = self
             .circuit_cache
             .get(num_spends, num_outputs)
@@ -238,11 +238,11 @@ impl ZkProofSystem for Plonky2Adapter {
 
         let (circuit_data, _) = circuit.as_ref();
 
-        // Check the preuve
+        // Verify la preuve
         match circuit_data.verify(plonky2_proof) {
             Ok(_) => Ok(true),
             Err(e) => {
-                // Log l'error pour debugging mais retourner false
+                // Log l'erreur pour debugging mais retourner false
                 tracing::debug!("Plonky2 verification failed: {}", e);
                 Ok(false)
             }
@@ -254,19 +254,19 @@ impl ZkProofSystem for Plonky2Adapter {
     }
 
     fn max_spends(&self) -> usize {
-        // Plonky2 supporte jusqu'a 8 spends par transaction
-        // Cette limite est definie par le cache de circuits
+        // Plonky2 supporte up to 8 spends par transaction
+        // Cette limite est definede par le cache de circuits
         8
     }
 
     fn max_outputs(&self) -> usize {
-        // Plonky2 supporte jusqu'a 8 outputs par transaction
+        // Plonky2 supporte up to 8 outputs par transaction
         8
     }
 
     fn preload_circuit_params(&mut self) -> Result<(), ZkAdapterError> {
-        // Precharger les circuits couramment utilises
-        // Cela accelere la first generation de preuve
+        // Preloads les circuits couramment used
+        // Cela accelerates la first generation de preuve
         let common_shapes = vec![
             (1, 1), // Simple transfer
             (1, 2), // Transfer with change
@@ -291,7 +291,7 @@ impl Plonky2Adapter {
         num_spends: usize,
         num_outputs: usize,
     ) -> usize {
-        // Estimation basee sur l'analyse du circuit:
+        // Estimation based sur l'analyse du circuit:
         // - Spend: ~5000 contraintes (Poseidon hash + Merkle path)
         // - Output: ~1000 contraintes (Poseidon hash)
         // - Balance check: ~100 contraintes
@@ -304,8 +304,8 @@ impl Plonky2Adapter {
     }
 }
 
-// Implementation by default pour CircuitCache if needed
-// Note: Cela suppose que CircuitCache a une methode `new()`
+// Implementation by default pour CircuitCache si necessary
+// Note: Cela suppose que CircuitCache a une method `new()`
 // Si ce n'est pas le cas, il faudra adapter
 
 #[cfg(test)]
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn test_proof_validation() {
-        // Create a preuve factice
+        // Create une preuve factice
         let proof = ZkProof::new(
             ZkSystemVersion::Plonky2,
             vec![1, 2, 3, 4, 5],

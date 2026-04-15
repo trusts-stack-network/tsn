@@ -1,14 +1,14 @@
-//! Utilitaires constant-time pour prevenir les timing attacks
+//! Utilitaires constant-time pour prevent les timing attacks
 //! 
-//! ATTENTION: Ce code uses des barrieres memory pour preventsr 
+//! ATTENTION: Ce code utilise des barriers memory pour preventsr 
 //! l'optimiseur de supprimer la constant-time.
 
 use core::mem::MaybeUninit;
 use zeroize::Zeroize;
 
 /// Compare deux slices en temps constant
-/// Retourne true si egaux, false sinon
-/// Temps d'execution independant du contenu (depend uniquement de la longueur)
+/// Returns true si equal, false sinon
+/// Temps d'execution independsant du contenu (depends only de la longur)
 pub fn secure_compare(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -16,7 +16,7 @@ pub fn secure_compare(a: &[u8], b: &[u8]) -> bool {
     
     let mut result: u8 = 0;
     for (x, y) in a.iter().zip(b.iter()) {
-        // XOR: 0 si egaux, non-zero si differents
+        // XOR: 0 si equal, non-zero si different
         result |= x ^ y;
     }
     

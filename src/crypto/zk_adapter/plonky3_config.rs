@@ -2,20 +2,20 @@
 //!
 //! Goldilocks field, Poseidon2 hash (Horizen Labs constants), FRI PCS.
 //!
-//! Ce module definit les type aliases et la fonction de construction pour
-//! la configuration STARK complete utilisee par le prover/verifier Plonky3.
+//! Ce module defines les type aliases et la fonction de construction pour
+//! la configuration STARK completee used par le prover/verifier Plonky3.
 //!
 //! ## Parameters de security
 //!
 //! - `log_blowup = 2` → blowup factor = 4
 //! - `num_queries = 40`
 //! - `proof_of_work_bits = 8`
-//! - Security conjecturee: log_blowup × num_queries + pow_bits = 2×40 + 8 = 88 bits
-//!   (conservateur ; la security reelle est plus elevee avec le field size)
+//! - Security conjectured: log_blowup × num_queries + pow_bits = 2×40 + 8 = 88 bits
+//!   (conservateur ; la security real est plus high avec le field size)
 //!
 //! ## Types
 //!
-//! La stack complete est :
+//! La stack completee est :
 //! ```text
 //! Goldilocks → Poseidon2 (width=8, HL constants) → PaddingFreeSponge
 //!   → TruncatedPermutation → MerkleTreeMmcs → ExtensionMmcs → TwoAdicFriPcs → StarkConfig
@@ -80,7 +80,7 @@ pub type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 /// Fiat-Shamir challenger: duplex sponge, width=8, rate=4
 pub type MyChallenger = DuplexChallenger<Val, Perm, 8, 4>;
 
-/// Configuration STARK complete pour TSN
+/// Configuration STARK completee pour TSN
 pub type TsnStarkConfig = StarkConfig<MyPcs, Challenge, MyChallenger>;
 
 // =============================================================================
@@ -105,12 +105,12 @@ fn make_perm() -> Perm {
 /// - `num_queries = 40`
 /// - `query_proof_of_work_bits = 8`
 /// - `commit_proof_of_work_bits = 0`
-/// - `log_final_poly_len = 0` (polynome final de degre 1)
+/// - `log_final_poly_len = 0` (polynomial final de degree 1)
 ///
-/// La security conjecturee (ethSTARK) est :
+/// La security conjectured (ethSTARK) est :
 ///   log_blowup × num_queries + query_pow_bits = 2 × 40 + 8 = 88 bits
 ///
-/// Combinee avec la taille du field Goldilocks (64 bits), cela provides
+/// Combined avec la taille du field Goldilocks (64 bits), cela fournit
 /// une security largement suffisante pour un system post-quantique.
 pub fn build_stark_config() -> TsnStarkConfig {
     // 1. Permutation Poseidon2

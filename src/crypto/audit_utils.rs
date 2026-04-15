@@ -1,5 +1,5 @@
 //! Utilitaires d'audit et detection de side channels
-//! To inclure dans le crate crypto existing
+//! To be included in the existing crypto crate
 
 use core::ptr::{read_volatile, write_volatile};
 use subtle::ConstantTimeEq;
@@ -12,19 +12,19 @@ pub fn ct_compare(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
-/// Zeroize securise empechant l'optimisation du compilateur
+/// Zeroize secure preventing l'optimisation du compilateur
 pub fn secure_zero(buf: &mut [u8]) {
     for i in 0..buf.len() {
         unsafe {
             write_volatile(buf.as_mut_ptr().add(i), 0u8);
         }
     }
-    // Barriere memory pour preventsr le reordering
+    // Barrier memory pour preventsr le reordering
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 }
 
-/// Detecte potentiellement une fuite via cache side channel
-/// en mesurant le temps d'acces memory
+/// Detects potentiellement une fuite via cache side channel
+/// en mesurant le temps d'access memory
 pub fn detect_cache_timing_leak<F, T>(f: F) -> (T, u64)
 where 
     F: FnOnce() -> T,
@@ -36,8 +36,8 @@ where
     (result, elapsed)
 }
 
-/// Checks that le temps d'execution ne depend pas des data secrets
-/// Usage: statistical analysis sur plusieurs executions
+/// Verifies que le temps d'execution ne depends pas des data secret
+/// Usage: statistical analysis sur multiple executions
 pub fn constant_time_check<F, G, T>(
     secret_gen: F,
     operation: G,
@@ -58,10 +58,10 @@ where
     timings
 }
 
-/// Validation canonique pour avoid les attaques par point non-canonique (Curve25519, etc.)
+/// Validation canonique pour avoidr les attaques par point non-canonique (Curve25519, etc.)
 pub fn validate_canonical_point(point: &[u8; 32]) -> bool {
     // Verification que le point est canonique (pas de representation alternative)
-    // Pour Curve25519: checksr que le bit de poids fort est 0
+    // Pour Curve25519: verify que le bit de poids fort est 0
     point[31] & 0x80 == 0
 }
 
@@ -76,7 +76,7 @@ pub fn padding_oracle_check(ciphertext: &[u8], block_size: usize) -> Result<bool
         return Ok(false); // Padding invalid
     }
     
-    // Verification en temps constant recommandee dans l'implementation reelle
+    // Verification en temps constant recommended dans l'implementation real
     let padding_start = ciphertext.len() - last_byte;
     let valid = ciphertext[padding_start..].iter().all(|&b| b == last_byte as u8);
     

@@ -1,10 +1,10 @@
-//! Pool de memory optimise pour les validations cryptographiques
+//! Pool de memory optimized pour les validations cryptographiques
 //!
-//! Gere des buffers reutilisables pour avoid les allocations repetees
+//! Manages des buffers reusable pour avoidr les allocations repeateds
 //! dans les hot paths de validation de signatures et preuves ZK.
 //!
-//! Base sur des techniques de memory pooling pour reduire la pression
-//! sur l'allocateur et ameliorer les performances des validations crypto.
+//! Based sur des techniques de memory pooling pour reduce la pression
+//! sur l'allocateur et improve les performances des validations crypto.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
@@ -20,7 +20,7 @@ pub const MAX_POOL_SIZE: usize = 128;
 /// Duration de vie maximale d'un buffer dans le pool (5 minutes)
 pub const MAX_BUFFER_AGE: Duration = Duration::from_secs(300);
 
-/// Buffer poole avec metadata de gestion
+/// Buffer pooled avec metadata de gestion
 #[derive(Debug)]
 pub struct PooledBuffer {
     data: Vec<u8>,
@@ -30,7 +30,7 @@ pub struct PooledBuffer {
 }
 
 impl PooledBuffer {
-    /// Creates a nouveau buffer poole
+    /// Creates un nouveau buffer pooled
     fn new(size: usize) -> Self {
         let now = Instant::now();
         Self {
@@ -41,14 +41,14 @@ impl PooledBuffer {
         }
     }
 
-    /// Retourne une reference mutable aux data
+    /// Returns une reference mutable aux data
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.last_used = Instant::now();
         self.usage_count += 1;
         &mut self.data
     }
 
-    /// Retourne une reference aux data
+    /// Returns une reference aux data
     pub fn as_slice(&self) -> &[u8] {
         &self.data
     }
@@ -58,21 +58,21 @@ impl PooledBuffer {
         self.data.len()
     }
 
-    /// Checks if le buffer est vide
+    /// Verifies si le buffer est vide
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 
     /// Efface le contenu du buffer (security)
     pub fn clear(&mut self) {
-        // Effacement securise des data sensibles
+        // Effacement secure des data sensibles
         for byte in &mut self.data {
             *byte = 0;
         }
         self.last_used = Instant::now();
     }
 
-    /// Checks if le buffer est trop old
+    /// Verifies si le buffer est trop ancien
     fn is_expired(&self) -> bool {
         self.created_at.elapsed() > MAX_BUFFER_AGE
     }
@@ -85,7 +85,7 @@ impl PooledBuffer {
 
 impl Drop for PooledBuffer {
     fn drop(&mut self) {
-        // Effacement securise lors de la destruction
+        // Effacement secure lors de la destruction
         self.clear();
     }
 }
@@ -107,7 +107,7 @@ struct PoolStats {
 }
 
 impl MemoryPool {
-    /// Creates a nouveau pool de memory
+    /// Creates un nouveau pool de memory
     pub fn new(buffer_size: usize, max_size: usize) -> Self {
         Self {
             buffers: VecDeque::with_capacity(max_size),
@@ -121,16 +121,16 @@ impl MemoryPool {
     pub fn get_buffer(&mut self) -> PooledBuffer {
         self.stats.total_allocations += 1;
 
-        // Cleans up the buffers expires
+        // Nettoie les buffers expireds
         self.cleanup_expired();
 
-        // Essaie de reusesr un buffer existant
+        // Essaie de reuse un buffer existant
         if let Some(mut buffer) = self.buffers.pop_front() {
-            buffer.clear(); // Security : efface les data precedentes
+            buffer.clear(); // Security : efface les data previouss
             self.stats.cache_hits += 1;
             buffer
         } else {
-            // Creates a nouveau buffer
+            // Creates un nouveau buffer
             self.stats.cache_misses += 1;
             PooledBuffer::new(self.buffer_size)
         }
@@ -141,10 +141,10 @@ impl MemoryPool {
         if self.buffers.len() < self.max_size && !buffer.is_expired() {
             self.buffers.push_back(buffer);
         }
-        // Sinon le buffer sera detruit automatiquement
+        // Sinon le buffer sera destroyed automatically
     }
 
-    /// Cleans up the buffers expires
+    /// Nettoie les buffers expireds
     fn cleanup_expired(&mut self) {
         let initial_len = self.buffers.len();
         self.buffers.retain(|buffer| !buffer.is_expired());
@@ -170,13 +170,13 @@ impl MemoryPool {
         }
     }
 
-    /// Vide completement le pool
+    /// Vide completeely le pool
     pub fn clear(&mut self) {
         self.buffers.clear();
     }
 }
 
-/// Resume des statistiques du pool
+/// Summary des statistiques du pool
 #[derive(Debug, Clone)]
 pub struct PoolStatsSummary {
     pub total_allocations: u64,
@@ -203,7 +203,7 @@ impl fmt::Display for PoolStatsSummary {
     }
 }
 
-/// Gestionnaire global de pools de memory thread-safe
+/// Manager global de pools de memory thread-safe
 pub struct MemoryPoolManager {
     signature_pool: Arc<Mutex<MemoryPool>>,
     proof_pool: Arc<Mutex<MemoryPool>>,
@@ -220,7 +220,7 @@ struct GlobalStats {
 }
 
 impl MemoryPoolManager {
-    /// Creates a nouveau manager de pools
+    /// Creates un nouveau gestionnaire de pools
     pub fn new() -> Self {
         Self {
             signature_pool: Arc::new(Mutex::new(MemoryPool::new(DEFAULT_BUFFER_SIZE, MAX_POOL_SIZE))),
@@ -290,7 +290,7 @@ impl MemoryPoolManager {
         Ok(())
     }
 
-    /// Retourne un resume des statistiques globales
+    /// Returns un summary des statistiques globales
     pub fn summary(&self) -> Result<MemoryPoolSummary, String> {
         let sig_stats = {
             let pool = self.signature_pool.lock().map_err(|_| "Pool lock failed")?;
@@ -342,7 +342,7 @@ impl Default for MemoryPoolManager {
     }
 }
 
-/// Resume complete des pools de memory
+/// Summary complete des pools de memory
 #[derive(Debug, Clone)]
 pub struct MemoryPoolSummary {
     pub signature_pool: PoolStatsSummary,
@@ -364,12 +364,12 @@ impl fmt::Display for MemoryPoolSummary {
     }
 }
 
-// Instance globale du manager de pools
+// Instance globale du gestionnaire de pools
 lazy_static::lazy_static! {
     static ref GLOBAL_POOL_MANAGER: MemoryPoolManager = MemoryPoolManager::new();
 }
 
-/// Acces a l'instance globale du manager de pools
+/// Access to the global pool manager instance
 pub fn global_pool_manager() -> &'static MemoryPoolManager {
     &GLOBAL_POOL_MANAGER
 }
@@ -405,7 +405,7 @@ mod tests {
         // Le retourne au pool
         pool.return_buffer(buffer1);
         
-        // Obtient un nouveau buffer (devrait be reutilise)
+        // Gets un nouveau buffer (should be reused)
         let buffer2 = pool.get_buffer();
         assert_eq!(buffer2.len(), 1024);
         
@@ -422,7 +422,7 @@ mod tests {
         
         let mut handles = vec![];
         
-        // Lance plusieurs threads qui usesnt les pools
+        // Lance multiple threads qui utilisent les pools
         for _ in 0..4 {
             let manager_clone = Arc::clone(&manager_arc);
             let handle = thread::spawn(move || {
@@ -442,7 +442,7 @@ mod tests {
             handle.join().unwrap();
         }
         
-        // Checks thes statistiques
+        // Verifies les statistiques
         let summary = manager_arc.summary().unwrap();
         assert!(summary.total_operations > 0);
     }
@@ -451,9 +451,9 @@ mod tests {
     fn test_buffer_expiration() {
         let mut pool = MemoryPool::new(1024, 10);
         
-        // Creates a buffer avec un age artificiel
+        // Creates un buffer avec un age artificiel
         let mut buffer = PooledBuffer::new(1024);
-        buffer.created_at = Instant::now() - Duration::from_secs(400); // Plus old que MAX_BUFFER_AGE
+        buffer.created_at = Instant::now() - Duration::from_secs(400); // Plus ancien que MAX_BUFFER_AGE
         
         pool.return_buffer(buffer);
         

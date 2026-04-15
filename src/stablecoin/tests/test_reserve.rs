@@ -71,7 +71,7 @@ fn test_ratio_exactly_150_percent() {
     let mut state = default_state();
     state.reserve_tsn = 95_000 * ATOMIC_UNIT;
     let ratio = e.calculate_ratio(&state).unwrap();
-    // On s'attend a ~15000 bps (150%)
+    // On s'attend to ~15000 bps (150%)
     assert!(ratio >= 14_900 && ratio <= 15_100, "ratio ~150%: got {}", ratio);
 }
 
@@ -97,9 +97,9 @@ fn test_zrs_price_healthy() {
     // equity = reserve_value_xau - liabilities = (400k / 63.33) - 1000 ≈ 5316 XAU
     // prix_zrs_tsn = equity_xau * tsn_per_xau / MICRO_UNIT / supply_zrs
     // = 5316 * 10^8 * 63_333_333 / 10^6 / (5000 * 10^8)
-    // Les divisions entieres perdent de la precision sur de grands nombres
+    // Les divisions entire perdent de la precision sur de grands nombres
     assert!(price > 0, "price should be > 0: {}", price);
-    // Verifions juste que c'est raisonnable (quelques dizaines de TSN)
+    // Let's verify juste que c'est raisonnable (quelques dizaines de TSN)
     assert!(price < 100 * ATOMIC_UNIT, "price too high: {}", price);
 }
 
@@ -116,7 +116,7 @@ fn test_zrs_price_no_supply_returns_1_tsn() {
 fn test_zrs_price_undercollateralized_is_zero() {
     let e = engine();
     let mut state = default_state();
-    state.reserve_tsn = 10_000 * ATOMIC_UNIT; // Tres sous-collateralise
+    state.reserve_tsn = 10_000 * ATOMIC_UNIT; // Very sous-collateralized
     state.supply_zst = 10_000 * ATOMIC_UNIT;  // Beaucoup de ZST
     let price = e.calculate_zrs_price(&state).unwrap();
     assert_eq!(price, 0);
@@ -130,13 +130,13 @@ fn test_fee_normal() {
     // 0.30% de 100 TSN = 0.3 TSN
     let fee = e.calculate_fee_amount(100 * ATOMIC_UNIT, 30).unwrap();
     // 100 * 10^8 * 30 / 10000 = 30 * 10^6 = 0.3 TSN
-    assert_eq!(fee, 30_000_000); // 0.3 TSN en unites atomiques
+    assert_eq!(fee, 30_000_000); // 0.3 TSN in atomic units
 }
 
 #[test]
 fn test_fee_rounds_up() {
     let e = engine();
-    // Petit montant: 1 unite atomique * 30 bps = 0.003 → arrondi a 1
+    // Petit montant: 1 atomic unit * 30 bps = 0.003 → rounded to 1
     let fee = e.calculate_fee_amount(1, 30).unwrap();
     assert_eq!(fee, 1); // Arrondi vers le haut
 }
@@ -153,7 +153,7 @@ fn test_stress_fee_normal_ratio() {
 fn test_stress_fee_moderate_stress() {
     let e = engine();
     let mut state = default_state();
-    // Mettre le ratio a ~250% (entre 200% et 300%)
+    // Mettre le ratio to ~250% (entre 200% et 300%)
     state.reserve_tsn = 158_500 * ATOMIC_UNIT;
     let ratio = e.calculate_ratio(&state).unwrap();
     assert!(ratio >= 24_000 && ratio <= 26_000, "ratio ~250%: {}", ratio);
@@ -223,7 +223,7 @@ fn test_conversion_roundtrip() {
     let price = 63_333_333u64;
     let zst = e.tsn_to_zst(original_tsn, price).unwrap();
     let tsn_back = e.zst_to_tsn(zst, price).unwrap();
-    // Legere perte possible due aux arrondis, mais devrait be very proche
+    // Light perte possible due aux roundeds, mais should be very proche
     let diff = if original_tsn > tsn_back {
         original_tsn - tsn_back
     } else {
@@ -305,10 +305,10 @@ fn test_simulate_mint_zrs_normal() {
 fn test_simulate_mint_zrs_ratio_too_high() {
     let e = engine();
     let mut state = default_state();
-    // Reserve enorme → ratio already au-dessus de 800%
+    // Reserve enormous → ratio already au-dessus de 800%
     state.reserve_tsn = 10_000_000 * ATOMIC_UNIT;
     let ratio = e.calculate_ratio(&state).unwrap();
-    // Ajuster pour que le mint pousse au-dela de 800%
+    // Ajuster pour que le mint pousse beyond de 800%
     if ratio > 80_000 {
         assert!(matches!(
             e.simulate_mint_zrs(&state, 100_000 * ATOMIC_UNIT),
@@ -396,9 +396,9 @@ fn test_cooldown_cumulative() {
     let e = engine();
     let mut state = default_state();
     let max_burn = state.supply_zst * 500 / 10_000;
-    // Deja brule 40% du max
+    // Already burned 40% du max
     state.current_block_burned_zst = max_burn * 4 / 5;
-    // Essayer de bruler encore 30% → total 70% > 100% du max
+    // Essayer de burn encore 30% → total 70% > 100% du max
     let extra = max_burn * 3 / 10;
     assert!(matches!(
         e.check_cooldown(&state, extra),
@@ -421,7 +421,7 @@ fn test_can_mint_zst_would_break_ratio() {
     let mut state = default_state();
     // Reserve juste au-dessus de 150%
     state.reserve_tsn = 95_500 * ATOMIC_UNIT;
-    // Un gros mint devrait fail
+    // Un gros mint should failsr
     assert!(!e.can_mint_zst(&state, 1_000_000 * ATOMIC_UNIT).unwrap());
 }
 
@@ -438,7 +438,7 @@ fn test_can_burn_zrs_healthy() {
 fn test_very_small_amounts() {
     let e = engine();
     let state = default_state();
-    // 1 unite atomique
+    // 1 atomic unit
     let result = e.simulate_mint_zst(&state, 1).unwrap();
     assert_eq!(result.amount_in, 1);
     // Le fee arrondi vers le haut peut consommer tout
@@ -455,7 +455,7 @@ fn test_first_ever_mint_zst() {
         confidence: PriceConfidence::Medium,
     };
     // Seed la reserve avec du TSN (bootstrap du protocole)
-    // Il faut assez de reserve pour que le ratio reste >= 150% after mint
+    // Il faut enough de reserve pour que le ratio reste >= 150% after mint
     state.reserve_tsn = 500_000 * ATOMIC_UNIT;
     // Premier mint: pas de ZST en circulation, ratio = infini
     let result = e.simulate_mint_zst(&state, 1000 * ATOMIC_UNIT).unwrap();

@@ -491,7 +491,7 @@ async fn p2p_event_loop(
                             let is_new = identified_peers.insert(peer_id);
                             let in_backoff = outdated_backoff.contains_key(&peer_id);
                             if is_new && !in_backoff {
-                                info!("P2P: identified peer {} — {}",
+                                debug!("P2P: identified peer {} — {}",
                                     &peer_id.to_string()[..16],
                                     info.protocol_version,
                                 );

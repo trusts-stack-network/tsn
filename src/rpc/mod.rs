@@ -13,7 +13,7 @@ pub mod server;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// Contexte RPC partage
+/// Contexte RPC shared
 #[derive(Clone)]
 pub struct RpcContext {
     /// Gestionnaire de keys API
@@ -23,11 +23,11 @@ pub struct RpcContext {
 }
 
 impl RpcContext {
-    /// Creates a nouveau contexte RPC
+    /// Creates un nouveau contexte RPC
     pub fn new() -> Self {
         let mut auth_manager = auth::ApiKeyManager::new();
         
-        // Create keys by default (a remplacer par une config en production)
+        // Create des keys by default (to remplacer par une config en production)
         let _ = auth_manager.create_key("default-read", vec![auth::Permission::Read]);
         let _ = auth_manager.create_key("default-write", vec![auth::Permission::Read, auth::Permission::Write]);
         let _ = auth_manager.create_key("default-admin", vec![auth::Permission::Read, auth::Permission::Write, auth::Permission::Admin]);

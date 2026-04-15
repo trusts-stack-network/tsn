@@ -17,7 +17,7 @@ pub fn parse_addr(s: &str) -> Result<SocketAddr> {
     s.parse().map_err(|_| anyhow!("Adresse invalid : {}", s))
 }
 
-/// Timestamp current en secondes depuis epoch
+/// Timestamp actuel en secondes depuis epoch
 pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -30,7 +30,7 @@ pub fn b64_encode(bytes: &[u8]) -> String {
     general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Decode base64 url-safe sans padding
+/// Decodes base64 url-safe sans padding
 pub fn b64_decode(s: &str) -> Result<Vec<u8>> {
     general_purpose::URL_SAFE_NO_PAD
         .decode(s)
@@ -79,6 +79,6 @@ mod tests {
         let mut rl = RateLimiter::new(10.0, 1.0);
         assert!(rl.allow(5.0));
         assert!(rl.allow(5.0));
-        assert!(!rl.allow(1.0)); // epuise
+        assert!(!rl.allow(1.0)); // exhausted
     }
 }

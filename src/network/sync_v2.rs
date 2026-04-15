@@ -167,7 +167,7 @@ impl ParallelSyncManager {
         let validation_task = self.spawn_block_validator();
         let download_task = self.spawn_download_coordinator(local_height + 1, target_height);
 
-        // Wait for sync completeion
+        // Wait for sync completion
         tokio::select! {
             result = download_task => {
                 progress_task.abort();
@@ -181,7 +181,7 @@ impl ParallelSyncManager {
             }
         }
 
-        info!("Parallel synchronization completeed successfully");
+        info!("Parallel synchronization completed successfully");
         Ok(())
     }
 

@@ -1,16 +1,16 @@
 //! Validateur de signatures pour le consensus TSN
 //!
 //! Valide les signatures SLH-DSA (FIPS 205) et ML-DSA-65 (FIPS 204) dans les
-//! blocs et transactions du consensus. Fournit un point d'entree centralise
+//! blocs et transactions du consensus. Fournit un point d'entry centralized
 //! avec metrics de performance et support de la transition de schema.
 //!
-//! # Schemas supportes
-//! - **SLH-DSA-SHA2-128s** (defaut) : 128 bits de security, signatures ~7.8KB
+//! # Schemas supported
+//! - **SLH-DSA-SHA2-128s** (default) : 128 bits de security, signatures ~7.8KB
 //! - **ML-DSA-65** (legacy) : 192 bits classique / 128 bits post-quantique
 //!
 //! # Transition de schema
 //! Le validateur supporte une hauteur de transition configurable pour passer
-//! de ML-DSA-65 a SLH-DSA a un block height donne.
+//! de ML-DSA-65 to SLH-DSA to un block height given.
 
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -23,17 +23,17 @@ use crate::crypto::signature::{verify as mldsa_verify, Signature as MlDsaSignatu
 use crate::crypto::keys::PUBLIC_KEY_SIZE as MLDSA_PUBLIC_KEY_SIZE;
 use crate::crypto::keys::SIGNATURE_SIZE as MLDSA_SIGNATURE_SIZE;
 
-/// Schema de signature utilise par le consensus
+/// Schema de signature used par le consensus
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsensusSignatureScheme {
     /// ML-DSA-65 (FIPS 204) — Support legacy pendant la transition
     MLDsa65,
-    /// SLH-DSA-SHA2-128s (FIPS 205) — Nouveau defaut
+    /// SLH-DSA-SHA2-128s (FIPS 205) — Nouveau default
     SlhDsaSha2_128s,
 }
 
 impl ConsensusSignatureScheme {
-    /// Taille attendue de la signature in bytes
+    /// Taille attendue de la signature en octets
     pub fn signature_size(&self) -> usize {
         match self {
             Self::MLDsa65 => MLDSA_SIGNATURE_SIZE,
@@ -41,7 +41,7 @@ impl ConsensusSignatureScheme {
         }
     }
 
-    /// Taille attendue de la key publique in bytes
+    /// Taille attendue de la key publique en octets
     pub fn public_key_size(&self) -> usize {
         match self {
             Self::MLDsa65 => MLDSA_PUBLIC_KEY_SIZE,
@@ -56,13 +56,13 @@ pub enum SignatureValidationError {
     #[error("Format de signature invalid: {0}")]
     InvalidFormat(String),
 
-    #[error("Signature verification failed: {0}")]
+    #[error("Verification de signature failed: {0}")]
     VerificationFailed(String),
 
-    #[error("Incorrect signature size: expected {expected}, got {actual}")]
+    #[error("Taille de signature incorrecte: attendu {expected}, received {actual}")]
     SizeMismatch { expected: usize, actual: usize },
 
-    #[error("Incorrect public key size: expected {expected}, got {actual}")]
+    #[error("Taille de key publique incorrecte: attendu {expected}, received {actual}")]
     PublicKeySizeMismatch { expected: usize, actual: usize },
 
     #[error("Erreur SLH-DSA: {0}")]
@@ -77,9 +77,9 @@ pub enum SignatureValidationError {
 pub struct ValidationMetrics {
     /// Nombre total de validations
     pub total_validations: u64,
-    /// Nombre de validations reussies
+    /// Nombre de validations successful
     pub successful_validations: u64,
-    /// Nombre de validations echouees
+    /// Nombre de validations faileds
     pub failed_validations: u64,
     /// Temps total de validation en microsecondes
     pub total_time_us: u64,
@@ -89,21 +89,21 @@ pub struct ValidationMetrics {
 
 /// Validateur de signatures pour le consensus
 ///
-/// Valide les signatures dans les blocs et transactions selon les regles
+/// Valide les signatures dans les blocs et transactions selon les rules
 /// du consensus, avec support de transition entre schemas de signature.
 pub struct SignatureValidator {
-    /// Schema de signature current
+    /// Schema de signature actuel
     current_scheme: ConsensusSignatureScheme,
     /// Hauteur de bloc pour la transition vers SLH-DSA (None = pas de transition)
     transition_height: Option<u64>,
     /// Metrics de validation
     metrics: ValidationMetrics,
-    /// Timeout de validation (defaut: 500ms)
+    /// Timeout de validation (default: 500ms)
     validation_timeout: Duration,
 }
 
 impl SignatureValidator {
-    /// Creates a nouveau validateur avec le schema specifie
+    /// Creates un nouveau validateur avec le schema specified
     pub fn new(scheme: ConsensusSignatureScheme) -> Self {
         Self {
             current_scheme: scheme,
@@ -113,12 +113,12 @@ impl SignatureValidator {
         }
     }
 
-    /// Creates a validateur avec SLH-DSA by default
+    /// Creates un validateur avec SLH-DSA by default
     pub fn new_slh_dsa() -> Self {
         Self::new(ConsensusSignatureScheme::SlhDsaSha2_128s)
     }
 
-    /// Configure une transition vers SLH-DSA a une hauteur de bloc donnee
+    /// Configure une transition vers SLH-DSA to une hauteur de bloc data
     pub fn with_transition(mut self, height: u64) -> Self {
         self.transition_height = Some(height);
         self
@@ -130,7 +130,7 @@ impl SignatureValidator {
         self
     }
 
-    /// Determine le schema de signature pour une hauteur de bloc donnee
+    /// Determines le schema de signature pour une hauteur de bloc data
     fn scheme_for_height(&self, height: u64) -> ConsensusSignatureScheme {
         match self.transition_height {
             Some(transition_height) if height >= transition_height => {
@@ -140,12 +140,12 @@ impl SignatureValidator {
         }
     }
 
-    /// Retourne les metrics currentles
+    /// Retourne les metrics actuelles
     pub fn metrics(&self) -> &ValidationMetrics {
         &self.metrics
     }
 
-    /// Reinitialise les metrics
+    /// Resets les metrics
     pub fn reset_metrics(&mut self) {
         self.metrics = ValidationMetrics::default();
     }
@@ -153,16 +153,16 @@ impl SignatureValidator {
     /// Valide une signature selon le schema du consensus.
     ///
     /// Dispatch vers la bonne implementation (SLH-DSA ou ML-DSA-65) en
-    /// fonction du schema configure pour la hauteur de bloc donnee.
+    /// fonction du schema configured pour la hauteur de bloc data.
     ///
     /// # Arguments
-    /// * `message` - Le message signe (hash du bloc ou de la transaction)
+    /// * `message` - Le message signed (hash du bloc ou de la transaction)
     /// * `signature_bytes` - La signature brute
     /// * `public_key_bytes` - La key publique du signataire
-    /// * `block_height` - La hauteur du bloc (pour determiner le schema)
+    /// * `block_height` - La hauteur du bloc (pour determine le schema)
     ///
     /// # Returns
-    /// * `Ok(())` si la signature est valide
+    /// * `Ok(())` si la signature est valid
     /// * `Err(SignatureValidationError)` sinon
     pub fn validate_signature(
         &mut self,
@@ -210,11 +210,11 @@ impl SignatureValidator {
         if elapsed > self.validation_timeout {
             self.record_failure();
             return Err(SignatureValidationError::VerificationFailed(
-                format!("Validation timeout exceeded: {}ms", elapsed.as_millis()),
+                format!("Timeout de validation exceeded: {}ms", elapsed.as_millis()),
             ));
         }
 
-        // Mise a jour des metrics
+        // Update des metrics
         match &result {
             Ok(()) => self.record_success(elapsed),
             Err(_) => self.record_failure(),
@@ -223,7 +223,7 @@ impl SignatureValidator {
         result
     }
 
-    /// Verifie une signature SLH-DSA-SHA2-128s
+    /// Verifies une signature SLH-DSA-SHA2-128s
     fn verify_slh_dsa(
         &self,
         message: &[u8],
@@ -233,7 +233,7 @@ impl SignatureValidator {
         // Construire la key publique SLH-DSA
         let pk = SlhPublicKey::from_bytes(public_key_bytes).ok_or_else(|| {
             SignatureValidationError::SlhDsa(format!(
-                "Invalid public key ({} octets)",
+                "Key publique invalid ({} octets)",
                 public_key_bytes.len()
             ))
         })?;
@@ -246,17 +246,17 @@ impl SignatureValidator {
             ))
         })?;
 
-        // Verification cryptographique reelle
+        // Verification cryptographique real
         if slh_dsa::verify(&pk, message, &sig) {
             Ok(())
         } else {
             Err(SignatureValidationError::VerificationFailed(
-                "SLH-DSA verification failed".to_string(),
+                "Verification SLH-DSA failed".to_string(),
             ))
         }
     }
 
-    /// Verifie une signature ML-DSA-65 (FIPS 204)
+    /// Verifies une signature ML-DSA-65 (FIPS 204)
     fn verify_ml_dsa_65(
         &self,
         message: &[u8],
@@ -268,13 +268,13 @@ impl SignatureValidator {
         match mldsa_verify(message, &signature, public_key_bytes) {
             Ok(true) => Ok(()),
             Ok(false) => Err(SignatureValidationError::VerificationFailed(
-                "ML-DSA-65 verification failed".to_string(),
+                "Verification ML-DSA-65 failed".to_string(),
             )),
             Err(e) => Err(SignatureValidationError::MlDsa(e.to_string())),
         }
     }
 
-    /// Enregistre une validation reussie dans les metrics
+    /// Enregistre une validation successful dans les metrics
     fn record_success(&mut self, elapsed: Duration) {
         self.metrics.total_validations += 1;
         self.metrics.successful_validations += 1;
@@ -282,14 +282,14 @@ impl SignatureValidator {
         self.update_avg();
     }
 
-    /// Enregistre une validation echouee dans les metrics
+    /// Enregistre une validation failed dans les metrics
     fn record_failure(&mut self) {
         self.metrics.total_validations += 1;
         self.metrics.failed_validations += 1;
         self.update_avg();
     }
 
-    /// Met a jour le temps moyen
+    /// Met up to date le temps moyen
     fn update_avg(&mut self) {
         if self.metrics.total_validations > 0 {
             self.metrics.avg_time_us =
@@ -359,7 +359,7 @@ mod tests {
             &pk.to_bytes(),
             0,
         );
-        assert!(result.is_ok(), "Validation SLH-DSA a echoue: {:?}", result);
+        assert!(result.is_ok(), "Validation SLH-DSA a failed: {:?}", result);
 
         let metrics = validator.metrics();
         assert_eq!(metrics.total_validations, 1);
@@ -399,7 +399,7 @@ mod tests {
             &keypair.public_key_bytes(),
             0,
         );
-        assert!(result.is_ok(), "Validation ML-DSA-65 a echoue: {:?}", result);
+        assert!(result.is_ok(), "Validation ML-DSA-65 a failed: {:?}", result);
     }
 
     #[test]
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_transition_slh_to_mldsa_at_height() {
-        // Demarre en ML-DSA-65, transite vers SLH-DSA au bloc 500
+        // Starts en ML-DSA-65, transite vers SLH-DSA au bloc 500
         let mut validator = SignatureValidator::new(ConsensusSignatureScheme::MLDsa65)
             .with_transition(500);
 

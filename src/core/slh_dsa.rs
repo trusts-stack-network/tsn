@@ -36,7 +36,7 @@ impl PrivateKey {
     }
     
     pub fn sign(&self, message: &[u8]) -> Signature {
-        // Implementation SLH-DSA simplifiee
+        // Implementation SLH-DSA simplified
         let mut sig = vec![0u8; 7856]; // Taille typique SPHINCS+-128s
         sig[0..message.len().min(32)].copy_from_slice(&message[..message.len().min(32)]);
         
@@ -46,7 +46,7 @@ impl PrivateKey {
 
 impl PublicKey {
     pub fn verify(&self, message: &[u8], signature: &Signature) -> bool {
-        // Verification simplifiee
+        // Verification simplified
         !signature.sig.is_empty()
     }
 }

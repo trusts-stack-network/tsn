@@ -1,6 +1,6 @@
-//! Instrumentation specialisee pour le consensus TSN
+//! Instrumentation specialized pour le consensus TSN
 //!
-//! Ce module provides des wrappers et utilitaires pour instrumenter
+//! Ce module fournit des wrappers et utilitaires pour instrumenter
 //! facilement les operations critiques du consensus.
 
 use crate::metrics::{CONSENSUS_METRICS, measure_duration, inc_counter, set_gauge};
@@ -23,25 +23,25 @@ impl InstrumentedBlockValidator {
     {
         let start_time = Instant::now();
         
-        // Incrementer le compteur de blocs in progress de validation
+        // Increment le compteur de blocs in progress de validation
         CONSENSUS_METRICS.blocks_validating_current.inc();
         
         debug!(
             block_hash = %hex::encode(&block.header.hash),
             block_height = block.header.height,
-            "Debut validation bloc"
+            "Start validation bloc"
         );
         
-        // Executer la validation avec mesure de duration
+        // Execute la validation avec mesure de duration
         let result = measure_duration!(
             CONSENSUS_METRICS.block_validation_duration,
             validator_fn(block)
         );
         
-        // Decrementer le compteur de blocs in progress
+        // Decrement le compteur de blocs in progress
         CONSENSUS_METRICS.blocks_validating_current.dec();
         
-        // Enregistrer le result
+        // Register le result
         match &result {
             Ok(_) => {
                 CONSENSUS_METRICS.blocks_validated_total.inc();
@@ -49,7 +49,7 @@ impl InstrumentedBlockValidator {
                     block_hash = %hex::encode(&block.header.hash),
                     block_height = block.header.height,
                     duration_ms = start_time.elapsed().as_millis(),
-                    "Bloc valide successfully"
+                    "Bloc validated avec success"
                 );
             }
             Err(e) => {
@@ -59,7 +59,7 @@ impl InstrumentedBlockValidator {
                     block_height = block.header.height,
                     duration_ms = start_time.elapsed().as_millis(),
                     error = ?e,
-                    "Bloc rejete lors de la validation"
+                    "Bloc rejected lors de la validation"
                 );
             }
         }
@@ -67,7 +67,7 @@ impl InstrumentedBlockValidator {
         result
     }
     
-    /// Instrumente specifiquement la validation des commitments
+    /// Instrumente specificment la validation des commitments
     pub async fn validate_commitment_root<F, R, E>(
         block: &Block,
         commitment_root: &[u8],
@@ -87,7 +87,7 @@ impl InstrumentedBlockValidator {
                 debug!(
                     block_hash = %hex::encode(&block.header.hash),
                     commitment_root = %hex::encode(commitment_root),
-                    "Commitment root valide"
+                    "Commitment root validated"
                 );
             }
             Err(e) => {
@@ -96,7 +96,7 @@ impl InstrumentedBlockValidator {
                     block_hash = %hex::encode(&block.header.hash),
                     commitment_root = %hex::encode(commitment_root),
                     error = ?e,
-                    "ERROR: Invalid commitment root detectee"
+                    "ERREUR: Invalid commitment root detectede"
                 );
             }
         }
@@ -128,7 +128,7 @@ impl InstrumentedPoWValidator {
                 debug!(
                     block_hash = %hex::encode(&block_header.hash),
                     difficulty = block_header.difficulty,
-                    "PoW valide"
+                    "PoW validated"
                 );
             }
             Err(e) => {
@@ -145,10 +145,10 @@ impl InstrumentedPoWValidator {
         result
     }
     
-    /// Met a jour la difficulty du network
+    /// Met up to date la difficulty du network
     pub fn update_network_difficulty(new_difficulty: f64) {
         CONSENSUS_METRICS.network_difficulty.set(new_difficulty);
-        info!(difficulty = new_difficulty, "Difficulte network update");
+        info!(difficulty = new_difficulty, "Difficulty network update");
     }
 }
 
@@ -156,38 +156,38 @@ impl InstrumentedPoWValidator {
 pub struct InstrumentedChainManager;
 
 impl InstrumentedChainManager {
-    /// Met a jour la hauteur de la chain
+    /// Met up to date la hauteur de la chain
     pub fn update_chain_height(height: u64) {
         CONSENSUS_METRICS.chain_height.set(height as i64);
         debug!(height = height, "Hauteur de chain update");
     }
     
-    /// Met a jour le travail cumulatif
+    /// Met up to date le travail cumulatif
     pub fn update_cumulative_work(work: f64) {
         CONSENSUS_METRICS.cumulative_work.set(work);
-        debug!(work = work, "Travail cumulatif mis a jour");
+        debug!(work = work, "Travail cumulatif updated");
     }
     
-    /// Enregistre une reorganisation de chain
+    /// Enregistre une reorganization de chain
     pub fn record_chain_reorg(depth: u64) {
         CONSENSUS_METRICS.chain_reorgs_total.inc();
         CONSENSUS_METRICS.last_reorg_depth.set(depth as i64);
         warn!(
             depth = depth,
-            "Reorganisation de chain detectee"
+            "Reorganization de chain detectede"
         );
     }
     
     /// Enregistre la detection d'un fork
     pub fn record_fork_detected() {
         CONSENSUS_METRICS.forks_detected_total.inc();
-        info!("Fork detecte dans la chain");
+        info!("Fork detected dans la chain");
     }
     
-    /// Met a jour le nombre de blocs orphan
+    /// Met up to date le nombre de blocs orphelins
     pub fn update_orphan_blocks_count(count: u64) {
         CONSENSUS_METRICS.orphan_blocks_count.set(count as i64);
-        debug!(count = count, "Nombre de blocs orphan mis a jour");
+        debug!(count = count, "Nombre de blocs orphelins updated");
     }
     
     /// Enregistre l'intervalle entre blocs
@@ -197,7 +197,7 @@ impl InstrumentedChainManager {
             CONSENSUS_METRICS.block_interval.observe(interval);
             debug!(
                 interval_seconds = interval,
-                "Intervalle entre blocs enregistre"
+                "Intervalle entre blocs registered"
             );
         }
     }
@@ -226,7 +226,7 @@ impl InstrumentedZKValidator {
                 CONSENSUS_METRICS.zk_proofs_validated_total.inc();
                 debug!(
                     proof_size = proof_data.len(),
-                    "Preuve ZK validee successfully"
+                    "Preuve ZK validatede avec success"
                 );
             }
             Err(e) => {
@@ -246,7 +246,7 @@ impl InstrumentedZKValidator {
 pub struct InstrumentedMempool;
 
 impl InstrumentedMempool {
-    /// Met a jour la taille du mempool
+    /// Met up to date la taille du mempool
     pub fn update_mempool_size(size: usize) {
         CONSENSUS_METRICS.mempool_size.set(size as i64);
         debug!(size = size, "Taille mempool update");
@@ -257,9 +257,9 @@ impl InstrumentedMempool {
 pub struct SystemMetricsCollector;
 
 impl SystemMetricsCollector {
-    /// Met a jour l'utilisation memory du consensus
+    /// Met up to date l'utilisation memory du consensus
     pub fn update_consensus_memory_usage() {
-        // Estimation basique - a ameliorer avec des mesures reelles
+        // Estimation basique - to improve avec des mesures reals
         let memory_usage = Self::estimate_memory_usage();
         CONSENSUS_METRICS.consensus_memory_usage.set(memory_usage);
         debug!(memory_bytes = memory_usage, "Utilisation memory update");
@@ -267,8 +267,8 @@ impl SystemMetricsCollector {
     
     /// Estime l'utilisation memory (placeholder)
     fn estimate_memory_usage() -> f64 {
-        // TODO: Implementer une mesure reelle de la memory
-        // Pour l'instant, returns une valeur factice
+        // TODO: Implement une mesure real de la memory
+        // Pour l'instant, retourne une valeur factice
         1024.0 * 1024.0 // 1MB
     }
 }
@@ -277,7 +277,7 @@ impl SystemMetricsCollector {
 pub struct CommitmentRootDebugger;
 
 impl CommitmentRootDebugger {
-    /// Log detaille pour diagnostiquer les errors de commitment root
+    /// Log detailed pour diagnostiquer les errors de commitment root
     pub fn log_commitment_validation_details(
         block_hash: &[u8],
         expected_root: &[u8],
@@ -292,7 +292,7 @@ impl CommitmentRootDebugger {
             "DIAGNOSTIC: Details de l'error commitment root"
         );
         
-        // Log each element du path Merkle pour debug
+        // Log chaque element du path Merkle pour debug
         for (i, path_element) in merkle_path.iter().enumerate() {
             debug!(
                 path_index = i,
@@ -301,7 +301,7 @@ impl CommitmentRootDebugger {
             );
         }
         
-        // Incrementer le compteur d'errors specialise
+        // Increment le compteur d'errors specialized
         CONSENSUS_METRICS.invalid_commitment_root_errors.inc();
     }
 }

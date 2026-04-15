@@ -49,8 +49,8 @@ pub enum ProtocolError {
     Deserialization(String),
     #[error("Invalid timestamp: {0}")]
     InvalidTimestamp(String),
-    #[error("Incompletee message: need {needed} more bytes")]
-    IncompleteeMessage { needed: usize },
+    #[error("Incomplete message: need {needed} more bytes")]
+    IncompleteMessage { needed: usize },
     #[error("Invalid payload length: {0}")]
     InvalidPayloadLength(usize),
 }

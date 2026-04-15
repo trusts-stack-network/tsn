@@ -2,7 +2,7 @@
 //!
 //! Ce module expose les metrics keys du node TSN :
 //! - Block height (hauteur de la blockchain)
-//! - Peer count (nombre de pairs connectes)
+//! - Peer count (nombre de peers connected)
 //! - Mempool size (taille du mempool)
 //! - P2P latency (latence network peer-to-peer)
 //! - Mining stats (statistiques de minage)
@@ -26,9 +26,9 @@ pub struct TsnMetrics {
     pub registry: Registry,
     
     // === METRICS BLOCKCHAIN ===
-    /// Hauteur currentle de la blockchain
+    /// Hauteur actuelle de la blockchain
     pub block_height: Gauge,
-    /// Nombre total de blocs mines
+    /// Nombre total de blocs mined
     pub blocks_total: Counter,
     /// Temps de traitement des blocs (en secondes)
     pub block_processing_duration: Histogram,
@@ -36,33 +36,33 @@ pub struct TsnMetrics {
     pub block_size_bytes: Histogram,
     
     // === METRICS NETWORK ===
-    /// Nombre de pairs connectes
+    /// Nombre de peers connected
     pub peer_count: Gauge,
     /// Latence P2P moyenne (en millisecondes)
     pub p2p_latency_ms: Histogram,
-    /// Nombre de messages P2P recus
+    /// Nombre de messages P2P receiveds
     pub p2p_messages_received: Counter,
-    /// Nombre de messages P2P envoyes
+    /// Nombre de messages P2P sents
     pub p2p_messages_sent: Counter,
     /// Erreurs de synchronisation network
     pub sync_errors_total: Counter,
     
     // === METRICS MEMPOOL ===
-    /// Taille currentle du mempool (nombre de transactions)
+    /// Taille actuelle du mempool (nombre de transactions)
     pub mempool_size: Gauge,
     /// Transactions V1 en attente
     pub mempool_v1_transactions: Gauge,
     /// Transactions V2 en attente
     pub mempool_v2_transactions: Gauge,
-    /// Transactions rejetees (invalids)
+    /// Transactions rejectedes (invalids)
     pub mempool_rejected_transactions: Counter,
     
     // === METRICS MINING ===
-    /// Hashrate current (hashes par seconde)
+    /// Hashrate actuel (hashes par seconde)
     pub mining_hashrate_hps: Gauge,
     /// Nombre de tentatives de minage
     pub mining_attempts_total: Counter,
-    /// Blocs mines successfully
+    /// Blocs mined avec success
     pub mining_blocks_found: Counter,
     /// Temps de minage du dernier bloc (en millisecondes)
     pub mining_last_block_time_ms: Gauge,
@@ -70,7 +70,7 @@ pub struct TsnMetrics {
     // === METRICS TRANSACTIONS ===
     /// Transactions soumises au total
     pub transactions_submitted_total: Counter,
-    /// Transactions confirmees
+    /// Transactions confirmed
     pub transactions_confirmed_total: Counter,
     /// Frais de transaction moyens
     pub transaction_fees_avg: Histogram,
@@ -87,19 +87,19 @@ pub struct TsnMetrics {
 }
 
 impl TsnMetrics {
-    /// Creates a nouvelle instance des metrics TSN
+    /// Creates une new instance des metrics TSN
     pub fn new() -> PrometheusResult<Self> {
         let registry = Registry::new();
         
         // === METRICS BLOCKCHAIN ===
         let block_height = Gauge::with_opts(Opts::new(
             "tsn_block_height",
-            "Hauteur currentle de la blockchain TSN"
+            "Hauteur actuelle de la blockchain TSN"
         ))?;
         
         let blocks_total = Counter::with_opts(Opts::new(
             "tsn_blocks_total",
-            "Nombre total de blocs mines"
+            "Nombre total de blocs mined"
         ))?;
         
         let block_processing_duration = Histogram::with_opts(HistogramOpts::new(
@@ -115,7 +115,7 @@ impl TsnMetrics {
         // === METRICS NETWORK ===
         let peer_count = Gauge::with_opts(Opts::new(
             "tsn_peer_count",
-            "Nombre de pairs connectes"
+            "Nombre de peers connected"
         ))?;
         
         let p2p_latency_ms = Histogram::with_opts(HistogramOpts::new(
@@ -125,12 +125,12 @@ impl TsnMetrics {
         
         let p2p_messages_received = Counter::with_opts(Opts::new(
             "tsn_p2p_messages_received_total",
-            "Nombre de messages P2P recus"
+            "Nombre de messages P2P receiveds"
         ))?;
         
         let p2p_messages_sent = Counter::with_opts(Opts::new(
             "tsn_p2p_messages_sent_total",
-            "Nombre de messages P2P envoyes"
+            "Nombre de messages P2P sents"
         ))?;
         
         let sync_errors_total = Counter::with_opts(Opts::new(
@@ -141,7 +141,7 @@ impl TsnMetrics {
         // === METRICS MEMPOOL ===
         let mempool_size = Gauge::with_opts(Opts::new(
             "tsn_mempool_size",
-            "Taille currentle du mempool (nombre de transactions)"
+            "Taille actuelle du mempool (nombre de transactions)"
         ))?;
         
         let mempool_v1_transactions = Gauge::with_opts(Opts::new(
@@ -156,13 +156,13 @@ impl TsnMetrics {
         
         let mempool_rejected_transactions = Counter::with_opts(Opts::new(
             "tsn_mempool_rejected_transactions_total",
-            "Transactions rejetees (invalids)"
+            "Transactions rejectedes (invalids)"
         ))?;
         
         // === METRICS MINING ===
         let mining_hashrate_hps = Gauge::with_opts(Opts::new(
             "tsn_mining_hashrate_hps",
-            "Hashrate current en hashes par seconde"
+            "Hashrate actuel en hashes par seconde"
         ))?;
         
         let mining_attempts_total = Counter::with_opts(Opts::new(
@@ -172,7 +172,7 @@ impl TsnMetrics {
         
         let mining_blocks_found = Counter::with_opts(Opts::new(
             "tsn_mining_blocks_found_total",
-            "Blocs mines successfully"
+            "Blocs mined avec success"
         ))?;
         
         let mining_last_block_time_ms = Gauge::with_opts(Opts::new(
@@ -188,7 +188,7 @@ impl TsnMetrics {
         
         let transactions_confirmed_total = Counter::with_opts(Opts::new(
             "tsn_transactions_confirmed_total",
-            "Transactions confirmees"
+            "Transactions confirmed"
         ))?;
         
         let transaction_fees_avg = Histogram::with_opts(HistogramOpts::new(
@@ -217,7 +217,7 @@ impl TsnMetrics {
             "Taille de la base of data en bytes"
         ))?;
         
-        // Enregistrer toutes les metrics
+        // Register toutes les metrics
         registry.register(Box::new(block_height.clone()))?;
         registry.register(Box::new(blocks_total.clone()))?;
         registry.register(Box::new(block_processing_duration.clone()))?;
@@ -277,10 +277,10 @@ impl TsnMetrics {
         })
     }
     
-    /// Met a jour les metrics avec l'state current du node
+    /// Met up to date les metrics avec l'state actuel du node
     ///
-    /// Note: les unwrap() sur RwLock::read() sont intentionnels — un mutex poisonne
-    /// signifie qu'un thread a panique en modifiant l'state, et la propagation est correcte.
+    /// Note: les unwrap() sur RwLock::read() sont intentionnels — un mutex poisoned
+    /// signifie qu'un thread a panicked en modifiant l'state, et la propagation est correcte.
     pub fn update_metrics(&self, state: &AppState, start_time: Instant) {
         // === METRICS BLOCKCHAIN ===
         {
@@ -339,27 +339,27 @@ impl TsnMetrics {
         Ok(String::from_utf8(buffer)?)
     }
     
-    /// Enregistre une latence P2P mesuree
+    /// Enregistre une latence P2P measured
     pub fn record_p2p_latency(&self, latency_ms: f64) {
         self.p2p_latency_ms.observe(latency_ms);
     }
     
-    /// Enregistre un message P2P recu
+    /// Enregistre un message P2P received
     pub fn record_p2p_message_received(&self) {
         self.p2p_messages_received.inc();
     }
     
-    /// Enregistre un message P2P envoye
+    /// Enregistre un message P2P sent
     pub fn record_p2p_message_sent(&self) {
         self.p2p_messages_sent.inc();
     }
     
-    /// Enregistre une error de synchronisation
+    /// Enregistre une erreur de synchronisation
     pub fn record_sync_error(&self) {
         self.sync_errors_total.inc();
     }
     
-    /// Enregistre une transaction rejetee
+    /// Enregistre une transaction rejectede
     pub fn record_rejected_transaction(&self) {
         self.mempool_rejected_transactions.inc();
     }
@@ -369,12 +369,12 @@ impl TsnMetrics {
         self.transactions_submitted_total.inc();
     }
     
-    /// Enregistre une transaction confirmee
+    /// Enregistre une transaction confirmed
     pub fn record_transaction_confirmed(&self) {
         self.transactions_confirmed_total.inc();
     }
     
-    /// Enregistre les frais d'une transaction
+    /// Enregistre les fees d'une transaction
     pub fn record_transaction_fee(&self, fee: u64) {
         self.transaction_fees_avg.observe(fee as f64);
     }
@@ -389,20 +389,20 @@ impl TsnMetrics {
         self.block_size_bytes.observe(size_bytes as f64);
     }
     
-    /// Enregistre un bloc mine
+    /// Enregistre un bloc mined
     pub fn record_block_mined(&self) {
         self.mining_blocks_found.inc();
     }
 }
 
-/// Service de monitoring qui met a jour les metrics periodicment
+/// Service de monitoring qui met up to date les metrics periodically
 pub struct MonitoringService {
     metrics: Arc<TsnMetrics>,
     start_time: Instant,
 }
 
 impl MonitoringService {
-    /// Creates a nouveau service de monitoring
+    /// Creates un nouveau service de monitoring
     pub fn new(metrics: Arc<TsnMetrics>) -> Self {
         Self {
             metrics,
@@ -412,9 +412,9 @@ impl MonitoringService {
     
     /// Lance le service de monitoring avec update periodic
     pub async fn start(&self, state: Arc<AppState>) {
-        let mut interval = interval(Duration::from_secs(30)); // Mise a jour toutes les 30 secondes
+        let mut interval = interval(Duration::from_secs(30)); // Update toutes les 30 secondes
         
-        info!("Service de monitoring TSN demarre - update toutes les 30 secondes");
+        info!("Service de monitoring TSN started - update toutes les 30 secondes");
         
         loop {
             interval.tick().await;
@@ -423,20 +423,20 @@ impl MonitoringService {
                 self.metrics.update_metrics(&state, self.start_time);
             }) {
                 Ok(_) => {
-                    // Mise a jour reussie
+                    // Update successful
                 }
                 Err(e) => {
-                    error!("Erreur lors de la update des metrics: {:?}", e);
+                    error!("Error lors de la update des metrics: {:?}", e);
                 }
             }
         }
     }
 }
 
-/// Initializes the system de monitoring Prometheus
+/// Initialise le system de monitoring Prometheus
 pub fn init_monitoring() -> Result<Arc<TsnMetrics>, Box<dyn std::error::Error>> {
     let metrics = TsnMetrics::new()?;
-    info!("System de monitoring Prometheus initialise");
+    info!("System de monitoring Prometheus initialized");
     Ok(Arc::new(metrics))
 }
 

@@ -7,8 +7,8 @@
 //! Security :
 //! - Width = 3 (2:1 compression)
 //! - Nombre de rounds partiels = 56
-//! - Nombre de rounds completes = 8
-//! - S-box : x^5 sur GF(p) ou p est l'ordre du scalar field de BN254
+//! - Nombre de rounds complets = 8
+//! - S-box : x^5 sur GF(p) where p est l'ordre du scalar field de BN254
 //!
 //! References :
 //! - https://eprint.iacr.org/2023/323.pdf
@@ -28,7 +28,7 @@ mod test_vectors;
 pub struct Poseidon2Params {
     pub t: usize,       // width (nombre de words dans l'state)
     pub d: u64,         // exposant S-box (x^d)
-    pub rounds_f: usize, // nombre de rounds completes
+    pub rounds_f: usize, // nombre de rounds complets
     pub rounds_p: usize, // nombre de rounds partiels
     pub round_keys: Vec<Vec<F>>,
     pub mds_matrix: Vec<Vec<F>>,
@@ -42,12 +42,12 @@ impl Default for Poseidon2Params {
 }
 
 impl Poseidon2Params {
-    /// Generates thes parameters de Poseidon2
+    /// Generates les parameters de Poseidon2
     ///
     /// # Arguments
     /// * `t` - width (nombre de words dans l'state)
     /// * `d` - exposant S-box
-    /// * `rounds_f` - nombre de rounds completes
+    /// * `rounds_f` - nombre de rounds complets
     /// * `rounds_p` - nombre de rounds partiels
     pub fn new(t: usize, d: u64, rounds_f: usize, rounds_p: usize) -> Self {
         let mut params = Self {
@@ -70,7 +70,7 @@ impl Poseidon2Params {
 
     fn generate_round_keys(&mut self) {
         // Generation deterministic des round keys
-        // Base sur un seed fixe pour la reproductibilite
+        // Based sur un seed fixe pour la reproducibility
         let seed = b"poseidon2_tsn_v1_128bit";
         let mut rng = rand::rngs::StdRng::from_seed(*seed);
         
@@ -88,10 +88,10 @@ impl Poseidon2Params {
     }
 
     fn generate_mds_matrix(&mut self) {
-        // Matrice MDS optimisee pour Poseidon2
+        // Matrice MDS optimized pour Poseidon2
         self.mds_matrix = vec![vec![F::zero(); self.t]; self.t];
         
-        // Construction d'une matrice circulante optimisee
+        // Construction d'une matrice circulante optimized
         for i in 0..self.t {
             for j in 0..self.t {
                 let idx = (i + j) % self.t;
@@ -110,7 +110,7 @@ pub struct Poseidon2State {
 }
 
 impl Poseidon2State {
-    /// Creates a nouvel state Poseidon2
+    /// Creates un nouvel state Poseidon2
     pub fn new(params: Poseidon2Params) -> Self {
         Self {
             state: vec![F::zero(); params.t],
@@ -119,7 +119,7 @@ impl Poseidon2State {
         }
     }
 
-    /// Ajoute un element a l'state (constant-time)
+    /// Adds un element to l'state (constant-time)
     #[inline]
     pub fn absorb(&mut self, value: F) {
         self.state[0].add_assign(&value);
@@ -141,7 +141,7 @@ impl Poseidon2State {
         self.state[idx] = res;
     }
 
-    /// Application de la couche lineaire externe (matrice MDS)
+    /// Application de la couche linear externe (matrice MDS)
     #[inline]
     fn linear_layer(&mut self) {
         let mut new_state = vec![F::zero(); self.params.t];
@@ -157,7 +157,7 @@ impl Poseidon2State {
         self.state = new_state;
     }
 
-    /// Round complete (toutes les S-box + linear layer)
+    /// Round complet (toutes les S-box + linear layer)
     #[inline]
     fn full_round(&mut self) {
         // AddRoundKeys
@@ -176,7 +176,7 @@ impl Poseidon2State {
         self.round += 1;
     }
 
-    /// Round partiel (une seule S-box + linear layer)
+    /// Round partiel (une only S-box + linear layer)
     #[inline]
     fn partial_round(&mut self) {
         // AddRoundKeys
@@ -184,7 +184,7 @@ impl Poseidon2State {
             self.state[i].add_assign(&self.params.round_keys[self.round][i]);
         }
         
-        // Une seule S-box
+        // Une only S-box
         self.sbox(0);
         
         // Linear layer
@@ -193,9 +193,9 @@ impl Poseidon2State {
         self.round += 1;
     }
 
-    /// Permutation complete Poseidon2
+    /// Permutation completee Poseidon2
     pub fn permute(&mut self) {
-        // Rounds completes initiaux
+        // Rounds complets initiaux
         for _ in 0..(self.params.rounds_f / 2) {
             self.full_round();
         }
@@ -205,7 +205,7 @@ impl Poseidon2State {
             self.partial_round();
         }
         
-        // Rounds completes finaux
+        // Rounds complets finaux
         for _ in 0..(self.params.rounds_f / 2) {
             self.full_round();
         }
@@ -223,27 +223,27 @@ pub struct Poseidon2 {
 }
 
 impl Poseidon2 {
-    /// Creates a nouveau hash Poseidon2 avec parameters by default
+    /// Creates un nouveau hash Poseidon2 avec parameters by default
     pub fn new() -> Self {
         Self {
             state: Poseidon2State::new(Poseidon2Params::default()),
         }
     }
 
-    /// Creates a nouveau hash avec des parameters personnalises
+    /// Creates un nouveau hash avec des parameters custom
     pub fn with_params(params: Poseidon2Params) -> Self {
         Self {
             state: Poseidon2State::new(params),
         }
     }
 
-    /// Absorbe un element de champ
+    /// Absorbs a field element
     pub fn update(&mut self, value: F) -> &mut Self {
         self.state.absorb(value);
         self
     }
 
-    /// Absorbe plusieurs elements
+    /// Absorbs multiple elements
     pub fn update_all(&mut self, values: &[F]) -> &mut Self {
         for value in values {
             self.update(*value);
@@ -251,7 +251,7 @@ impl Poseidon2 {
         self
     }
 
-    /// Finalise le hash et retourne le result
+    /// Finalise le hash et returns le result
     pub fn finalize(self) -> F {
         self.state.permute();
         self.state.squeeze()
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_poseidon2_different_inputs() {
-        // Des inputs differents doivent produire des outputs differents
+        // Des inputs different doivent produire des outputs different
         let input1 = F::from(42);
         let input2 = F::from(43);
         
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_poseidon2_test_vectors() {
-        // Verifie contre les vecteurs de test du papier
+        // Verifies contre les vecteurs de test du papier
         let test_vectors = test_vectors::get_test_vectors();
         
         for (input, expected) in test_vectors {
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_constant_time() {
-        // Checks that l'implementation est constant-time
+        // Verifies que l'implementation est constant-time
         let input1 = F::from(42);
         let input2 = F::from(43);
         
@@ -349,24 +349,24 @@ mod tests {
         let _hash2 = Poseidon2::hash_single(input2);
         let duration2 = start.elapsed();
         
-        // Les temps doivent be similaires (a la variance pres)
+        // Les temps doivent be similaires (to la variance near)
         let ratio = duration1.as_nanos() as f64 / duration2.as_nanos() as f64;
         assert!(ratio > 0.8 && ratio < 1.25, "Timing variance too high: {}", ratio);
     }
 
     #[test]
     fn test_zeroize() {
-        // Checks that les secrets sont correctement effaces
+        // Verifies que les secrets sont correctly erased
         let mut hasher = Poseidon2::new();
         hasher.update(F::from(42));
         
-        // Le state interne devrait be efface quand le hasher est drop
+        // Le state interne should be erased quand le hasher est drop
         drop(hasher);
         
-        // En production, on usesrait zeroize() explicitement
-        // Ici on checks juste que la compilation fonctionne
+        // En production, on utiliserait zeroize() explicitement
+        // Ici on verifies juste que la compilation fonctionne
     }
 }
 
-// Alias de type pour le champ utilise (BN254 scalar field)
+// Alias de type pour le champ used (BN254 scalar field)
 type F = halo2_proofs::arithmetic::Field;

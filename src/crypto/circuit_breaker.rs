@@ -1,8 +1,8 @@
-//! Circuit breaker pour operations cryptographiques couteuses
+//! Circuit breaker for expensive cryptographic operations
 //!
-//! Protege contre les attaques DoS cryptographiques en limitant automatiquement
-//! les operations intensives (generation de preuves ZK, verification de signatures,
-//! construction d'arbres de Merkle).
+//! Protects against cryptographic DoS attacks by automatically limiting
+//! intensive operations (ZK proof generation, signature verification,
+//! Merkle tree construction).
 //!
 //! References:
 //! - Martin Fowler, "CircuitBreaker" (2014)
@@ -15,27 +15,27 @@ use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Types d'operations cryptographiques surveillees
+/// Types of monitored cryptographic operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CryptoOperation {
-    /// Generation de preuve ZK Halo2 (very couteuse)
+    /// ZK Halo2 proof generation (very expensive)
     Halo2ProofGeneration,
-    /// Verification de preuve ZK Halo2 (couteuse)
+    /// ZK Halo2 proof verification (expensive)
     Halo2ProofVerification,
-    /// Signature ML-DSA-65 (moderement couteuse)
+    /// ML-DSA-65 signature (moderately expensive)
     MlDsaSignature,
-    /// Verification signature ML-DSA-65 (moderement couteuse)
+    /// ML-DSA-65 signature verification (moderately expensive)
     MlDsaVerification,
-    /// Construction arbre de Merkle (couteuse pour gros arbres)
+    /// Merkle tree construction (expensive for large trees)
     MerkleTreeConstruction,
-    /// Generation de path Merkle (moderement couteuse)
+    /// Merkle path generation (moderately expensive)
     MerklePathGeneration,
-    /// Hash Poseidon2 (peu couteuse mais peut be spammee)
+    /// Poseidon2 hash (inexpensive but can be spammed)
     Poseidon2Hash,
 }
 
 impl CryptoOperation {
-    /// Cout relatif de l'operation (1-10, 10 = very couteux)
+    /// Relative cost of the operation (1-10, 10 = very expensive)
     pub fn cost_weight(&self) -> u32 {
         match self {
             Self::Halo2ProofGeneration => 10,
@@ -48,7 +48,7 @@ impl CryptoOperation {
         }
     }
 
-    /// Timeout maximum recommande pour cette operation
+    /// Timeout maximum recommended pour cette operation
     pub fn max_timeout(&self) -> Duration {
         match self {
             Self::Halo2ProofGeneration => Duration::from_secs(30),
@@ -65,26 +65,26 @@ impl CryptoOperation {
 /// State du circuit breaker
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CircuitState {
-    /// Circuit ferme - operations autorisees
+    /// Circuit closed - operations authorizeds
     Closed,
-    /// Circuit ouvert - operations bloquees
+    /// Circuit ouvert - operations blockedes
     Open,
-    /// Circuit semi-ouvert - test de recuperation
+    /// Circuit semi-ouvert - test de retrieval
     HalfOpen,
 }
 
 /// Statistiques d'une operation cryptographique
 #[derive(Debug, Clone)]
 struct OperationStats {
-    /// Nombre total d'operations tentees
+    /// Nombre total d'operations attempted
     total_attempts: u64,
-    /// Nombre d'echecs (timeout, error)
+    /// Nombre d'failures (timeout, erreur)
     failures: u64,
     /// Temps de response recents (sliding window)
     recent_times: VecDeque<Duration>,
-    /// Derniere tentative
+    /// Last tentative
     last_attempt: Option<Instant>,
-    /// Derniere reussite
+    /// Last success
     last_success: Option<Instant>,
 }
 
@@ -101,7 +101,7 @@ impl Default for OperationStats {
 }
 
 impl OperationStats {
-    /// Taux d'echec recent (sur les 100 dernieres operations)
+    /// Taux d'failure recent (sur les 100 lasts operations)
     fn failure_rate(&self) -> f64 {
         if self.total_attempts == 0 {
             return 0.0;
@@ -112,7 +112,7 @@ impl OperationStats {
             return 0.0;
         }
         
-        // Approximation: on considere que les echecs sont distribues uniformement
+        // Approximation: on considers que les failures sont distributed uniformly
         let recent_failures = (self.failures * recent_count) / self.total_attempts.max(1);
         recent_failures as f64 / recent_count as f64
     }
@@ -120,7 +120,7 @@ impl OperationStats {
     /// Temps de response moyen recent
     fn avg_response_time(&self) -> Duration {
         if self.recent_times.is_empty() {
-            // Retourner un temps conservateur au lieu de 0ms pour avoid les deadlocks
+            // Retourner un temps conservateur au lieu de 0ms pour avoidr les deadlocks
             return Duration::from_millis(100);
         }
         
@@ -128,7 +128,7 @@ impl OperationStats {
         total / self.recent_times.len() as u32
     }
 
-    /// Enregistrer une tentative d'operation
+    /// Register une tentative d'operation
     fn record_attempt(&mut self, duration: Duration, success: bool) {
         self.total_attempts += 1;
         self.last_attempt = Some(Instant::now());
@@ -150,24 +150,24 @@ impl OperationStats {
 /// Configuration du circuit breaker
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CircuitBreakerConfig {
-    /// Seuil de taux d'echec pour ouvrir le circuit (0.0-1.0)
+    /// Seuil de taux d'failure pour ouvrir le circuit (0.0-1.0)
     pub failure_threshold: f64,
-    /// Nombre minimum d'operations avant d'evaluer le taux d'echec
+    /// Nombre minimum d'operations avant d'evaluate le taux d'failure
     pub min_operations: u32,
-    /// Duration d'ouverture du circuit avant test de recuperation
+    /// Duration d'ouverture du circuit avant test de retrieval
     pub recovery_timeout: Duration,
     /// Nombre d'operations de test en mode HalfOpen
     pub test_operations: u32,
     /// Limite de charge globale (operations/seconde)
     pub global_rate_limit: u32,
-    /// Fenbe de temps pour le rate limiting
+    /// Window de temps pour le rate limiting
     pub rate_window: Duration,
 }
 
 impl Default for CircuitBreakerConfig {
     fn default() -> Self {
         Self {
-            failure_threshold: 0.5, // 50% d'echecs
+            failure_threshold: 0.5, // 50% d'failures
             min_operations: 10,
             recovery_timeout: Duration::from_secs(60),
             test_operations: 5,
@@ -185,7 +185,7 @@ pub struct CryptoCircuitBreaker {
     state: Arc<RwLock<CircuitState>>,
     /// Statistiques par type d'operation
     stats: Arc<Mutex<std::collections::HashMap<CryptoOperation, OperationStats>>>,
-    /// Timestamp de la derniere ouverture du circuit
+    /// Timestamp de la last ouverture du circuit
     last_opened: Arc<Mutex<Option<Instant>>>,
     /// Compteur d'operations de test en mode HalfOpen
     test_count: Arc<Mutex<u32>>,
@@ -200,7 +200,7 @@ impl Default for CryptoCircuitBreaker {
 }
 
 impl CryptoCircuitBreaker {
-    /// Create a nouveau circuit breaker avec la configuration donnee
+    /// Create un nouveau circuit breaker avec la configuration data
     pub fn new(config: CircuitBreakerConfig) -> Self {
         Self {
             config,
@@ -212,22 +212,22 @@ impl CryptoCircuitBreaker {
         }
     }
 
-    /// Check if une operation est autorisee
+    /// Verify si une operation est authorized
     pub async fn check_operation(&self, op: CryptoOperation) -> Result<OperationGuard<'_>, CircuitBreakerError> {
-        // 1. Check the rate limiting global
+        // 1. Verify le rate limiting global
         self.check_rate_limit().await?;
         
-        // 2. Check the state du circuit
+        // 2. Verify circuit state
         let state = *self.state.read().unwrap();
         
         match state {
             CircuitState::Closed => {
-                // Circuit ferme - autoriser l'operation
+                // Circuit closed - autoriser l'operation
                 Ok(OperationGuard::new(self, op))
             }
             
             CircuitState::Open => {
-                // Check if on peut passer en mode HalfOpen
+                // Verify si on peut passer en mode HalfOpen
                 let last_opened = self.last_opened.lock().unwrap();
                 if let Some(opened_time) = *last_opened {
                     if opened_time.elapsed() >= self.config.recovery_timeout {
@@ -246,7 +246,7 @@ impl CryptoCircuitBreaker {
             }
             
             CircuitState::HalfOpen => {
-                // Mode test - autoriser un nombre limite d'operations
+                // Mode test - autoriser un nombre limited d'operations
                 let mut test_count = self.test_count.lock().unwrap();
                 if *test_count < self.config.test_operations {
                     *test_count += 1;
@@ -261,12 +261,12 @@ impl CryptoCircuitBreaker {
         }
     }
 
-    /// Check the rate limiting global
+    /// Verify le rate limiting global
     async fn check_rate_limit(&self) -> Result<(), CircuitBreakerError> {
         let mut limiter = self.rate_limiter.lock().unwrap();
         let now = Instant::now();
         
-        // Nettoyer les entrees oldnes
+        // Clean up les entries anciennes
         while let Some(&front) = limiter.front() {
             if now.duration_since(front) > self.config.rate_window {
                 limiter.pop_front();
@@ -275,7 +275,7 @@ impl CryptoCircuitBreaker {
             }
         }
         
-        // Check the limite
+        // Verify la limite
         if limiter.len() >= self.config.global_rate_limit as usize {
             return Err(CircuitBreakerError::RateLimitExceeded {
                 current_rate: limiter.len() as u32,
@@ -283,7 +283,7 @@ impl CryptoCircuitBreaker {
             });
         }
         
-        // Enregistrer cette operation
+        // Register cette operation
         limiter.push_back(now);
         Ok(())
     }
@@ -296,7 +296,7 @@ impl CryptoCircuitBreaker {
         self.stats.lock().unwrap().clear();
     }
 
-    /// Enregistrer le result d'une operation
+    /// Register le result d'une operation
     fn record_operation(&self, op: CryptoOperation, duration: Duration, success: bool) {
         let mut stats = self.stats.lock().unwrap();
         let op_stats = stats.entry(op).or_default();
@@ -312,7 +312,7 @@ impl CryptoCircuitBreaker {
         
         match current_state {
             CircuitState::Closed => {
-                // Check if on doit ouvrir le circuit
+                // Verify si on doit ouvrir le circuit
                 if stats.total_attempts >= self.config.min_operations as u64 {
                     if stats.failure_rate() >= self.config.failure_threshold {
                         self.open_circuit();
@@ -326,40 +326,40 @@ impl CryptoCircuitBreaker {
                 if test_count >= self.config.test_operations {
                     // Evaluate les results du test
                     if stats.failure_rate() < self.config.failure_threshold {
-                        // Recuperation reussie - fermer le circuit
+                        // Retrieval successful - close le circuit
                         *self.state.write().unwrap() = CircuitState::Closed;
                     } else {
-                        // Failure de recuperation - rouvrir le circuit
+                        // Failure de retrieval - rouvrir le circuit
                         self.open_circuit();
                     }
                 }
             }
             
             CircuitState::Open => {
-                // Rien a faire - le circuit s'ouvrira automatiquement after timeout
+                // Rien to faire - le circuit s'ouvrira automatically after timeout
             }
         }
     }
 
-    /// Open the circuit
+    /// Ouvrir le circuit
     fn open_circuit(&self) {
         *self.state.write().unwrap() = CircuitState::Open;
         *self.last_opened.lock().unwrap() = Some(Instant::now());
         *self.test_count.lock().unwrap() = 0;
     }
 
-    /// Obtenir l'state current du circuit
+    /// Get l'state actuel du circuit
     pub fn state(&self) -> CircuitState {
         *self.state.read().unwrap()
     }
 
-    /// Obtenir les statistiques d'une operation
+    /// Get les statistiques d'une operation
     pub fn operation_stats(&self, op: CryptoOperation) -> Option<(f64, Duration, u64)> {
         let stats = self.stats.lock().unwrap();
         stats.get(&op).map(|s| (s.failure_rate(), s.avg_response_time(), s.total_attempts))
     }
 
-    /// Reinitialiser le circuit breaker
+    /// Reset le circuit breaker
     pub fn reset(&self) {
         *self.state.write().unwrap() = CircuitState::Closed;
         *self.last_opened.lock().unwrap() = None;
@@ -370,7 +370,7 @@ impl CryptoCircuitBreaker {
 }
 
 /// Guard pour une operation cryptographique
-/// Enregistre automatiquement le result a la fin
+/// Enregistre automatically le result to la fin
 pub struct OperationGuard<'a> {
     breaker: &'a CryptoCircuitBreaker,
     operation: CryptoOperation,
@@ -388,14 +388,14 @@ impl<'a> OperationGuard<'a> {
         }
     }
 
-    /// Marquer l'operation comme reussie
+    /// Marquer l'operation comme successful
     pub fn success(mut self) {
         self.reported = true;
         let duration = self.start_time.elapsed();
         self.breaker.record_operation(self.operation, duration, true);
     }
 
-    /// Marquer l'operation comme echouee
+    /// Marquer l'operation comme failed
     pub fn failure(mut self) {
         self.reported = true;
         let duration = self.start_time.elapsed();
@@ -406,7 +406,7 @@ impl<'a> OperationGuard<'a> {
 impl<'a> Drop for OperationGuard<'a> {
     fn drop(&mut self) {
         if !self.reported {
-            // Par defaut, considerer comme un echec si pas explicitement marque
+            // By default, consider comme un failure si pas explicitement marked
             let duration = self.start_time.elapsed();
             self.breaker.record_operation(self.operation, duration, false);
         }
@@ -416,13 +416,13 @@ impl<'a> Drop for OperationGuard<'a> {
 /// Erreurs du circuit breaker
 #[derive(Debug, Error)]
 pub enum CircuitBreakerError {
-    #[error("Circuit ouvert pour l'operation {operation:?}, reessayer dans {retry_after:?}")]
+    #[error("Circuit ouvert pour l'operation {operation:?}, retry dans {retry_after:?}")]
     CircuitOpen {
         operation: CryptoOperation,
         retry_after: Duration,
     },
     
-    #[error("Rate limit depasse: {current_rate}/s > {limit}/s")]
+    #[error("Rate limit exceeded: {current_rate}/s > {limit}/s")]
     RateLimitExceeded {
         current_rate: u32,
         limit: u32,
@@ -438,7 +438,7 @@ pub enum CircuitBreakerError {
 lazy_static::lazy_static! {
     static ref GLOBAL_CIRCUIT_BREAKER: CryptoCircuitBreaker = {
         CryptoCircuitBreaker::new(CircuitBreakerConfig {
-            failure_threshold: 0.3, // 30% d'echecs pour ouvrir
+            failure_threshold: 0.3, // 30% d'failures pour ouvrir
             min_operations: 5,
             recovery_timeout: Duration::from_secs(30),
             test_operations: 3,
@@ -453,7 +453,7 @@ pub fn global_circuit_breaker() -> &'static CryptoCircuitBreaker {
     &GLOBAL_CIRCUIT_BREAKER
 }
 
-/// Macro pour proteger une operation cryptographique
+/// Macro pour protect une operation cryptographique
 #[macro_export]
 macro_rules! protected_crypto_op {
     ($op:expr, $code:block) => {{
@@ -481,10 +481,10 @@ mod tests {
     async fn test_circuit_breaker_basic() {
         let breaker = CryptoCircuitBreaker::default();
         
-        // Circuit doit be ferme initialement
+        // Circuit doit be closed initially
         assert_eq!(breaker.state(), CircuitState::Closed);
         
-        // Operation autorisee
+        // Operation authorized
         let guard = breaker.check_operation(CryptoOperation::Poseidon2Hash).await.unwrap();
         guard.success();
     }
@@ -498,7 +498,7 @@ mod tests {
         };
         let breaker = CryptoCircuitBreaker::new(config);
 
-        // Simuler des echecs — circuit may open before all 5 iterations
+        // Simuler des failures — circuit may open before all 5 iterations
         for _ in 0..5 {
             match breaker.check_operation(CryptoOperation::Halo2ProofGeneration).await {
                 Ok(guard) => guard.failure(),
@@ -509,7 +509,7 @@ mod tests {
         // Circuit doit be ouvert
         assert_eq!(breaker.state(), CircuitState::Open);
 
-        // Nouvelle operation doit be rejetee
+        // Nouvelle operation doit be rejectede
         let result = breaker.check_operation(CryptoOperation::Halo2ProofGeneration).await;
         assert!(matches!(result, Err(CircuitBreakerError::CircuitOpen { .. })));
     }
@@ -529,11 +529,11 @@ mod tests {
         // Second operation OK
         let _guard2 = breaker.check_operation(CryptoOperation::Poseidon2Hash).await.unwrap();
         
-        // Troisieme operation doit be rejetee
+        // Third operation doit be rejectede
         let result = breaker.check_operation(CryptoOperation::Poseidon2Hash).await;
         assert!(matches!(result, Err(CircuitBreakerError::RateLimitExceeded { .. })));
         
-        // Attendre et reessayer
+        // Wait et retry
         sleep(Duration::from_millis(150)).await;
         let _guard3 = breaker.check_operation(CryptoOperation::Poseidon2Hash).await.unwrap();
     }
@@ -558,7 +558,7 @@ mod tests {
         }
         assert_eq!(breaker.state(), CircuitState::Open);
         
-        // Attendre le timeout de recuperation
+        // Wait le timeout de retrieval
         sleep(Duration::from_millis(60)).await;
         
         // First operation after timeout doit passer en HalfOpen
@@ -570,7 +570,7 @@ mod tests {
         let guard = breaker.check_operation(CryptoOperation::MlDsaSignature).await.unwrap();
         guard.success();
         
-        // Circuit doit be ferme after success des tests
+        // Circuit doit be closed after success des tests
         assert_eq!(breaker.state(), CircuitState::Closed);
     }
 }

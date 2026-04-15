@@ -1,12 +1,12 @@
 //! Module de transition Poseidon V1 vers Poseidon2
 //!
-//! Ce module provides une interface de compatibility temporaire pour migrer
+//! Ce module fournit une interface de compatibility temporary pour migrer
 //! de Poseidon V1 (light-poseidon) vers Poseidon2 (implementation native TSN).
 //!
 //! Security :
-//! - Validation de l'equivalence des hash pour les data existantes
+//! - Validation de equivalence des hash pour les data existantes
 //! - Interface de migration progressive sans casser la compatibility
-//! - Tests de non-regression pour valider la transition
+//! - Tests de non-regression pour validr la transition
 //!
 //! References :
 //! - Poseidon V1 : https://github.com/arnaucube/poseidon-rs
@@ -40,17 +40,17 @@ pub enum MigrationError {
 /// Mode de fonctionnement du hash Poseidon
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PoseidonMode {
-    /// Mode V1 (legacy) - uses light-poseidon
+    /// Mode V1 (legacy) - utilise light-poseidon
     V1Legacy,
-    /// Mode V2 (nouveau) - uses Poseidon2 natif
+    /// Mode V2 (nouveau) - utilise Poseidon2 natif
     V2Native,
-    /// Mode compatibility - checks l'equivalence entre V1 et V2
+    /// Mode compatibility - verifies equivalence entre V1 et V2
     Compatibility,
 }
 
 impl Default for PoseidonMode {
     fn default() -> Self {
-        // Par defaut, on uses le mode compatibility pour la transition
+        // By default, on utilise le mode compatibility pour la transition
         Self::Compatibility
     }
 }
@@ -60,9 +60,9 @@ impl Default for PoseidonMode {
 pub struct MigrationConfig {
     /// Mode de fonctionnement
     pub mode: PoseidonMode,
-    /// Activer la validation stricte (plus lent mais plus sur)
+    /// Enable strict validation (slower but safer)
     pub strict_validation: bool,
-    /// Cache des hash valides pour avoid les recalculs
+    /// Cache des hash validateds pour avoidr les recalculations
     pub enable_cache: bool,
     /// Taille maximale du cache
     pub max_cache_size: usize,
@@ -79,7 +79,7 @@ impl Default for MigrationConfig {
     }
 }
 
-/// Cache des hash valides pour optimiser les performances
+/// Cache des hash validateds pour optimiser les performances
 #[derive(Debug, Clone)]
 struct HashCache {
     cache: HashMap<Vec<u64>, (Vec<u8>, Vec<u8>)>, // input -> (v1_hash, v2_hash)
@@ -100,7 +100,7 @@ impl HashCache {
 
     fn insert(&mut self, input: Vec<u64>, v1_hash: Vec<u8>, v2_hash: Vec<u8>) {
         if self.cache.len() >= self.max_size {
-            // Simple LRU : on vide la moitie du cache
+            // Simple LRU : on vide la half du cache
             let keys_to_remove: Vec<_> = self.cache.keys().take(self.max_size / 2).cloned().collect();
             for key in keys_to_remove {
                 self.cache.remove(&key);
@@ -116,7 +116,7 @@ impl Zeroize for HashCache {
     }
 }
 
-/// Interface unifiee pour Poseidon V1/V2 avec migration
+/// Interface unified pour Poseidon V1/V2 avec migration
 pub struct PoseidonMigrator {
     config: MigrationConfig,
     v1_hasher: Poseidon,
@@ -125,12 +125,12 @@ pub struct PoseidonMigrator {
 }
 
 impl PoseidonMigrator {
-    /// Creates a nouveau migrateur avec la configuration by default
+    /// Creates un nouveau migrateur avec la configuration by default
     pub fn new() -> Self {
         Self::with_config(MigrationConfig::default())
     }
 
-    /// Creates a nouveau migrateur avec une configuration personnalisee
+    /// Creates un nouveau migrateur avec une configuration custom
     pub fn with_config(config: MigrationConfig) -> Self {
         let cache = if config.enable_cache {
             Some(HashCache::new(config.max_cache_size))
@@ -151,7 +151,7 @@ impl PoseidonMigrator {
         self.config.mode = mode;
     }
 
-    /// Gets the mode de fonctionnement current
+    /// Obtient le mode de fonctionnement actuel
     pub fn mode(&self) -> PoseidonMode {
         self.config.mode
     }
@@ -195,14 +195,14 @@ impl PoseidonMigrator {
 
     /// Hash principal avec gestion de la migration
     pub fn hash(&mut self, input: &[u64]) -> Result<Vec<u8>, MigrationError> {
-        // Verification du cache si active
+        // Verification du cache si enabled
         if let Some(cache) = &self.cache {
             if let Some((v1_hash, v2_hash)) = cache.get(input) {
                 return match self.config.mode {
                     PoseidonMode::V1Legacy => Ok(v1_hash.clone()),
                     PoseidonMode::V2Native => Ok(v2_hash.clone()),
                     PoseidonMode::Compatibility => {
-                        // En mode compatibility, on retourne V2 mais on a already valide l'equivalence
+                        // En mode compatibility, on returns V2 mais on a already validated equivalence
                         Ok(v2_hash.clone())
                     }
                 };
@@ -213,9 +213,9 @@ impl PoseidonMigrator {
             PoseidonMode::V1Legacy => {
                 let result = self.hash_v1(input)?;
                 
-                // Mise en cache si active
+                // Mise en cache si enabled
                 if let Some(cache) = &mut self.cache {
-                    // On calcule also V2 pour le cache
+                    // On calcule aussi V2 pour le cache
                     if let Ok(v2_result) = self.hash_v2(input) {
                         cache.insert(input.to_vec(), result.clone(), v2_result);
                     }
@@ -227,9 +227,9 @@ impl PoseidonMigrator {
             PoseidonMode::V2Native => {
                 let result = self.hash_v2(input)?;
                 
-                // Mise en cache si active
+                // Mise en cache si enabled
                 if let Some(cache) = &mut self.cache {
-                    // On calcule also V1 pour le cache
+                    // On calcule aussi V1 pour le cache
                     if let Ok(v1_result) = self.hash_v1(input) {
                         cache.insert(input.to_vec(), v1_result, result.clone());
                     }
@@ -239,14 +239,14 @@ impl PoseidonMigrator {
             }
 
             PoseidonMode::Compatibility => {
-                // Mode compatibility : on calcule les deux et on checks
+                // Mode compatibility : on calculationates les deux et on verifies
                 let v1_result = self.hash_v1(input)?;
                 let v2_result = self.hash_v2(input)?;
 
                 if self.config.strict_validation {
-                    // Validation stricte : les hash doivent be equivalents
-                    // Note : en pratique, V1 et V2 peuvent avoir des formats differents
-                    // mais doivent be cryptographiquement equivalents
+                    // Validation stricte : les hash doivent be equivalent
+                    // Note : en pratique, V1 et V2 peuvent avoir des formats different
+                    // mais doivent be cryptographiquement equivalent
                     self.validate_equivalence(&v1_result, &v2_result, input)?;
                 }
 
@@ -255,20 +255,20 @@ impl PoseidonMigrator {
                     cache.insert(input.to_vec(), v1_result, v2_result.clone());
                 }
 
-                // En mode compatibility, on retourne le result V2
+                // En mode compatibility, on returns le result V2
                 Ok(v2_result)
             }
         }
     }
 
-    /// Valide l'equivalence cryptographique entre V1 et V2
+    /// Valide equivalence cryptographique entre V1 et V2
     fn validate_equivalence(
         &self,
         v1_hash: &[u8],
         v2_hash: &[u8],
         input: &[u64],
     ) -> Result<(), MigrationError> {
-        // Pour l'instant, on checks que les deux hash sont non-nuls
+        // Pour l'instant, on verifies que les deux hash sont non-nuls
         // et de taille raisonnable
         if v1_hash.is_empty() || v2_hash.is_empty() {
             return Err(MigrationError::ValidationFailed {
@@ -276,9 +276,9 @@ impl PoseidonMigrator {
             });
         }
 
-        // TODO: Implementer une validation cryptographique plus robuste
-        // En pratique, V1 et V2 peuvent avoir des formats differents
-        // mais doivent satisfaire les sames propertys de security
+        // TODO: Implement une validation cryptographique plus robuste
+        // En pratique, V1 et V2 peuvent avoir des formats different
+        // mais doivent satisfaire les same properties de security
 
         Ok(())
     }
@@ -309,13 +309,13 @@ impl PoseidonMigrator {
             }
 
             PoseidonMode::Compatibility => {
-                // En mode compatibility, on uses la fonction generique
+                // En mode compatibility, on utilise la fonction generic
                 self.hash(&[left, right])
             }
         }
     }
 
-    /// Gets thes statistiques du cache
+    /// Obtient les statistiques du cache
     pub fn cache_stats(&self) -> Option<(usize, usize)> {
         self.cache.as_ref().map(|cache| (cache.cache.len(), cache.max_size))
     }
@@ -351,7 +351,7 @@ impl PoseidonMigrator {
             self.set_mode(PoseidonMode::Compatibility);
             let compat_result = self.hash(input)?;
 
-            // Le mode compatibility doit retourner le same result que V2
+            // Le mode compatibility doit return le same result que V2
             if v2_result != compat_result {
                 return Err(MigrationError::HashMismatch {
                     expected: v2_result,
@@ -378,7 +378,7 @@ impl Zeroize for PoseidonMigrator {
         if let Some(cache) = &mut self.cache {
             cache.zeroize();
         }
-        // Note: v2_hasher n'implemente pas Zeroize dans l'implementation currentle
+        // Note: v2_hasher does not implement pas Zeroize dans l'implementation actuelle
     }
 }
 
@@ -387,7 +387,7 @@ pub mod merkle_compat {
     use super::*;
     use crate::crypto::merkle_tree::{TreeHash, TREE_DEPTH};
 
-    /// Adaptateur pour usesr PoseidonMigrator dans le Merkle tree
+    /// Adaptateur pour utiliser PoseidonMigrator dans le Merkle tree
     pub struct MerkleHasher {
         migrator: PoseidonMigrator,
     }
@@ -427,7 +427,7 @@ pub mod merkle_compat {
             self.migrator.set_mode(mode);
         }
 
-        /// Gets thes statistiques du cache
+        /// Obtient les statistiques du cache
         pub fn cache_stats(&self) -> Option<(usize, usize)> {
             self.migrator.cache_stats()
         }
@@ -468,14 +468,14 @@ mod tests {
         let left = 123u64;
         let right = 456u64;
 
-        // Test avec differents modes
+        // Test avec different modes
         for mode in [PoseidonMode::V1Legacy, PoseidonMode::V2Native, PoseidonMode::Compatibility] {
             migrator.set_mode(mode);
             let result = migrator.hash_two(left, right);
             
             match mode {
                 PoseidonMode::V1Legacy => {
-                    // Peut fail si V1_WIDTH != 2
+                    // Peut failsr si V1_WIDTH != 2
                     if V1_WIDTH == 2 {
                         assert!(result.is_ok());
                     }
@@ -504,7 +504,7 @@ mod tests {
         let (cache_size, _) = migrator.cache_stats().unwrap();
         assert_eq!(cache_size, 1);
 
-        // Second appel - doit usesr le cache
+        // Second appel - doit utiliser le cache
         let result2 = migrator.hash(&input).unwrap();
         assert_eq!(result1, result2);
 
@@ -572,15 +572,15 @@ mod tests {
         
         // Vecteurs de test simples
         let test_vectors = vec![
-            (vec![0u64, 0u64], vec![0u8; 8]), // Sera remplace par le vrai hash V1
-            (vec![1u64, 2u64], vec![1u8; 8]), // Sera remplace par le vrai hash V1
+            (vec![0u64, 0u64], vec![0u8; 8]), // Sera replaced par le vrai hash V1
+            (vec![1u64, 2u64], vec![1u8; 8]), // Sera replaced par le vrai hash V1
         ];
 
         // Note: En pratique, il faudrait des vrais vecteurs de test
         // Pour l'instant, on teste juste que la fonction ne panique pas
         let result = migrator.test_migration(&test_vectors);
         
-        // Le test peut fail car on n'a pas de vrais vecteurs de test
+        // Le test peut failsr car on n'a pas de vrais vecteurs de test
         // mais il ne doit pas paniquer
         match result {
             Ok(_) => println!("Migration test passed"),
@@ -596,7 +596,7 @@ mod tests {
         // Utilise le migrator
         let _ = migrator.hash(&input).unwrap();
         
-        // Checks that zeroize fonctionne
+        // Verifies que zeroize fonctionne
         migrator.zeroize();
         
         // Le cache doit be vide

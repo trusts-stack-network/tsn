@@ -1,15 +1,15 @@
-//! Mecanisme de rotation automatique des keys SLH-DSA
+//! Mechanism de rotation automatique des keys SLH-DSA
 //!
-//! Implemente un system de rotation periodic des keys post-quantiques pour maintenir
-//! la security a long terme. Base sur les recommandations NIST SP 800-57 Part 1 Rev. 5
+//! Implements un system de rotation periodic des keys post-quantiques pour maintenir
+//! la security to long terme. Based sur les recommandations NIST SP 800-57 Part 1 Rev. 5
 //! pour la gestion des keys cryptographiques.
 //!
 //! ## Security
 //!
 //! La rotation des keys SLH-DSA est critique pour la security post-quantique car :
 //! - Limite l'exposition temporelle des keys privates
-//! - Reduit l'impact d'une compromission eventuelle
-//! - Prepare la transition vers de nouveaux parameters if needed
+//! - Reduces l'impact d'une compromission possible
+//! - Prepares la transition vers de nouveaux parameters si necessary
 //!
 //! ## References
 //!
@@ -29,13 +29,13 @@ use crate::crypto::{
     Address,
 };
 
-/// Duration de validite by default d'une key (30 jours)
+/// Duration de validity by default d'une key (30 jours)
 pub const DEFAULT_KEY_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// Periode de transition pendant laquelle l'oldne et la nouvelle key coexistent (7 jours)
+/// Period de transition pendant laquelle l'ancienne et la new key coexistsnt (7 jours)
 pub const DEFAULT_TRANSITION_PERIOD: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Nombre maximum de keys actives simultanement
+/// Nombre maximum de keys active simultaneously
 pub const MAX_ACTIVE_KEYS: usize = 3;
 
 /// Identifiant unique d'une key dans le system de rotation
@@ -48,9 +48,9 @@ pub enum KeyState {
     Generating,
     /// Key active pour signature
     Active,
-    /// Key en transition (encore valide pour verification)
+    /// Key en transition (encore valid pour verification)
     Transitioning,
-    /// Key revoquee (invalid)
+    /// Key revoked (invalid)
     Revoked,
 }
 
@@ -59,7 +59,7 @@ pub enum KeyState {
 pub struct KeyMetadata {
     /// Identifiant unique de la key
     pub id: KeyId,
-    /// State current de la key
+    /// State actuel de la key
     pub state: KeyState,
     /// Timestamp de creation (Unix epoch)
     pub created_at: u64,
@@ -67,16 +67,16 @@ pub struct KeyMetadata {
     pub activated_at: Option<u64>,
     /// Timestamp de revocation (Unix epoch)
     pub revoked_at: Option<u64>,
-    /// Duration de vie configuree pour cette key
+    /// Duration de vie configurede pour cette key
     pub lifetime: Duration,
-    /// Adresse derivee de cette key
+    /// Address derived from this key
     pub address: Address,
     /// Hash de la key publique pour identification rapide
     pub public_key_hash: [u8; 32],
 }
 
 impl KeyMetadata {
-    /// Checks if la key est expiree
+    /// Verifies si la key est expired
     pub fn is_expired(&self, now: SystemTime) -> bool {
         if let Some(activated_at) = self.activated_at {
             let activated_time = UNIX_EPOCH + Duration::from_secs(activated_at);
@@ -88,7 +88,7 @@ impl KeyMetadata {
         }
     }
 
-    /// Checks if la key est en period de transition
+    /// Verifies si la key est en period de transition
     pub fn is_in_transition(&self, now: SystemTime) -> bool {
         if let Some(activated_at) = self.activated_at {
             let activated_time = UNIX_EPOCH + Duration::from_secs(activated_at);
@@ -100,17 +100,17 @@ impl KeyMetadata {
     }
 }
 
-/// Key avec ses metadata, protegee par zeroize
+/// Key avec ses metadata, protected par zeroize
 #[derive(ZeroizeOnDrop)]
 pub struct ManagedKey {
-    /// Metadata publiques
+    /// Metadata publics
     pub metadata: KeyMetadata,
-    /// Paire de keys (sera zeroisee a la destruction)
+    /// Paire de keys (sera zeroized to la destruction)
     keypair: KeyPair,
 }
 
 impl ManagedKey {
-    /// Creates a nouvelle key geree
+    /// Creates une new key managed
     pub fn new(id: KeyId, lifetime: Duration) -> Result<Self, KeyRotationError> {
         let keypair = KeyPair::generate();
         let now = SystemTime::now()
@@ -138,7 +138,7 @@ impl ManagedKey {
         Ok(Self { metadata, keypair })
     }
 
-    /// Acces en lecture seule a la paire de keys
+    /// Read-only access to key pair
     pub fn keypair(&self) -> &KeyPair {
         &self.keypair
     }
@@ -170,7 +170,7 @@ impl ManagedKey {
         Ok(())
     }
 
-    /// Revoque la key
+    /// Revokes la key
     pub fn revoke(&mut self) -> Result<(), KeyRotationError> {
         if matches!(self.metadata.state, KeyState::Revoked) {
             return Err(KeyRotationError::InvalidStateTransition);
@@ -190,20 +190,20 @@ impl ManagedKey {
 
 /// Gestionnaire de rotation automatique des keys SLH-DSA
 pub struct KeyRotationManager {
-    /// Keys gerees indexees par ID
+    /// Keys manageds indexed par ID
     keys: HashMap<KeyId, ManagedKey>,
-    /// ID de la prochaine key a generate
+    /// ID de la prochaine key to generate
     next_key_id: KeyId,
-    /// Key currentlement active pour signature
+    /// Key currently active pour signature
     active_key_id: Option<KeyId>,
     /// Configuration de duration de vie by default
     default_lifetime: Duration,
-    /// Derniere verification de rotation
+    /// Last verification de rotation
     last_rotation_check: SystemTime,
 }
 
 impl KeyRotationManager {
-    /// Creates a nouveau manager de rotation
+    /// Creates un nouveau gestionnaire de rotation
     pub fn new() -> Self {
         Self {
             keys: HashMap::new(),
@@ -214,7 +214,7 @@ impl KeyRotationManager {
         }
     }
 
-    /// Creates a manager avec une duration de vie personnalisee
+    /// Creates un manager avec une duration de vie custom
     pub fn with_lifetime(lifetime: Duration) -> Self {
         Self {
             keys: HashMap::new(),
@@ -225,7 +225,7 @@ impl KeyRotationManager {
         }
     }
 
-    /// Generates ae nouvelle key
+    /// Generates une new key
     pub fn generate_key(&mut self) -> Result<KeyId, KeyRotationError> {
         if self.keys.len() >= MAX_ACTIVE_KEYS {
             return Err(KeyRotationError::TooManyKeys);
@@ -247,7 +247,7 @@ impl KeyRotationManager {
 
         key.activate()?;
 
-        // Met l'oldne key active en transition si elle existe
+        // Met l'ancienne key active en transition si elle exists
         if let Some(old_active_id) = self.active_key_id {
             if old_active_id != key_id {
                 if let Some(old_key) = self.keys.get_mut(&old_active_id) {
@@ -260,7 +260,7 @@ impl KeyRotationManager {
         Ok(())
     }
 
-    /// Gets the key active pour signature
+    /// Obtient la key active pour signature
     pub fn active_key(&self) -> Option<&ManagedKey> {
         self.active_key_id
             .and_then(|id| self.keys.get(&id))
@@ -276,14 +276,14 @@ impl KeyRotationManager {
         self.keys.values().map(|k| &k.metadata).collect()
     }
 
-    /// Revoque une key
+    /// Revokes une key
     pub fn revoke_key(&mut self, key_id: KeyId) -> Result<(), KeyRotationError> {
         let key = self.keys.get_mut(&key_id)
             .ok_or(KeyRotationError::KeyNotFound)?;
 
         key.revoke()?;
 
-        // Si c'etait la key active, on la desactive
+        // Si it was la key active, on la disables
         if self.active_key_id == Some(key_id) {
             self.active_key_id = None;
         }
@@ -291,7 +291,7 @@ impl KeyRotationManager {
         Ok(())
     }
 
-    /// Cleans up the keys revoquees oldnes
+    /// Nettoie les keys revoked anciennes
     pub fn cleanup_revoked_keys(&mut self, retention_period: Duration) -> usize {
         let now = SystemTime::now();
         let mut to_remove = Vec::new();
@@ -318,39 +318,39 @@ impl KeyRotationManager {
         removed_count
     }
 
-    /// Checks if une rotation automatique est necessary
+    /// Verifies si une rotation automatique est necessary
     pub fn check_rotation_needed(&mut self) -> Result<bool, KeyRotationError> {
         let now = SystemTime::now();
         self.last_rotation_check = now;
 
         if let Some(active_key) = self.active_key() {
-            // Checks if la key active est en period de transition
+            // Verifies si la key active est en period de transition
             if active_key.metadata.is_in_transition(now) {
                 return Ok(true);
             }
 
-            // Checks if la key active est expiree
+            // Verifies si la key active est expired
             if active_key.metadata.is_expired(now) {
                 return Ok(true);
             }
         } else {
-            // Aucune key active, rotation necessary
+            // No key active, rotation necessary
             return Ok(true);
         }
 
         Ok(false)
     }
 
-    /// Performs ae rotation automatique if needed
+    /// Effectue une rotation automatique si necessary
     pub fn auto_rotate(&mut self) -> Result<Option<KeyId>, KeyRotationError> {
         if !self.check_rotation_needed()? {
             return Ok(None);
         }
 
-        // Generates ae nouvelle key
+        // Generates une new key
         let new_key_id = self.generate_key()?;
 
-        // Active immediatement la nouvelle key
+        // Active immediately la new key
         self.activate_key(new_key_id)?;
 
         Ok(Some(new_key_id))
@@ -362,7 +362,7 @@ impl KeyRotationManager {
             .find(|k| &k.metadata.public_key_hash == public_key_hash)
     }
 
-    /// Checks if une key peut be utilisee pour verification
+    /// Verifies si une key peut be used pour verification
     pub fn can_verify_with_key(&self, key_id: KeyId) -> bool {
         if let Some(key) = self.keys.get(&key_id) {
             matches!(key.metadata.state, KeyState::Active | KeyState::Transitioning)
@@ -371,7 +371,7 @@ impl KeyRotationManager {
         }
     }
 
-    /// Gets thes statistiques du manager
+    /// Obtient les statistiques du gestionnaire
     pub fn stats(&self) -> KeyRotationStats {
         let mut stats = KeyRotationStats::default();
 
@@ -395,7 +395,7 @@ impl Default for KeyRotationManager {
     }
 }
 
-/// Statistiques du manager de rotation
+/// Statistiques du gestionnaire de rotation
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct KeyRotationStats {
     pub total: usize,
@@ -408,19 +408,19 @@ pub struct KeyRotationStats {
 /// Erreurs du system de rotation des keys
 #[derive(Debug, thiserror::Error)]
 pub enum KeyRotationError {
-    #[error("Key non trouvee")]
+    #[error("Key non founde")]
     KeyNotFound,
 
     #[error("Transition d'state invalid")]
     InvalidStateTransition,
 
-    #[error("Trop de keys actives (maximum: {MAX_ACTIVE_KEYS})")]
+    #[error("Trop de keys active (maximum: {MAX_ACTIVE_KEYS})")]
     TooManyKeys,
 
     #[error("Erreur de temps system")]
     TimeError,
 
-    #[error("Erreur de generation de key: {0}")]
+    #[error("Error de generation de key: {0}")]
     KeyGenerationError(#[from] KeyError),
 
     #[error("Erreur SLH-DSA: {0}")]
@@ -494,12 +494,12 @@ mod tests {
     fn test_max_keys_limit() {
         let mut manager = KeyRotationManager::new();
         
-        // Generates the maximum de keys
+        // Generates le maximum de keys
         for _ in 0..MAX_ACTIVE_KEYS {
             manager.generate_key().unwrap();
         }
         
-        // La suivante doit fail
+        // La suivante doit failsr
         assert!(matches!(
             manager.generate_key(),
             Err(KeyRotationError::TooManyKeys)
@@ -514,7 +514,7 @@ mod tests {
         manager.activate_key(key_id).unwrap();
         manager.revoke_key(key_id).unwrap();
         
-        // Nettoyage immediat (retention = 0)
+        // Cleanup immediate (retention = 0)
         let removed = manager.cleanup_revoked_keys(Duration::from_secs(0));
         assert_eq!(removed, 1);
         assert!(manager.get_key(key_id).is_none());
@@ -528,7 +528,7 @@ mod tests {
         let key_id = manager.generate_key().unwrap();
         manager.activate_key(key_id).unwrap();
         
-        // Attendre l'expiration
+        // Wait l'expiration
         thread::sleep(Duration::from_millis(150));
         
         let key = manager.get_key(key_id).unwrap();
@@ -545,7 +545,7 @@ mod tests {
         let key_id1 = manager.generate_key().unwrap();
         manager.activate_key(key_id1).unwrap();
         
-        // Attendre l'expiration
+        // Wait l'expiration
         thread::sleep(Duration::from_millis(150));
         
         // Rotation automatique
@@ -556,7 +556,7 @@ mod tests {
         assert_ne!(new_id, key_id1);
         assert_eq!(manager.active_key_id, Some(new_id));
         
-        // L'oldne key doit be en transition
+        // L'ancienne key doit be en transition
         let old_key = manager.get_key(key_id1).unwrap();
         assert_eq!(old_key.metadata.state, KeyState::Transitioning);
     }
@@ -591,7 +591,7 @@ mod tests {
         key.transition().unwrap();
         assert!(manager.can_verify_with_key(key_id));
         
-        // Key revoquee - pas de verification
+        // Key revoked - pas de verification
         let key = manager.keys.get_mut(&key_id).unwrap();
         key.revoke().unwrap();
         assert!(!manager.can_verify_with_key(key_id));

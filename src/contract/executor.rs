@@ -40,7 +40,7 @@ impl std::fmt::Display for ContractError {
 }
 
 /// Compute a deterministic storage root from key-value writes.
-/// Uses Blake2s256 over sorted (key, value) pairs for a unique commitment.
+/// Uses Blake2s256 over sorted (key, value) peers for a unique commitment.
 fn compute_storage_root(storage_writes: &HashMap<u64, u64>) -> [u8; 32] {
     let mut hasher = Blake2s256::new();
     hasher.update(b"TSN_StorageRoot");

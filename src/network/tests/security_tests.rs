@@ -13,19 +13,19 @@ use crate::network::protocol::{
 /// Test: resistance aux buffer overflow avec des data malveillantes
 #[test]
 fn test_buffer_overflow_resistance() {
-    // Test avec un buffer enorme pour tenter un overflow
+    // Test avec un buffer enormous pour try un overflow
     let huge_buffer = vec![0u8; 1_000_000]; // 1MB of zeros
     let mut buf = BytesMut::from(huge_buffer.as_slice());
     
     let result = decode_message(&mut buf);
     
-    // Ne devrait pas paniquer, soit retourner None soit une error
+    // Ne should pas paniquer, soit retourner None soit une erreur
     match result {
         Ok(None) => {
-            // Comportement acceptable : pas assez of data valides
+            // Comportement acceptable : pas enough of data valids
         }
         Ok(Some(_)) => {
-            panic!("Ne devrait pas decoder un buffer of data invalids");
+            panic!("Ne should pas decode un buffer of data invalids");
         }
         Err(_) => {
             // Erreur acceptable
@@ -33,13 +33,13 @@ fn test_buffer_overflow_resistance() {
     }
 }
 
-/// Test: resistance aux data randoms malveillantes
+/// Test: resistance aux data random malveillantes
 #[test]
 fn test_random_malicious_data() {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     
-    // Genere des data pseudo-randoms reproductibles
+    // Generates des data pseudo-random reproductibles
     for seed in 0..100 {
         let mut hasher = DefaultHasher::new();
         seed.hash(&mut hasher);
@@ -53,14 +53,14 @@ fn test_random_malicious_data() {
         let mut buf = BytesMut::from(malicious_data.as_slice());
         let result = decode_message(&mut buf);
         
-        // Ne devrait jamais paniquer
+        // Ne should jamais paniquer
         match result {
             Ok(None) => {
                 // Comportement acceptable
             }
             Ok(Some(_)) => {
-                // Si ca decode, checks que c'est coherent
-                // (very improbable avec des data randoms)
+                // Si it decodes, verifies que c'est consistent
+                // (very improbable avec des data random)
             }
             Err(_) => {
                 // Erreur acceptable et attendue
@@ -78,9 +78,9 @@ fn test_malicious_timestamps() {
         .as_nanos() as u64;
     
     let malicious_timestamps = vec![
-        0,                              // Unix epoch
-        1,                              // Presque epoque Unix
-        current_time - 86400_000_000_000, // 24h dans le passe
+        0,                              // Epoch Unix
+        1,                              // Presque epoch Unix
+        current_time - 86400_000_000_000, // 24h in the past
         current_time + 86400_000_000_000, // 24h dans le futur
         u64::MAX,                       // Timestamp maximum
         u64::MAX - 1,                   // Presque maximum
@@ -97,16 +97,16 @@ fn test_malicious_timestamps() {
 
         let msg = TsnMessage::Handshake(handshake);
         
-        // L'encodage devrait reussir (on encode tout)
+        // L'encoding should succeed (on encode tout)
         let encoded = encode_message(&msg).expect("Encoding should succeed");
         
-        // Le decodage devrait reussir also
+        // Le decoding should succeed aussi
         let mut buf = BytesMut::from(encoded.as_ref());
         let (decoded, _) = decode_message(&mut buf)
             .expect("Decoding should succeed")
             .expect("Should have a message");
         
-        // Mais la validation du timestamp devrait be faite au niveau applicatif
+        // Mais la validation du timestamp should be faite au niveau applicatif
         match decoded {
             TsnMessage::Handshake(data) => {
                 assert_eq!(data.timestamp_ns, timestamp);
@@ -118,9 +118,9 @@ fn test_malicious_timestamps() {
                     current_time - timestamp
                 };
                 
-                // Les timestamps trop eloignes devraient be rejetes
+                // Les timestamps trop distant devraient be rejecteds
                 if time_diff > 3600_000_000_000 { // 1 heure
-                    println!("Timestamp malveillant detecte: {}", timestamp);
+                    println!("Timestamp malveillant detected: {}", timestamp);
                 }
             }
             _ => panic!("Expected Handshake message"),
@@ -136,25 +136,25 @@ fn test_malicious_node_ids() {
         [255u8; 32],                    // Tous 1
         {
             let mut id = [0u8; 32];
-            id[0] = 255;                // Premier byte a 255
+            id[0] = 255;                // First byte to 255
             id
         },
         {
             let mut id = [0u8; 32];
-            id[31] = 255;               // Dernier byte a 255
+            id[31] = 255;               // Last byte to 255
             id
         },
         {
             let mut id = [0u8; 32];
             for i in 0..32 {
-                id[i] = (i % 2) as u8 * 255; // Pattern alterne
+                id[i] = (i % 2) as u8 * 255; // Pattern alternated
             }
             id
         },
         {
             let mut id = [0u8; 32];
             for i in 0..32 {
-                id[i] = i as u8;        // Pattern sequentiel
+                id[i] = i as u8;        // Pattern sequential
             }
             id
         },
@@ -186,7 +186,7 @@ fn test_malicious_node_ids() {
                 let all_ones = node_id.iter().all(|&b| b == 255);
                 
                 if all_zeros || all_ones {
-                    println!("Node ID suspect detecte: {:?}", node_id);
+                    println!("Node ID suspect detected: {:?}", node_id);
                 }
             }
             _ => panic!("Expected Handshake message"),
@@ -204,7 +204,7 @@ fn test_malicious_ports() {
         80,         // HTTP
         443,        // HTTPS
         65535,      // Port maximum
-        65536,      // Au-dela du maximum (sera tronque a u16)
+        65536,      // Beyond du maximum (sera truncated to u16)
     ];
     
     for port in malicious_ports {
@@ -213,7 +213,7 @@ fn test_malicious_ports() {
             timestamp_ns: 1234567890,
             capabilities: vec![],
             node_id: [2u8; 32],
-            listen_port: port as u16, // Conversion forcee
+            listen_port: port as u16, // Conversion forced
         };
 
         let msg = TsnMessage::Handshake(handshake);
@@ -228,10 +228,10 @@ fn test_malicious_ports() {
             TsnMessage::Handshake(data) => {
                 // Validation des ports
                 if data.listen_port < 1024 {
-                    println!("Port system detecte: {}", data.listen_port);
+                    println!("Port system detected: {}", data.listen_port);
                 }
                 if data.listen_port == 0 {
-                    println!("Port invalid detecte: {}", data.listen_port);
+                    println!("Port invalid detected: {}", data.listen_port);
                 }
             }
             _ => panic!("Expected Handshake message"),
@@ -247,7 +247,7 @@ fn test_malicious_protocol_versions() {
         ProtocolVersion(255, 255),      // Version maximum
         ProtocolVersion(0, 255),        // Major 0, minor max
         ProtocolVersion(255, 0),        // Major max, minor 0
-        ProtocolVersion(100, 200),      // Versions very elevees
+        ProtocolVersion(100, 200),      // Versions very highs
     ];
     
     for version in malicious_versions {
@@ -273,7 +273,7 @@ fn test_malicious_protocol_versions() {
                 let is_compatible = data.version.0 == 1; // Seulement major version 1
                 
                 if !is_compatible {
-                    println!("Version incompatible detectee: {}.{}", data.version.0, data.version.1);
+                    println!("Version incompatible detectede: {}.{}", data.version.0, data.version.1);
                 }
             }
             _ => panic!("Expected Handshake message"),
@@ -300,20 +300,20 @@ fn test_malicious_capabilities() {
 
     let msg = TsnMessage::Handshake(handshake);
     
-    // L'encodage pourrait fail ou reussir selon l'implementation
+    // L'encoding pourrait failsr ou succeed selon l'implementation
     match encode_message(&msg) {
         Ok(encoded) => {
-            println!("Message avec 10k capabilities encode: {} bytes", encoded.len());
+            println!("Message avec 10k capabilities encoded: {} bytes", encoded.len());
             
-            // Si l'encodage reussit, le decodage devrait also
+            // Si l'encoding succeeds, le decoding should aussi
             let mut buf = BytesMut::from(encoded.as_ref());
             match decode_message(&mut buf) {
                 Ok(Some((decoded, _))) => {
                     match decoded {
                         TsnMessage::Handshake(data) => {
-                            println!("Decode {} capabilities", data.capabilities.len());
+                            println!("Decoded {} capabilities", data.capabilities.len());
                             
-                            // Validation : rejeter les listes trop longues
+                            // Validation : rejeter les listes trop longs
                             if data.capabilities.len() > 100 {
                                 println!("Liste de capabilities suspecte: {} elements", data.capabilities.len());
                             }
@@ -322,10 +322,10 @@ fn test_malicious_capabilities() {
                     }
                 }
                 Ok(None) => {
-                    println!("Buffer insuffisant pour decoder le message");
+                    println!("Buffer insufficient pour decode le message");
                 }
                 Err(e) => {
-                    println!("Erreur de decodage attendue: {:?}", e);
+                    println!("Error de decoding attendue: {:?}", e);
                 }
             }
         }
@@ -370,10 +370,10 @@ fn test_extreme_capability_values() {
                     Capability::MaxPeers(max_peers) => {
                         // Validation des valeurs extreme
                         if *max_peers == 0 {
-                            println!("MaxPeers=0 detecte (suspect)");
+                            println!("MaxPeers=0 detected (suspect)");
                         }
                         if *max_peers > 100_000 {
-                            println!("MaxPeers very eleve detecte: {}", max_peers);
+                            println!("MaxPeers very high detected: {}", max_peers);
                         }
                     }
                     _ => panic!("Expected MaxPeers capability"),
@@ -384,7 +384,7 @@ fn test_extreme_capability_values() {
     }
 }
 
-/// Test: messages tronques (attaque de fragmentation)
+/// Test: messages truncated (attaque de fragmentation)
 #[test]
 fn test_truncated_messages() {
     let handshake = HandshakeData {
@@ -398,7 +398,7 @@ fn test_truncated_messages() {
     let msg = TsnMessage::Handshake(handshake);
     let encoded = encode_message(&msg).expect("Encoding should succeed");
     
-    // Test avec differents niveaux de troncature
+    // Test avec different niveaux de troncature
     for truncate_at in 1..encoded.len() {
         let truncated = &encoded[..truncate_at];
         let mut buf = BytesMut::from(truncated);
@@ -407,10 +407,10 @@ fn test_truncated_messages() {
         
         match result {
             Ok(None) => {
-                // Comportement attendu : pas assez of data
+                // Comportement attendu : pas enough of data
             }
             Ok(Some(_)) => {
-                panic!("Ne devrait pas decoder un message tronque a {} bytes", truncate_at);
+                panic!("Ne should pas decode un message truncated to {} bytes", truncate_at);
             }
             Err(_) => {
                 // Erreur acceptable
@@ -435,7 +435,7 @@ fn test_malicious_padding() {
     
     // Ajoute du padding malveillant
     let padding_patterns = vec![
-        vec![0u8; 1000],        // Padding of zeros
+        vec![0u8; 1000],        // Padding de zeros
         vec![255u8; 1000],      // Padding de 1
         (0..1000).map(|i| (i % 256) as u8).collect::<Vec<u8>>(), // Pattern
     ];
@@ -449,18 +449,18 @@ fn test_malicious_padding() {
         
         match result {
             Ok(Some((decoded, consumed))) => {
-                // Checks that seul le message valide a ete consomme
+                // Verifies que seul le message valid a been consumed
                 assert_eq!(consumed, encoded.len());
                 
                 match decoded {
                     TsnMessage::Handshake(_) => {
-                        // OK, le padding a ete ignore
+                        // OK, le padding a been ignored
                     }
                     _ => panic!("Expected Handshake message"),
                 }
             }
             Ok(None) => {
-                panic!("Devrait decoder le message valide same avec du padding");
+                panic!("Devrait decode le message valid same avec du padding");
             }
             Err(_) => {
                 // Erreur acceptable si le format est corrompu
@@ -469,7 +469,7 @@ fn test_malicious_padding() {
     }
 }
 
-/// Test: attaque par deni de service via HandshakeAck repetes
+/// Test: attaque par denial de service via HandshakeAck repeateds
 #[test]
 fn test_handshake_ack_dos() {
     let base_msg = TsnMessage::HandshakeAck {
@@ -499,21 +499,21 @@ fn test_handshake_ack_dos() {
     let duration = start.elapsed();
     let msgs_per_sec = iterations as f64 / duration.as_secs_f64();
     
-    println!("DoS simulation: traite {:.0} HandshakeAck/sec", msgs_per_sec);
+    println!("DoS simulation: processed {:.0} HandshakeAck/sec", msgs_per_sec);
     
-    // Checks that le system reste performant same sous charge
+    // Verifies que le system reste performant same sous charge
     assert!(msgs_per_sec > 1_000.0, "System trop lent sous charge DoS: {:.0} msgs/sec", msgs_per_sec);
 }
 
-/// Test: validation de consistency entre champs
+/// Test: validation de consistency entre fields
 #[test]
 fn test_field_consistency_validation() {
-    // Test avec des combinaisons incoherentes
+    // Test avec des combinaisons inconsistent
     let inconsistent_cases = vec![
-        // Cas 1: Timestamp futur avec version oldne
+        // Cas 1: Timestamp futur avec version ancienne
         (ProtocolVersion(0, 1), u64::MAX, "Future timestamp with old version"),
         
-        // Cas 2: Port 0 avec capabilities avancees
+        // Cas 2: Port 0 avec capabilities advanced
         (ProtocolVersion(1, 0), 1234567890, "Port 0 with advanced capabilities"),
     ];
     
@@ -536,15 +536,15 @@ fn test_field_consistency_validation() {
         
         match decoded {
             TsnMessage::Handshake(data) => {
-                println!("Cas incoherent detecte: {}", description);
+                println!("Cas inconsistent detected: {}", description);
                 
                 // Validation de consistency
                 if data.listen_port == 0 && !data.capabilities.is_empty() {
-                    println!("Inconsistency: port 0 avec capabilities avancees");
+                    println!("Inconsistency: port 0 avec capabilities advanced");
                 }
                 
                 if data.version.0 == 0 && data.timestamp_ns > 2_000_000_000_000_000_000 {
-                    println!("Inconsistency: version oldne avec timestamp futur");
+                    println!("Inconsistency: version ancienne avec timestamp futur");
                 }
             }
             _ => panic!("Expected Handshake message"),
@@ -576,7 +576,7 @@ fn test_timing_attack_resistance() {
     
     let iterations = 1_000;
     
-    // Mesure le temps pour les messages valides
+    // Mesure le temps pour les messages valids
     let start = std::time::Instant::now();
     for _ in 0..iterations {
         let encoded = encode_message(&valid_msg).expect("Encoding should succeed");
@@ -600,10 +600,10 @@ fn test_timing_attack_resistance() {
     
     let time_ratio = invalid_duration.as_nanos() as f64 / valid_duration.as_nanos() as f64;
     
-    println!("Temps valide: {:?}, invalid: {:?}, ratio: {:.2}", 
+    println!("Temps valid: {:?}, invalid: {:?}, ratio: {:.2}", 
              valid_duration, invalid_duration, time_ratio);
     
-    // Le temps de traitement ne devrait pas reveler d'information
+    // Le temps de processing ne should pas reveal d'information
     // (ratio proche de 1.0)
     assert!(time_ratio > 0.5 && time_ratio < 2.0, 
             "Possible timing attack vulnerability: ratio {:.2}", time_ratio);

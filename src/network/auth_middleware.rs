@@ -29,31 +29,31 @@ pub struct AuthQuery {
     api_key: Option<String>,
 }
 
-/// State de l'authentification extrait de la request
+/// State de l'authentification extracted de la request
 #[derive(Debug, Clone)]
 pub struct AuthContext {
-    /// Key API utilisee (None si pas d'authentification)
+    /// Key API used (None si pas d'authentification)
     pub api_key: Option<ApiKey>,
     /// Permissions effectives
     pub permissions: Vec<Permission>,
-    /// Est-ce une request authentifiee ?
+    /// Est-ce une request authenticatede ?
     pub is_authenticated: bool,
     /// Est-ce un admin ?
     pub is_admin: bool,
 }
 
 impl AuthContext {
-    /// Creates a contexte anonyme (pas d'authentification)
+    /// Creates un contexte anonyme (pas d'authentification)
     pub fn anonymous() -> Self {
         Self {
             api_key: None,
-            permissions: vec![Permission::Read], // Les anonymes ont lecture seule
+            permissions: vec![Permission::Read], // Les anonymes ont lecture only
             is_authenticated: false,
             is_admin: false,
         }
     }
 
-    /// Creates a contexte a partir d'une key API valide
+    /// Creates un contexte to partir d'une key API valid
     pub fn from_api_key(key: ApiKey) -> Self {
         let is_admin = key.permissions.contains(&Permission::Admin);
         Self {
@@ -64,28 +64,28 @@ impl AuthContext {
         }
     }
 
-    /// Checks if le contexte a une permission donnee
+    /// Verifies si le contexte a une permission data
     pub fn has_permission(&self, perm: Permission) -> bool {
         self.permissions.contains(&perm) || self.is_admin
     }
 
-    /// Checks if le contexte peut lire
+    /// Verifies si le contexte peut lire
     pub fn can_read(&self) -> bool {
         self.has_permission(Permission::Read)
     }
 
-    /// Checks if le contexte peut ecrire
+    /// Verifies si le contexte peut write
     pub fn can_write(&self) -> bool {
         self.has_permission(Permission::Write)
     }
 
-    /// Checks if le contexte est admin
+    /// Verifies si le contexte est admin
     pub fn is_admin_only(&self) -> bool {
         self.has_permission(Permission::Admin)
     }
 }
 
-/// State partage pour le middleware d'authentification
+/// State shared pour le middleware d'authentification
 pub struct AuthMiddlewareState {
     /// Gestionnaire de keys API
     pub key_manager: Arc<RwLock<ApiKeyManager>>,
@@ -96,7 +96,7 @@ pub struct AuthMiddlewareState {
 }
 
 impl AuthMiddlewareState {
-    /// Creates a nouvel state d'authentification
+    /// Creates un nouvel state d'authentification
     pub fn new(key_manager: ApiKeyManager, rate_config: RateLimitConfig) -> Self {
         Self {
             key_manager: Arc::new(RwLock::new(key_manager)),
@@ -105,17 +105,17 @@ impl AuthMiddlewareState {
         }
     }
 
-    /// Creates a state avec des keys by default (pour les tests)
+    /// Creates un state avec des keys by default (pour les tests)
     pub fn with_default_keys() -> Self {
         let mut manager = ApiKeyManager::new();
         
         // Key read-only by default
         let _ = manager.create_key("default-read", vec![Permission::Read]);
         
-        // Key write by default (a changer en production)
+        // Key write by default (to changer en production)
         let _ = manager.create_key("default-write", vec![Permission::Read, Permission::Write]);
         
-        // Key admin by default (a changer absolument en production)
+        // Key admin by default (to changer absolument en production)
         let _ = manager.create_key("default-admin", vec![Permission::Read, Permission::Write, Permission::Admin]);
 
         Self::new(manager, RateLimitConfig::default())
@@ -125,15 +125,15 @@ impl AuthMiddlewareState {
 /// Configuration du rate limiting
 #[derive(Debug, Clone, Copy)]
 pub struct RateLimitConfig {
-    /// Requetes par seconde pour les keys anonymes
+    /// Requests par seconde pour les keys anonymes
     pub anon_rps: u64,
     /// Burst pour les keys anonymes
     pub anon_burst: u32,
-    /// Requetes par seconde pour les keys authentifiees
+    /// Requests par seconde pour les keys authenticatedes
     pub auth_rps: u64,
-    /// Burst pour les keys authentifiees
+    /// Burst pour les keys authenticatedes
     pub auth_burst: u32,
-    /// Requetes par seconde pour les admins
+    /// Requests par seconde pour les admins
     pub admin_rps: u64,
     /// Burst pour les admins
     pub admin_burst: u32,
@@ -188,7 +188,7 @@ impl RateBucket {
     }
 }
 
-/// Reponse d'error d'authentification
+/// Response d'error d'authentification
 #[derive(Serialize)]
 struct AuthErrorResponse {
     error: String,
@@ -228,7 +228,7 @@ impl IntoResponse for AuthError {
     }
 }
 
-/// Extrait la key API de la request (header ou query param)
+/// Extracted la key API de la request (header ou query param)
 fn extract_api_key(req: &Request) -> Option<String> {
     // 1. Essayer le header X-API-Key
     if let Some(header) = req.headers().get("X-API-Key") {
@@ -273,11 +273,11 @@ pub async fn auth_middleware(
             }
         }
     } else {
-        // Pas de key API = acces anonyme
+        // Pas de key API = access anonyme
         AuthContext::anonymous()
     };
 
-    // Check the rate limiting
+    // Verify le rate limiting
     let rate_limit_key = auth_context
         .api_key
         .as_ref()
@@ -304,14 +304,14 @@ pub async fn auth_middleware(
         }
     }
 
-    // Ajouter le contexte d'authentification aux extensions de la request
+    // Add authentication context to request extensions
     let mut req = req;
     req.extensions_mut().insert(auth_context);
 
     Ok(next.run(req).await)
 }
 
-/// Middleware qui requiert une permission specifique
+/// Middleware qui requiert une permission specific
 pub async fn require_permission(
     req: Request,
     next: Next,

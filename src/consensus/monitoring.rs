@@ -16,7 +16,7 @@ pub struct TimeSeriesPoint {
     pub value: f64,
 }
 
-/// Serie temporelle de metrics
+/// Series temporelle de metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeSeries {
     pub name: String,
@@ -84,7 +84,7 @@ impl TimeSeries {
             return None;
         }
 
-        // Calcul de la pente (regression lineaire simple)
+        // Calculation de la pente (regression linear simple)
         let n = recent_points.len() as f64;
         let sum_x: f64 = recent_points.iter().map(|p| p.timestamp as f64).sum();
         let sum_y: f64 = recent_points.iter().map(|p| p.value).sum();
@@ -96,7 +96,7 @@ impl TimeSeries {
     }
 }
 
-/// Dashboard de monitoring en temps reel
+/// Dashboard de monitoring en temps real
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsensusDashboard {
     pub block_height: u64,
@@ -114,7 +114,7 @@ pub struct ConsensusDashboard {
     pub difficulty_trend: Option<f64>,
     pub hashrate_trend: Option<f64>,
     
-    // Alertes actives
+    // Alertes active
     pub active_alerts: Vec<Alert>,
     pub alert_count_by_severity: HashMap<String, usize>,
 }
@@ -135,7 +135,7 @@ impl Default for MonitoringConfig {
         Self {
             update_interval: Duration::from_secs(30),
             retention_period: Duration::from_secs(24 * 3600), // 24h
-            max_time_series_points: 2880, // 24h a 30s d'intervalle
+            max_time_series_points: 2880, // 24h at 30s intervals
             dashboard_refresh_rate: Duration::from_secs(5),
             export_metrics: true,
             export_interval: Duration::from_secs(60),
@@ -204,11 +204,11 @@ impl ConsensusMonitor {
         }
     }
 
-    /// Starts the system de monitoring
+    /// Starts le system de monitoring
     pub async fn start(&mut self) {
-        info!("🔍 Starting consensus monitoring");
+        info!("🔍 Starting du monitoring du consensus");
 
-        // Initializes thes series temporelles
+        // Initialise les series temporelles
         self.initialize_time_series().await;
 
         // Lance les tasks de monitoring
@@ -217,26 +217,26 @@ impl ConsensusMonitor {
         let alert_task = self.start_alert_processing();
         let export_task = self.start_metrics_export();
 
-        // Attend l'arret
+        // Attend l'shutdown
         tokio::select! {
-            _ = metrics_task => warn!("Metrics collection task completeed"),
-            _ = dashboard_task => warn!("Dashboard update task completeed"),
-            _ = alert_task => warn!("Alert processing task completeed"),
-            _ = export_task => warn!("Metrics export task completeed"),
-            _ = self.shutdown_receiver.recv() => info!("Monitoring shutdown requested"),
+            _ = metrics_task => warn!("Task de collecte de metrics completeede"),
+            _ = dashboard_task => warn!("Task de update du dashboard completeede"),
+            _ = alert_task => warn!("Task de processing des alerts completeede"),
+            _ = export_task => warn!("Task d'export des metrics completeede"),
+            _ = self.shutdown_receiver.recv() => info!("Stopping du monitoring requested"),
         }
 
-        info!("🔍 Consensus monitoring stopped");
+        info!("🔍 Monitoring du consensus shut down");
     }
 
-    /// Arrete le system de monitoring
+    /// Stoppinge le system de monitoring
     pub async fn stop(&self) {
         if let Err(e) = self.shutdown_sender.send(()).await {
-            error!("Erreur lors de l'arret du monitoring: {}", e);
+            error!("Erreur lors de l'shutdown du monitoring: {}", e);
         }
     }
 
-    /// Initializes thes series temporelles
+    /// Initialise les series temporelles
     async fn initialize_time_series(&self) {
         let mut series = self.time_series.write().await;
         let max_points = self.config.max_time_series_points;
@@ -261,13 +261,13 @@ impl ConsensusMonitor {
             loop {
                 interval.tick().await;
 
-                // Collecte les metrics currentles
+                // Collecte les metrics actuelles
                 let current_metrics = metrics.read().await;
                 let block_metrics = &current_metrics.block_metrics;
                 let mining_metrics = &current_metrics.mining_metrics;
                 let network_metrics = &current_metrics.network_metrics;
 
-                // Met a jour les series temporelles
+                // Met up to date les series temporelles
                 {
                     let mut series = time_series.write().await;
                     
@@ -294,7 +294,7 @@ impl ConsensusMonitor {
                     }
                 }
 
-                // Met a jour le manager d'alertes
+                // Met up to date le manager d'alerts
                 {
                     let mut manager = alert_manager.write().await;
                     manager.update_metrics(
@@ -310,7 +310,7 @@ impl ConsensusMonitor {
         })
     }
 
-    /// Lance les mises a jour du dashboard
+    /// Lance les mises up to date du dashboard
     async fn start_dashboard_updates(&self) {
         let mut interval = interval(self.config.dashboard_refresh_rate);
         let metrics = Arc::clone(&self.metrics);
@@ -322,14 +322,14 @@ impl ConsensusMonitor {
             loop {
                 interval.tick().await;
 
-                // Met a jour le dashboard
+                // Met up to date le dashboard
                 {
                     let current_metrics = metrics.read().await;
                     let manager = alert_manager.read().await;
                     let series = time_series.read().await;
                     let mut dash = dashboard.write().await;
 
-                    // Metrics currentles
+                    // Metrics actuelles
                     dash.block_height = current_metrics.block_metrics.current_height;
                     dash.block_time_avg = current_metrics.block_metrics.average_block_time.as_secs_f64();
                     dash.difficulty = current_metrics.mining_metrics.current_difficulty;
@@ -369,11 +369,11 @@ impl ConsensusMonitor {
         })
     }
 
-    /// Lance le traitement des alertes
+    /// Lance le traitement des alerts
     async fn start_alert_processing(&mut self) {
         tokio::spawn(async move {
             while let Some(alert) = self.alert_receiver.recv().await {
-                info!("📢 Nouvelle alerte: {} - {}", alert.severity, alert.message);
+                info!("📢 Nouvelle alert: {} - {}", alert.severity, alert.message);
                 
                 // Ici on pourrait ajouter:
                 // - Envoi de notifications (email, Slack, Discord)
@@ -404,7 +404,7 @@ impl ConsensusMonitor {
 
                 let mut prometheus_output = String::new();
                 
-                // Metrics currentles
+                // Metrics actuelles
                 prometheus_output.push_str(&format!(
                     "# HELP tsn_block_height Current block height\n\
                      # TYPE tsn_block_height gauge\n\
@@ -454,7 +454,7 @@ impl ConsensusMonitor {
                     dash.peer_count
                 ));
 
-                // Alertes par severite
+                // Alertes par severity
                 for (severity, count) in &dash.alert_count_by_severity {
                     prometheus_output.push_str(&format!(
                         "# HELP tsn_alerts_total Number of alerts by severity\n\
@@ -475,32 +475,32 @@ impl ConsensusMonitor {
         })
     }
 
-    /// Retourne le dashboard current
+    /// Retourne le dashboard actuel
     pub async fn get_dashboard(&self) -> ConsensusDashboard {
         self.dashboard.read().await.clone()
     }
 
-    /// Retourne une serie temporelle specifique
+    /// Returns une series temporelle specific
     pub async fn get_time_series(&self, name: &str) -> Option<TimeSeries> {
         self.time_series.read().await.get(name).cloned()
     }
 
-    /// Retourne toutes les series temporelles
+    /// Returns toutes les series temporelles
     pub async fn get_all_time_series(&self) -> HashMap<String, TimeSeries> {
         self.time_series.read().await.clone()
     }
 
-    /// Retourne les alertes actives
+    /// Retourne les alerts active
     pub async fn get_active_alerts(&self) -> Vec<Alert> {
         self.alert_manager.read().await.get_active_alerts().to_vec()
     }
 
-    /// Resout une alerte
+    /// Resolves une alert
     pub async fn resolve_alert(&self, alert_id: &str) {
         self.alert_manager.write().await.resolve_alert(alert_id);
     }
 
-    /// Retourne les statistiques de sante du system
+    /// Returns les statistiques de health du system
     pub async fn get_health_status(&self) -> HealthStatus {
         let dashboard = self.get_dashboard().await;
         let alerts = self.get_active_alerts().await;
@@ -530,7 +530,7 @@ impl ConsensusMonitor {
     }
 }
 
-/// Statut de sante du system
+/// Statut de health du system
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthStatus {
     pub status: String,

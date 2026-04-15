@@ -71,7 +71,7 @@ impl WalletNote {
 /// A shielded wallet with privacy features.
 ///
 /// This wallet is used for:
-/// - Generating keypairs (Dilithium for ownership proofs)
+/// - Generating keypeers (Dilithium for ownership proofs)
 /// - Scanning blocks for incoming notes
 /// - Tracking balance (sum of unspent notes)
 ///
@@ -98,6 +98,28 @@ impl ShieldedWallet {
     /// Generate a new random wallet.
     pub fn generate() -> Self {
         let keypair = KeyPair::generate();
+        let secret_bytes = keypair.secret_key_bytes();
+
+        let nullifier_key = NullifierKey::new(&secret_bytes);
+        let viewing_key = ViewingKey::new(&secret_bytes);
+        let pk_hash = compute_pk_hash(&keypair.public_key_bytes());
+
+        Self {
+            keypair,
+            nullifier_key,
+            viewing_key,
+            pk_hash,
+            notes: Vec::new(),
+            last_scanned_height: 0,
+            tx_history: Vec::new(),
+        }
+    }
+
+    /// Generate a wallet deterministically from a 32-byte seed.
+    /// The same seed always produces the same wallet (same keys, same address).
+    /// Used for BIP39 seed phrase recovery.
+    pub fn from_seed(seed: &[u8; 32]) -> Self {
+        let keypair = KeyPair::from_seed(seed);
         let secret_bytes = keypair.secret_key_bytes();
 
         let nullifier_key = NullifierKey::new(&secret_bytes);

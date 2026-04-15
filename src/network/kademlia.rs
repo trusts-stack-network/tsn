@@ -1,7 +1,7 @@
 //! Module DHT Kademlia de base pour TSN
 //! 
-//! Implemente les structures fondamentales : NodeId, table de routage k-buckets,
-//! et les constantes du protocole Kademlia. Concu pour la robustesse dans
+//! Implements les structures fondamentales : NodeId, table de routage k-buckets,
+//! et les constantes du protocole Kademlia. Designed pour la robustesse dans
 //! des networkx adversariaux avec partitions et nodes malveillants.
 
 use std::net::SocketAddr;
@@ -11,7 +11,7 @@ use sha2::{Sha256, Digest};
 
 /// Constantes du protocole Kademlia
 pub const KADEMLIA_K: usize = 20;           // Taille des k-buckets et responses
-pub const KADEMLIA_ALPHA: usize = 3;        // Parallelisme des requests
+pub const KADEMLIA_ALPHA: usize = 3;        // Parallelism des requests
 pub const KADEMLIA_B: usize = 160;          // Bits dans un NodeId (SHA-1)
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(60);
 pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
@@ -22,12 +22,12 @@ pub const BUCKET_REFRESH_INTERVAL: Duration = Duration::from_secs(3600); // 1h
 pub struct NodeId([u8; 20]);
 
 impl NodeId {
-    /// Creates a NodeId depuis un array de 20 bytes
+    /// Creates un NodeId depuis un array de 20 bytes
     pub fn new(bytes: [u8; 20]) -> Self {
         Self(bytes)
     }
     
-    /// Generates a NodeId random
+    /// Generates un NodeId random
     pub fn random() -> Self {
         use rand::RngCore;
         let mut bytes = [0u8; 20];
@@ -35,7 +35,7 @@ impl NodeId {
         Self(bytes)
     }
     
-    /// Creates a NodeId depuis une key publique ou adresse
+    /// Creates un NodeId depuis une key publique ou adresse
     pub fn from_data(data: &[u8]) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(data);
@@ -46,7 +46,7 @@ impl NodeId {
         Self(node_id)
     }
     
-    /// Distance XOR entre deux NodeId (metrique Kademlia)
+    /// Distance XOR entre deux NodeId (metric Kademlia)
     pub fn distance(&self, other: &NodeId) -> NodeDistance {
         let mut result = [0u8; 20];
         for i in 0..20 {
@@ -55,7 +55,7 @@ impl NodeId {
         NodeDistance(result)
     }
     
-    /// Retourne le bit a la position donnee (0 = MSB)
+    /// Returns le bit to la position data (0 = MSB)
     pub fn bit(&self, position: usize) -> bool {
         if position >= 160 {
             return false;
@@ -65,7 +65,7 @@ impl NodeId {
         (self.0[byte_index] >> bit_index) & 1 == 1
     }
     
-    /// Prefixe commun le plus long avec un autre NodeId
+    /// Prefix commun le plus long avec un autre NodeId
     pub fn common_prefix_len(&self, other: &NodeId) -> usize {
         for i in 0..160 {
             if self.bit(i) != other.bit(i) {
@@ -83,7 +83,7 @@ impl NodeId {
 
 impl std::fmt::Display for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(&self.0[..8])) // Affiche seulement les 8 premiers bytes
+        write!(f, "{}", hex::encode(&self.0[..8])) // Affiche onlyment les 8 premiers bytes
     }
 }
 
@@ -103,7 +103,7 @@ impl NodeDistance {
         &self.0
     }
     
-    /// Calcule le nombre de bits de prefixe zero (pour determiner le bucket)
+    /// Calculationates le nombre de bits de prefix zero (pour determine le bucket)
     pub fn leading_zeros(&self) -> usize {
         for i in 0..160 {
             let byte_index = i / 8;
@@ -129,15 +129,15 @@ impl Ord for NodeDistance {
     }
 }
 
-/// Noeud Kademlia avec metadata
+/// Node Kademlia avec metadata
 #[derive(Debug, Clone)]
 pub struct KademliaNode {
     pub id: NodeId,
     pub addr: SocketAddr,
     pub last_seen: Instant,
     pub rtt: Option<Duration>,      // Round-trip time
-    pub failures: u32,             // Failures consecutifs
-    pub capabilities: Vec<String>,  // Capacites du node
+    pub failures: u32,             // Failures consecutive
+    pub capabilities: Vec<String>,  // Capacitys du node
 }
 
 impl KademliaNode {
@@ -152,24 +152,24 @@ impl KademliaNode {
         }
     }
     
-    /// Met a jour les stats after un ping reussi
+    /// Met up to date les stats after un ping successful
     pub fn update_success(&mut self, rtt: Duration) {
         self.last_seen = Instant::now();
         self.rtt = Some(rtt);
         self.failures = 0;
     }
     
-    /// Incremente les echecs
+    /// Increments les failures
     pub fn record_failure(&mut self) {
         self.failures += 1;
     }
     
-    /// Checks if le node est considere comme "stale"
+    /// Verifies si le node est considered comme "stale"
     pub fn is_stale(&self, threshold: Duration) -> bool {
         self.last_seen.elapsed() > threshold
     }
     
-    /// Score de qualite du node (pour le tri)
+    /// Score de quality du node (pour le tri)
     pub fn quality_score(&self) -> u64 {
         let base_score = 1000u64;
         let failure_penalty = self.failures as u64 * 100;
@@ -229,7 +229,7 @@ impl<'de> Deserialize<'de> for KademliaNode {
         Ok(KademliaNode {
             id: data.id,
             addr: data.addr,
-            last_seen: Instant::now(), // Utilise le temps current lors de la deserialization
+            last_seen: Instant::now(), // Utilise le temps actuel lors de la deserialization
             rtt: None,
             failures: data.failures,
             capabilities: data.capabilities,
@@ -256,7 +256,7 @@ impl KBucket {
     
     /// Ajoute un node au bucket (LRU eviction)
     pub fn add_node(&mut self, node: KademliaNode) -> bool {
-        // Si le node existe already, le met a jour et le deplace a la fin
+        // Si le node exists already, le met up to date et le moves to la fin
         if let Some(pos) = self.nodes.iter().position(|n| n.id == node.id) {
             self.nodes.remove(pos);
             self.nodes.push(node);
@@ -271,7 +271,7 @@ impl KBucket {
             return true;
         }
         
-        // Bucket plein : checks si on peut remplacer un node stale
+        // Bucket plein : verifies si on peut remplacer un node stale
         if let Some(pos) = self.nodes.iter().position(|n| n.is_stale(Duration::from_secs(900))) {
             self.nodes.remove(pos);
             self.nodes.push(node);
@@ -298,14 +298,14 @@ impl KBucket {
         &self.nodes
     }
     
-    /// Retourne les nodes tries par qualite
+    /// Returns les nodes sorted par quality
     pub fn nodes_by_quality(&self) -> Vec<KademliaNode> {
         let mut sorted = self.nodes.clone();
         sorted.sort_by_key(|n| std::cmp::Reverse(n.quality_score()));
         sorted
     }
     
-    /// Checks if le bucket est plein
+    /// Verifies si le bucket est plein
     pub fn is_full(&self) -> bool {
         self.nodes.len() >= self.max_size
     }
@@ -315,12 +315,12 @@ impl KBucket {
         self.nodes.len()
     }
     
-    /// Checks if le bucket est vide
+    /// Verifies si le bucket est vide
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
     
-    /// Derniere update du bucket
+    /// Last update du bucket
     pub fn last_updated(&self) -> Instant {
         self.last_updated
     }
@@ -335,7 +335,7 @@ pub struct RoutingTable {
 }
 
 impl RoutingTable {
-    /// Creates a nouvelle table de routage
+    /// Creates une new table de routage
     pub fn new(local_id: NodeId) -> Self {
         Self {
             local_id,
@@ -344,10 +344,10 @@ impl RoutingTable {
         }
     }
     
-    /// Ajoute un node a la table de routage
+    /// Adds un node to la table de routage
     pub fn add_node(&mut self, node: KademliaNode) -> bool {
         if node.id == self.local_id {
-            return false; // Ne s'ajoute pas soi-same
+            return false; // Ne s'adds pas itself
         }
         
         let bucket_index = self.bucket_index(&node.id);
@@ -369,14 +369,14 @@ impl RoutingTable {
             candidates.extend(bucket.nodes().iter().cloned());
         }
         
-        // Trie par distance a la cible
+        // Trie par distance to la cible
         candidates.sort_by_key(|node| node.id.distance(target));
         
         // Retourne les count premiers
         candidates.into_iter().take(count).collect()
     }
     
-    /// Trouve les nodes dans un bucket specifique
+    /// Trouve les nodes dans un bucket specific
     pub fn bucket_nodes(&self, bucket_index: usize) -> Vec<KademliaNode> {
         if bucket_index < self.buckets.len() {
             self.buckets[bucket_index].nodes().to_vec()
@@ -385,12 +385,12 @@ impl RoutingTable {
         }
     }
     
-    /// Calcule l'index du bucket pour un NodeId donne
+    /// Calculationates l'index du bucket pour un NodeId given
     fn bucket_index(&self, node_id: &NodeId) -> usize {
         let distance = self.local_id.distance(node_id);
         let leading_zeros = distance.leading_zeros();
         
-        // Le bucket index est le nombre de bits de prefixe commun
+        // Le bucket index est le nombre de bits de prefix commun
         // Bucket 0 = distance maximale, Bucket 159 = distance minimale
         if leading_zeros >= KADEMLIA_B {
             KADEMLIA_B - 1
@@ -431,7 +431,7 @@ impl RoutingTable {
         all
     }
     
-    /// Cleans up the nodes stale
+    /// Nettoie les nodes stale
     pub fn cleanup_stale_nodes(&mut self, threshold: Duration) -> usize {
         let mut removed = 0;
         for bucket in &mut self.buckets {
@@ -485,7 +485,7 @@ mod tests {
         let id1 = NodeId::new([0b10101010u8; 20]);
         let id2 = NodeId::new([0b10101011u8; 20]);
         
-        // Different au dernier bit du premier byte
+        // Differ au last bit du first byte
         assert_eq!(id1.common_prefix_len(&id2), 7);
     }
     
@@ -504,7 +504,7 @@ mod tests {
         // Bucket plein, ne peut pas ajouter un nouveau node
         assert!(!bucket.add_node(node3));
         
-        // Mais peut mettre a jour un node existant
+        // Mais peut update un node existant
         assert!(bucket.add_node(node1.clone()));
         assert_eq!(bucket.len(), 2);
     }
@@ -523,7 +523,7 @@ mod tests {
         let closest = table.closest_nodes(&NodeId::new([2u8; 20]), 10);
         assert_eq!(closest.len(), 2);
         
-        // Le node [1u8; 20] devrait be plus proche de [2u8; 20] que [255u8; 20]
+        // Le node [1u8; 20] should be plus proche de [2u8; 20] que [255u8; 20]
         assert_eq!(closest[0].id, node1.id);
     }
 }

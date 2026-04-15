@@ -51,7 +51,7 @@ impl SlhDsaValidator {
         }
     }
 
-    /// Validate a completee block including all transactions
+    /// Validate a complete block including all transactions
     pub fn validate_block(&self, block: &Block) -> Result<(), ConsensusError> {
         // Validate block header signature
         self.validate_block_header(&block.header)?;

@@ -29,7 +29,7 @@ impl Api {
     }
 
     async fn get_peers(&self) -> Vec<SocketAddr> {
-        // Retrieve la liste des pairs connus
+        // Retrieve la liste des peers connus
         let mut peers = Vec::new();
         // ...
         peers

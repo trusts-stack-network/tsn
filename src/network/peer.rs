@@ -1,5 +1,5 @@
 //! Peer management for TSN P2P network
-//! TODO: a implementer proprement par le bot NETWORK
+//! TODO: to implement proprement par le bot NETWORK
 
 use std::net::SocketAddr;
 use std::collections::HashMap;

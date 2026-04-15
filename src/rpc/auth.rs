@@ -18,7 +18,7 @@ use tracing::{info, warn, error};
 /// Permissions possibles pour une API key
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApiPermission {
-    /// Lecture seule (getblock, gettransaction, etc.)
+    /// Lecture only (getblock, gettransaction, etc.)
     Read,
     /// Writing (sendtransaction, submitblock)
     Write,
@@ -27,7 +27,7 @@ pub enum ApiPermission {
 }
 
 impl ApiPermission {
-    /// Checks if la permission allows l'acces a une autre permission
+    /// Verifies si la permission allows l'access to une autre permission
     pub fn allows(&self, required: &ApiPermission) -> bool {
         match (self, required) {
             (ApiPermission::Admin, _) => true,
@@ -44,7 +44,7 @@ impl ApiPermission {
 pub struct ApiKeyMetadata {
     /// Nom/description de la key
     pub name: String,
-    /// Permissions associees
+    /// Permissions associateds
     pub permissions: Vec<ApiPermission>,
     /// Timestamp de creation
     pub created_at: u64,
@@ -54,14 +54,14 @@ pub struct ApiKeyMetadata {
     pub rate_limit_rpm: u32,
     /// Key est-elle active
     pub is_active: bool,
-    /// Nombre total de requests effectuees
+    /// Nombre total de requests performedes
     pub total_requests: u64,
-    /// Derniere utilisation
+    /// Last utilisation
     pub last_used: Option<u64>,
 }
 
 impl ApiKeyMetadata {
-    /// Creates a nouvelle metadonnee de key API
+    /// Creates une new metadata de key API
     pub fn new(name: impl Into<String>, permissions: Vec<ApiPermission>) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -80,7 +80,7 @@ impl ApiKeyMetadata {
         }
     }
 
-    /// Checks if la key a expire
+    /// Verifies si la key a expired
     pub fn is_expired(&self) -> bool {
         if self.expires_at == 0 {
             return false;
@@ -92,7 +92,7 @@ impl ApiKeyMetadata {
         now > self.expires_at
     }
 
-    /// Checks if la key a la permission requise
+    /// Verifies si la key a la permission requise
     pub fn has_permission(&self, required: &ApiPermission) -> bool {
         self.permissions.iter().any(|p| p.allows(required))
     }
@@ -107,7 +107,7 @@ pub struct ApiKeyManager {
 }
 
 impl ApiKeyManager {
-    /// Creates a nouveau manager de keys API
+    /// Creates un nouveau gestionnaire de keys API
     pub fn new() -> Self {
         Self {
             keys: Arc::new(RwLock::new(HashMap::new())),
@@ -115,7 +115,7 @@ impl ApiKeyManager {
         }
     }
 
-    /// Generates ae nouvelle API key
+    /// Generates une new API key
     pub async fn generate_key(&self, metadata: ApiKeyMetadata) -> String {
         let key = Self::generate_random_key();
         let hash = Self::hash_key(&key);
@@ -131,7 +131,7 @@ impl ApiKeyManager {
         key
     }
 
-    /// Valide une API key et retourne ses metadata si valide
+    /// Valide une API key et returns ses metadata si valid
     pub async fn validate_key(&self, key: &str) -> Option<ApiKeyMetadata> {
         let hash = Self::hash_key(key);
         let mut keys = self.keys.write().await;
@@ -147,7 +147,7 @@ impl ApiKeyManager {
                 return None;
             }
             
-            // Met a jour les stats
+            // Met up to date les stats
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -161,7 +161,7 @@ impl ApiKeyManager {
         }
     }
 
-    /// Checks the rate limiting pour une key
+    /// Verifies le rate limiting pour une key
     pub async fn check_rate_limit(&self, key: &str) -> bool {
         let hash = Self::hash_key(key);
         let keys = self.keys.read().await;
@@ -176,15 +176,15 @@ impl ApiKeyManager {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let window_start = now.saturating_sub(60); // Fenbe de 1 minute
+        let window_start = now.saturating_sub(60); // Window de 1 minute
         
         let mut rate_limits = self.rate_limits.write().await;
         let timestamps = rate_limits.entry(hash).or_default();
         
-        // Cleans up the oldnes entrees
+        // Nettoie les anciennes entries
         timestamps.retain(|&t| t > window_start);
         
-        // Checks if on depasse la limite
+        // Verifies si on exceeds la limite
         if timestamps.len() >= metadata.rate_limit_rpm as usize {
             warn!("Rate limit exceeded for API key");
             return false;
@@ -194,7 +194,7 @@ impl ApiKeyManager {
         true
     }
 
-    /// Revoque une API key
+    /// Revokes une API key
     pub async fn revoke_key(&self, key: &str) -> bool {
         let hash = Self::hash_key(key);
         let mut keys = self.keys.write().await;
@@ -215,7 +215,7 @@ impl ApiKeyManager {
             .collect()
     }
 
-    /// Generates ae key random securisee
+    /// Generates une key random secure
     fn generate_random_key() -> String {
         use rand::RngCore;
         let mut bytes = [0u8; 32];
@@ -305,12 +305,12 @@ mod tests {
         metadata.rate_limit_rpm = 5;
         let key = manager.generate_key(metadata).await;
         
-        // 5 requests devraient passer
+        // 5 requests should pass
         for _ in 0..5 {
             assert!(manager.check_rate_limit(&key).await);
         }
         
-        // La 6eme devrait be rejetee
+        // La 6th should be rejectede
         assert!(!manager.check_rate_limit(&key).await);
     }
 

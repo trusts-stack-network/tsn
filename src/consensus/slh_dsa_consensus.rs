@@ -1,13 +1,13 @@
 //! Consensus SLH-DSA - Signature stateful
 //! 
-//! ⚠️  AVERTISSEMENT DE SECURITY: SLH-DSA est une signature stateful.
-//!    - Un same state ne doit JAMAIS be reutilise
+//! ⚠️  SECURITY WARNING: SLH-DSA is a stateful signature.
+//!    - Un same state ne doit JAMAIS be reused
 //!    - L'state doit be persistant et atomique
-//!    - En cas de desynchronisation, le node doit s'arreter
+//!    - En cas de desynchronization, le node doit s'shutdowner
 //! 
 //! Cette implementation inclut des garde-fous stricts pour preventsr
-//! la reutilisation d'state, mais ne peut pas garantir la security
-//! dans un environnement distribue reel.
+//! la reuse d'state, mais ne peut pas garantir la security
+//! dans un environnement distributed real.
 
 use crate::crypto::pq::slh_dsa::{SlhDsaSigner, SlhDsaVerifier, SlhDsaError};
 use crate::core::block::{Block, BlockHeader};
@@ -20,11 +20,11 @@ use serde::{Serialize, Deserialize};
 /// Erreurs de validation SLH-DSA
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum SlhDsaConsensusError {
-    #[error("State SLH-DSA desynchronise - arret du node requis")]
+    #[error("State SLH-DSA desynchronized - shutdown du node requis")]
     StateDesync,
     #[error("Signature SLH-DSA invalid")]
     InvalidSignature,
-    #[error("Reutilisation d'state detectee - attaque potentielle")]
+    #[error("Reuse d'state detectede - attaque potentielle")]
     StateReuseDetected,
     #[error("Erreur interne SLH-DSA: {0}")]
     InternalError(String),
@@ -33,17 +33,17 @@ pub enum SlhDsaConsensusError {
 /// State d'un validateur SLH-DSA
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlhDsaValidatorState {
-    /// Dernier compteur utilise
+    /// Last compteur used
     pub last_counter: u64,
-    /// Hash du dernier bloc valide
+    /// Hash du last bloc validated
     pub last_block_hash: Hash,
-    /// Nombre de signatures effectuees
+    /// Nombre de signatures performedes
     pub signature_count: u64,
 }
 
-/// Gestionnaire d'state SLH-DSA
+/// Manager d'state SLH-DSA
 /// 
-/// Thread-safe avec verrouillage strict pour prevenir
+/// Thread-safe avec verrouillage strict pour prevent
 /// toute utilisation concurrente de l'state
 pub struct SlhDsaStateManager {
     state: Arc<Mutex<SlhDsaValidatorState>>,
@@ -51,7 +51,7 @@ pub struct SlhDsaStateManager {
 }
 
 impl SlhDsaStateManager {
-    /// Creates a nouveau manager d'state
+    /// Creates un nouveau manager d'state
     pub fn new(initial_counter: u64, max_signatures: u64) -> Self {
         Self {
             state: Arc::new(Mutex::new(SlhDsaValidatorState {
@@ -63,17 +63,17 @@ impl SlhDsaStateManager {
         }
     }
 
-    /// Met a jour l'state after une signature reussie
+    /// Met up to date l'state after une signature successful
     /// 
     /// # Panics
-    /// Si l'state est corrompu ou depasse - par security
+    /// Si l'state est corrupted ou exceeded - par security
     pub fn update_signature_state(&self, new_counter: u64, block_hash: Hash) -> Result<(), SlhDsaConsensusError> {
         let mut state = self.state.lock()
             .map_err(|_| SlhDsaConsensusError::InternalError("Mutex poisoned".to_string()))?;
         
-        // Verification anti-reutilisation
+        // Verification anti-reuse
         if new_counter <= state.last_counter {
-            panic!("CRITICAL: Reutilisation d'state SLH-DSA detectee - arret immediat");
+            panic!("CRITICAL: Reuse d'state SLH-DSA detectede - shutdown immediate");
         }
         
         // Verification de limite
@@ -88,7 +88,7 @@ impl SlhDsaStateManager {
         Ok(())
     }
 
-    /// Obtient une copie de l'state current
+    /// Gets une copie de l'state actuel
     pub fn get_state(&self) -> SlhDsaValidatorState {
         // Mutex poisoning means a previous holder panicked — propagate
         self.state.lock()
@@ -96,7 +96,7 @@ impl SlhDsaStateManager {
             .clone()
     }
 
-    /// Checks if l'state est proche de la limite
+    /// Verifies si l'state est proche de la limite
     pub fn is_near_limit(&self) -> bool {
         let state = self.state.lock()
             .expect("CRITICAL: SlhDsaStateManager mutex poisoned");
@@ -121,28 +121,28 @@ impl SlhDsaConsensus {
     /// Valide la signature d'un bloc
     /// 
     /// # Errors
-    /// Retourne une error si la signature est invalid ou si l'state est compromis
+    /// Returns une error si la signature est invalid ou si l'state est compromis
     pub fn validate_block_signature(&self, block: &Block) -> Result<(), SlhDsaConsensusError> {
-        // Check that l'state n'est pas proche de la limite
+        // Verify que l'state n'est pas proche de la limite
         if self.state_manager.is_near_limit() {
             return Err(SlhDsaConsensusError::StateDesync);
         }
 
-        // Obtenir le message signe (hash du bloc)
+        // Get le message signed (hash du bloc)
         let message = block.hash().as_bytes();
         
         // Extraire la signature et le compteur du bloc
         let (signature, counter) = self.extract_signature_data(block)?;
         
-        // Check the signature
+        // Verify la signature
         self.verifier
             .verify(&message, &signature, counter)
             .map_err(|e| match e {
                 SlhDsaError::InvalidSignature => SlhDsaConsensusError::InvalidSignature,
-                _ => SlhDsaConsensusError::InternalError(format!("Verification echouee: {:?}", e)),
+                _ => SlhDsaConsensusError::InternalError(format!("Verification failed: {:?}", e)),
             })?;
 
-        // Mettre a jour l'state
+        // Update l'state
         self.state_manager
             .update_signature_state(counter, block.hash())
             .map_err(|_| SlhDsaConsensusError::StateReuseDetected)?;
@@ -152,19 +152,19 @@ impl SlhDsaConsensus {
 
     /// Valide la signature d'une transaction
     pub fn validate_transaction_signature(&self, tx: &Transaction) -> Result<(), SlhDsaConsensusError> {
-        // Pour les transactions, on uses une key differente et un compteur separe
-        // Cette implementation depend du format de transaction
-        // TODO: Implementer selon le format de transaction TSN
+        // Pour les transactions, on utilise une key different et un compteur separated
+        // Cette implementation depends du format de transaction
+        // TODO: Implement selon le format de transaction TSN
         Ok(())
     }
 
     /// Extrait la signature et le compteur des data du bloc
     fn extract_signature_data(&self, block: &Block) -> Result<(Vec<u8>, u64), SlhDsaConsensusError> {
-        // Le format depend de l'implementation du bloc TSN
-        // Hypothese: le bloc contient champ signature et counter
+        // The format depends on the TSN block implementation
+        // Assumption: the block contains signature and counter fields
         block
             .get_signature_data()
-            .ok_or_else(|| SlhDsaConsensusError::InternalError("Data de signature manquantes".to_string()))
+            .ok_or_else(|| SlhDsaConsensusError::InternalError("Data de signature missinges".to_string()))
     }
 }
 
@@ -208,5 +208,5 @@ mod tests {
     fn test_state_manager_prevents_reuse() {
         let manager = SlhDsaStateManager::new(0, 1000);
         
-        // First update devrait reussir
+        // First update should succeed
         assert!(manager.update_signature_state(1,

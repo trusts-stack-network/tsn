@@ -1,7 +1,7 @@
 //! Mocks pour les tests network TSN
 //! 
-//! Ce module provides des implementations mock des interfaces network pour allowstre
-//! des tests unitaires isoles sans dependances externes.
+//! Ce module fournit des implementations mock des interfaces network pour allowstre
+//! des tests unitaires isolated sans dependencies externes.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -77,7 +77,7 @@ impl Validator {
         }
     }
 
-    /// Validate a completee block including all transactions
+    /// Validate a complete block including all transactions
     pub fn validate_block(&self, block: &Block, parent_header: Option<&BlockHeader>, state_view: &dyn StateView) -> Result<(), ValidationError> {
         // Validate block header (includes timestamp validation)
         self.validate_block_header(&block.header, parent_header)?;

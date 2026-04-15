@@ -44,7 +44,7 @@ fn test_execute_mint_zst() {
 
     let result = mgr.execute_mint_zst(&mut state, &req, 1000).unwrap();
 
-    // Check that l'state a change
+    // Verify que l'state a changed
     assert!(state.reserve_tsn > initial_reserve);
     assert!(state.supply_zst > initial_supply);
     assert_eq!(state.supply_zst, initial_supply + result.amount_out);
@@ -59,7 +59,7 @@ fn test_execute_mint_zst_slippage_protection() {
     let req = MintBurnRequest {
         action: StablecoinAction::MintZST,
         amount_in: 100 * ATOMIC_UNIT,
-        min_amount_out: u128::MAX, // Impossible a atteindre
+        min_amount_out: u128::MAX, // Unable to atteindre
         price_ref: 100,
     };
 
@@ -136,7 +136,7 @@ fn test_execute_burn_zst_cooldown_exceeded() {
     let mgr = manager();
     let mut state = default_state();
 
-    // Essayer de bruler plus de 5% du supply en un coup
+    // Essayer de burn plus de 5% du supply en un coup
     let too_much = state.supply_zst * 600 / 10_000; // 6%
     let req = MintBurnRequest {
         action: StablecoinAction::BurnZST,
@@ -175,7 +175,7 @@ fn test_execute_mint_zrs() {
 fn test_execute_mint_zrs_circuit_breaker() {
     let mgr = manager();
     let mut state = default_state();
-    state.circuit_breaker_activated = 900; // Active a t=900
+    state.circuit_breaker_activated = 900; // Enabled at t=900
 
     let req = MintBurnRequest {
         action: StablecoinAction::MintZRS,
@@ -281,11 +281,11 @@ fn test_circuit_breaker_expiry() {
     let mut state = default_state();
     state.circuit_breaker_activated = 1000;
 
-    // Pas encore expire
+    // Pas encore expired
     mgr.check_circuit_breaker_expiry(&mut state, 50_000);
     assert_eq!(state.circuit_breaker_activated, 1000);
 
-    // Expire
+    // Expired
     mgr.check_circuit_breaker_expiry(&mut state, 1000 + 86_401);
     assert_eq!(state.circuit_breaker_activated, 0);
 }
@@ -306,7 +306,7 @@ fn test_scenario_mint_then_burn_zst() {
     };
     let mint_result = mgr.execute_mint_zst(&mut state, &mint_req, 1000).unwrap();
 
-    // Burn la moitie des ZST recus
+    // Burn la half des ZST receiveds
     let burn_amount = mint_result.amount_out / 2;
     let burn_req = MintBurnRequest {
         action: StablecoinAction::BurnZST,
@@ -316,7 +316,7 @@ fn test_scenario_mint_then_burn_zst() {
     };
     let burn_result = mgr.execute_burn_zst(&mut state, &burn_req, 1000).unwrap();
 
-    // Le TSN recupere devrait be environ la moitie du TSN depose (moins les frais)
+    // Le TSN retrieved should be environ la half du TSN deposited (moins les fees)
     assert!(burn_result.amount_out < 50 * ATOMIC_UNIT);
     assert!(burn_result.amount_out > 40 * ATOMIC_UNIT);
 }
@@ -326,7 +326,7 @@ fn test_scenario_bank_run_protection() {
     let mgr = manager();
     let mut state = default_state();
 
-    // Essayer de bruler tout le supply en un bloc → cooldown
+    // Essayer de burn tout le supply en un bloc → cooldown
     let req = MintBurnRequest {
         action: StablecoinAction::BurnZST,
         amount_in: state.supply_zst,
@@ -344,7 +344,7 @@ fn test_scenario_bank_run_protection() {
 fn test_scenario_circuit_breaker_activation() {
     let mgr = manager();
     let mut state = default_state();
-    // Ratio very bas pour declencher le circuit breaker
+    // Ratio very bas pour trigger le circuit breaker
     state.reserve_tsn = 70_000 * ATOMIC_UNIT; // ratio < 120%
 
     let req = MintBurnRequest {
@@ -355,7 +355,7 @@ fn test_scenario_circuit_breaker_activation() {
     };
 
     let _ = mgr.execute_burn_zst(&mut state, &req, 2000);
-    // Le circuit breaker devrait s'activer si le ratio descend sous 120%
+    // Le circuit breaker should s'activer si le ratio descend sous 120%
     let ratio = mgr.engine().calculate_ratio(&state).unwrap();
     if ratio < 12_000 {
         assert!(state.circuit_breaker_activated > 0);

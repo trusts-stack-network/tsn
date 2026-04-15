@@ -137,7 +137,7 @@ impl BalanceValidator {
         }
     }
 
-    /// Validate a completee block against the current state.
+    /// Validate a complete block against the current state.
     ///
     /// This performs comprehensive validation of all transactions in the block,
     /// ensuring that all balance and state invariants are maintained.

@@ -1,13 +1,13 @@
-# Rapport d'Audit Security - Module Crypto
+# Rapport d'Audit Sécurité - Module Crypto
 
 **Date** : 2024-XX-XX  
 **Auditeur** : Security Review Bot  
 **Scope** : `src/crypto/`  
-**Criticality** : Critique (fondation security applicative)
+**Criticité** : Critique (fondation sécurité applicative)
 
 ---
 
-## Summary Executive
+## Résumé Exécutif
 
-3 vulnerabilities critiques identified concernant la constant-time et la gestion memory.  
-2 vulnerabilities moyennes sur la validation d
+3 vulnérabilités critiques identifiées concernant la constant-time et la gestion mémoire.  
+2 vulnérabilités moyennes sur la validation d

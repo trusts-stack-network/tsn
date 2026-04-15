@@ -331,6 +331,16 @@ enum Commands {
         #[arg(short, long, default_value = "wallet.json")]
         output: String,
     },
+    /// Restore a wallet from a 24-word seed phrase
+    #[command(name = "restore-wallet")]
+    RestoreWallet {
+        /// The 24-word seed phrase (quoted string)
+        #[arg(long)]
+        seed: String,
+        /// Output file for the wallet (default: wallet.json)
+        #[arg(short, long, default_value = "wallet.json")]
+        output: String,
+    },
     /// Show wallet balance (scans blockchain for owned notes)
     Balance {
         /// Wallet file (default: auto-detect)
@@ -530,11 +540,11 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Suppress logs for simple commands (balance, new-wallet)
-    let is_quiet_cmd = matches!(cli.command, Some(Commands::Wallet { .. }) | Some(Commands::Balance { .. }) | Some(Commands::NewWallet { .. }) | Some(Commands::Send { .. }) | Some(Commands::History { .. }) | Some(Commands::Update));
+    let is_quiet_cmd = matches!(cli.command, Some(Commands::Wallet { .. }) | Some(Commands::Balance { .. }) | Some(Commands::NewWallet { .. }) | Some(Commands::RestoreWallet { .. }) | Some(Commands::Send { .. }) | Some(Commands::History { .. }) | Some(Commands::Update));
     let log_level = if is_quiet_cmd {
         "error".to_string()
     } else {
-        "info,yamux=error,libp2p_swarm=warn".to_string()
+        "info,yamux=error,libp2p_swarm=warn,libp2p_gossipsub=error".to_string()
     };
 
     tracing_subscriber::registry()
@@ -564,6 +574,22 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::NewWallet { output }) => {
             cmd_new_wallet(&output)?;
+        }
+        Some(Commands::RestoreWallet { seed, output }) => {
+            let words: Vec<&str> = seed.trim().split_whitespace().collect();
+            if words.len() != 24 {
+                eprintln!("Error: seed phrase must be exactly 24 words (got {})", words.len());
+                std::process::exit(1);
+            }
+            let seed_bytes = seed_phrase_to_bytes(&seed);
+            let wallet = ShieldedWallet::from_seed(&seed_bytes);
+            wallet.save(&output).expect("Failed to save wallet");
+            println!();
+            println!("  Wallet restored from seed phrase.");
+            println!("  Address: {}", hex::encode(wallet.pk_hash()));
+            println!("  Saved to: {}", output);
+            println!();
+            println!("  Run './tsn balance' to scan the blockchain for your notes.");
         }
         Some(Commands::Balance { wallet, node }) => {
             let wallet = wallet.or_else(auto_detect_wallet).unwrap_or_else(|| "wallet.json".to_string());
@@ -714,7 +740,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("         Chain may self-correct during sync.");
             }
 
-            println!("\n=== Restore completee ===");
+            println!("\n=== Restore complete ===");
             println!("Chain restored to height {}.", m.height);
             println!("Start your node to sync remaining blocks from the network.");
         }
@@ -895,7 +921,7 @@ const SEED_WORDS: &[&str] = &[
     "agree","ahead","aim","air","airport","aisle","alarm","album",
     "alcohol","alert","alien","all","alley","allow","almost","alone",
     "alpha","already","also","alter","always","amateur","amazing","among",
-    "amount","amused","analyst","anchor","oldt","anger","angle","angry",
+    "amount","amused","analyst","anchor","ancient","anger","angle","angry",
     "animal","ankle","announce","annual","another","answer","antenna","antique",
     "anxiety","any","apart","apology","appear","apple","approve","april",
     "arch","arctic","area","arena","argue","arm","armed","armor",
@@ -994,13 +1020,32 @@ fn auto_wallet_for_mining(data_dir: &str) -> String {
 
     println!();
     std::fs::create_dir_all(data_dir).ok();
-    let wallet = ShieldedWallet::generate();
+
+    // Derive wallet deterministically from seed phrase via PBKDF2
+    let seed_bytes = seed_phrase_to_bytes(&seed_phrase);
+    let wallet = ShieldedWallet::from_seed(&seed_bytes);
     let path = data_wallet.to_string_lossy().to_string();
     wallet.save(&path).expect("Failed to create wallet");
     println!("  Wallet created: {}", path);
     println!("  Address: {}", hex::encode(wallet.pk_hash()));
     println!();
     path
+}
+
+/// Convert a BIP39-style seed phrase to a 32-byte seed using PBKDF2-SHA256.
+/// Same phrase always produces the same 32-byte seed.
+fn seed_phrase_to_bytes(phrase: &str) -> [u8; 32] {
+    use sha2::Sha256;
+    use hmac::Hmac;
+    use pbkdf2::pbkdf2;
+    let mut seed = [0u8; 32];
+    pbkdf2::<Hmac<Sha256>>(
+        phrase.as_bytes(),
+        b"tsn-wallet-seed-v1",
+        210_000, // OWASP recommended minimum for PBKDF2-SHA256
+        &mut seed,
+    ).expect("PBKDF2 should not fail");
+    seed
 }
 
 /// Auto-detect node role from parent directory name
@@ -1083,17 +1128,52 @@ fn dedup_peers(peers: &mut Vec<String>) {
 }
 
 fn cmd_new_wallet(output: &str) -> anyhow::Result<()> {
-    println!("Generating new TSN shielded wallet...");
-    let wallet = ShieldedWallet::generate();
+    let red = "\x1b[1;31m";
+    let green = "\x1b[1;32m";
+    let yellow = "\x1b[1;33m";
+    let reset = "\x1b[0m";
 
+    println!();
+    println!("{}========================================{}", yellow, reset);
+    println!("{}  NEW WALLET CREATION{}", yellow, reset);
+    println!("{}========================================{}", yellow, reset);
+    println!();
+
+    let seed_phrase = generate_seed_phrase();
+
+    println!("  Your recovery seed phrase (24 words):");
+    println!();
+    println!("  {}{}{}", green, seed_phrase, reset);
+    println!();
+    println!("  {}WARNING: Write these words down and store them safely!{}", red, reset);
+    println!("  {}Without this phrase, your coins are LOST FOREVER.{}", red, reset);
+    println!("  This is the ONLY time this phrase will be shown.");
+    println!();
+    println!("  To restore later: ./tsn restore-wallet --seed \"word1 word2 ... word24\"");
+    println!();
+
+    print!("  Have you saved your seed phrase? Type YES to continue: ");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).ok();
+    if input.trim().to_uppercase() != "YES" {
+        println!("\n  Aborted. Please run again and save your seed phrase.");
+        std::process::exit(0);
+    }
+
+    // Derive wallet deterministically from the seed phrase
+    let seed_bytes = seed_phrase_to_bytes(&seed_phrase);
+    let wallet = ShieldedWallet::from_seed(&seed_bytes);
     wallet.save(output)?;
 
-    println!("Wallet saved to: {}", output);
-    println!("Address: {}", hex::encode(wallet.pk_hash()));
-    println!("\nThis wallet uses:");
-    println!("  - CRYSTALS-Dilithium post-quantum signatures");
-    println!("  - zk-SNARKs for private transactions");
-    println!("\nYour balance is private and can only be viewed with this wallet file.");
+    println!();
+    println!("  Wallet saved to: {}", output);
+    println!("  Address: {}", hex::encode(wallet.pk_hash()));
+    println!();
+    println!("  Post-quantum signatures: ML-DSA-65 (FIPS 204)");
+    println!("  Privacy: Shielded transactions with ZK proofs");
+    println!();
     Ok(())
 }
 
@@ -1895,6 +1975,147 @@ fn cmd_mine(
     Ok(())
 }
 
+/// Automatic snapshot export — triggered when a new block-based interval becomes finalized.
+/// Exports the snapshot, signs the manifest, and requests cross-confirmations from seeds.
+/// Runs as a fire-and-forget background task.
+async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>) {
+    use tracing::{info, warn};
+
+    // Only export if we have a signing key (seed nodes only)
+    let signing_key = match &state.seed_signing_key {
+        Some(k) => k,
+        None => return, // miners without signing key skip snapshot export
+    };
+
+    // Export snapshot
+    let (data, height, block_hash, state_root, peer_id_str) = {
+        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let tip = chain.height();
+        if tip <= tsn::config::MAX_REORG_DEPTH + 100 {
+            return;
+        }
+        let snapshot = match chain.export_snapshot() {
+            Some(s) => s,
+            None => return,
+        };
+        let state_root = hex::encode(chain.state_root());
+        let p2p_id = state.p2p_peer_id.read().unwrap().clone().unwrap_or_default();
+        (snapshot.0, snapshot.1, snapshot.2, state_root, p2p_id)
+    };
+
+    // Compress
+    let compressed = {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        if encoder.write_all(&data).is_err() { return; }
+        match encoder.finish() {
+            Ok(c) => c,
+            Err(_) => return,
+        }
+    };
+
+    // SHA256
+    let snapshot_sha256 = {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(&compressed))
+    };
+
+    // Build and sign manifest
+    let public_key_hex = hex::encode(signing_key.verifying_key().to_bytes());
+    let mut manifest = tsn::network::snapshot_manifest::SnapshotManifest {
+        version: 1,
+        chain_id: "tsn-mainnet".to_string(),
+        height,
+        block_hash,
+        state_root,
+        snapshot_sha256,
+        snapshot_size_bytes: compressed.len() as u64,
+        format: "json-gzip".to_string(),
+        binary_version: env!("CARGO_PKG_VERSION").to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        producer: tsn::network::snapshot_manifest::SeedIdentity {
+            seed_name: state.public_url.clone().unwrap_or_else(|| "unknown".to_string()),
+            peer_id: peer_id_str,
+            public_key: public_key_hex,
+        },
+        signature: String::new(),
+        confirmations: Vec::new(),
+    };
+
+    let payload = manifest.signing_payload();
+    manifest.signature = tsn::network::snapshot_manifest::sign_ed25519(signing_key, &payload);
+
+    info!(
+        "Auto snapshot exported: height={}, sha256={}, size={}KB",
+        manifest.height, &manifest.snapshot_sha256[..16], manifest.snapshot_size_bytes / 1024
+    );
+
+    // Store in snapshot cache for coherent /snapshot/download
+    {
+        let cache_hash = manifest.block_hash.clone();
+        let mut cache = state.snapshot_cache.write().await;
+        *cache = Some(tsn::network::api::CachedSnapshot {
+            compressed,
+            height,
+            hash: cache_hash,
+            raw_size: data.len(),
+        });
+    }
+
+    // Store manifest
+    {
+        let mut manifests = state.snapshot_manifests.write().unwrap();
+        if let Some(pos) = manifests.iter().position(|m| m.height == manifest.height) {
+            manifests[pos] = manifest.clone();
+        } else {
+            manifests.push(manifest.clone());
+            if manifests.len() > 10 { manifests.remove(0); }
+        }
+    }
+
+    // Request cross-confirmations from seeds (async)
+    let client = &state.http_client;
+    let confirm_body = match serde_json::to_string(&manifest) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+
+    for seed_url in tsn::config::SEED_NODES.iter() {
+        if let Some(ref our_url) = state.public_url {
+            if seed_url.contains(our_url.split("://").last().unwrap_or("")) {
+                continue;
+            }
+        }
+        let url = format!("{}/snapshot/confirm", seed_url);
+        match client.post(&url)
+            .header("Content-Type", "application/json")
+            .body(confirm_body.clone())
+            .timeout(std::time::Duration::from_secs(10))
+            .send().await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(confirmation) = resp.json::<tsn::network::snapshot_manifest::SeedConfirmation>().await {
+                    if confirmation.verify() {
+                        info!("Auto snapshot: confirmation from {} for height {}", confirmation.seed_name, manifest.height);
+                        let mut manifests = state.snapshot_manifests.write().unwrap();
+                        if let Some(m) = manifests.iter_mut().find(|m| m.height == manifest.height) {
+                            if !m.confirmations.iter().any(|c| c.seed_name == confirmation.seed_name) {
+                                m.confirmations.push(confirmation);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let final_confs = state.snapshot_manifests.read().unwrap()
+        .iter().find(|m| m.height == manifest.height)
+        .map(|m| m.valid_confirmation_count()).unwrap_or(0);
+    info!("Auto snapshot complete: height={}, {} confirmations", manifest.height, final_confs);
+}
+
 async fn cmd_node(
     port: u16,
     peers: Vec<String>,
@@ -2333,6 +2554,11 @@ async fn cmd_node(
         error_log: std::sync::RwLock::new(Vec::new()),
         auto_heal_mode: std::sync::RwLock::new("automatic".to_string()),
         removed_peers: std::sync::Mutex::new(std::collections::HashSet::new()),
+        metric_empty_batches: std::sync::atomic::AtomicU64::new(0),
+        metric_stale_blocks: std::sync::atomic::AtomicU64::new(0),
+        metric_fork_recoveries: std::sync::atomic::AtomicU64::new(0),
+        metric_recovery_time_ms: std::sync::atomic::AtomicU64::new(0),
+        metric_commitment_mismatches: std::sync::atomic::AtomicU64::new(0),
         seed_signing_key: {
             let key_path = std::path::Path::new(&data_dir).join("seed_key.bin");
             Some(tsn::network::snapshot_manifest::load_or_generate_seed_key(&key_path))
@@ -2442,7 +2668,7 @@ async fn cmd_node(
     });
 
     // ========================================================================
-    // SELF-HEALING WATCHDOG — monitors node health and auto-repairs
+    // SELF-HEALING WATCHDOG — monitors node health and auto-repeers
     // ========================================================================
     {
         let watchdog_state = state.clone();
@@ -2510,7 +2736,7 @@ async fn cmd_node(
                                     drop(chain);
                                     drop(_reorg_guard);
                                 } else {
-                                    tracing::info!("WATCHDOG: Mode validation — action proposee, en attente d'approbation via /admin/force-resync");
+                                    tracing::info!("WATCHDOG: Mode validation — action proposed, en attente d'approbation via /admin/force-resync");
                                 }
                                 stuck_since = None;
                                 resync_count += 1;
@@ -2557,7 +2783,7 @@ async fn cmd_node(
                             stuck_since = None;
                             last_height = 0;
                         } else {
-                            tracing::info!("WATCHDOG: Mode validation — peers far ahead (gap={}), action proposee via /admin/force-resync", gap);
+                            tracing::info!("WATCHDOG: Mode validation — peers far ahead (gap={}), action proposed via /admin/force-resync", gap);
                         }
                     }
                 }
@@ -2597,13 +2823,13 @@ async fn cmd_node(
                                 stuck_since = None;
                                 last_height = 0;
                             } else {
-                                tracing::info!("WATCHDOG: Mode validation — solo fork detected (gap={}), action proposee via /admin/force-resync", ahead_gap);
+                                tracing::info!("WATCHDOG: Mode validation — solo fork detected (gap={}), action proposed via /admin/force-resync", ahead_gap);
                             }
                         }
                     }
                 }
 
-                // Check 3: Too many resyncs in short window → wipe completeely
+                // Check 3: Too many resyncs in short window → wipe completely
                 if resync_count >= 3 {
                     let msg = format!("{} resyncs in 5 min — chain is unstable", resync_count);
                     tracing::error!("WATCHDOG: {}.", msg);
@@ -2811,6 +3037,29 @@ async fn cmd_node(
                                                     tokio::spawn(async move {
                                                         let _ = tx.send(tsn::network::p2p::P2pCommand::BroadcastTip(tip_h, tip_hash)).await;
                                                     });
+                                                }
+                                            }
+                                            // v2.1.5: Auto snapshot trigger — block-based, not clock-based.
+                                            // When a new multiple of SNAPSHOT_MANIFEST_INTERVAL becomes
+                                            // finalized (tip >= multiple + MAX_REORG_DEPTH), export a
+                                            // signed snapshot and request cross-confirmations.
+                                            {
+                                                let tip_h = p2p_blockchain.blockchain.read().unwrap().height();
+                                                let interval = tsn::config::SNAPSHOT_MANIFEST_INTERVAL;
+                                                let max_reorg = tsn::config::MAX_REORG_DEPTH;
+                                                if tip_h > max_reorg + interval {
+                                                    let finalized = tip_h - max_reorg;
+                                                    let latest_eligible = (finalized / interval) * interval;
+                                                    let prev_finalized = (tip_h - 1).saturating_sub(max_reorg);
+                                                    let prev_eligible = (prev_finalized / interval) * interval;
+                                                    if latest_eligible > prev_eligible {
+                                                        // A new interval just became finalized — trigger snapshot
+                                                        info!("Snapshot auto-trigger: height {} finalized interval {}", latest_eligible, interval);
+                                                        let snap_state = p2p_blockchain.clone();
+                                                        tokio::spawn(async move {
+                                                            auto_snapshot_export(snap_state).await;
+                                                        });
+                                                    }
                                                 }
                                             }
                                         }
@@ -3452,7 +3701,7 @@ async fn cmd_node(
 
                                                                     let mut chain = mine_state.blockchain.write().unwrap();
                                                                     chain.import_snapshot_at_height(snapshot, snap_height, block_hash, diff, next_diff, peer_work);
-                                                                    tracing::info!("Auto-resync completee: jumped to height {} from peer {}", snap_height, peer_id(&peer_url));
+                                                                    tracing::info!("Auto-resync complete: jumped to height {} from peer {}", snap_height, peer_id(&peer_url));
                                                                 }
                                                             }
                                                         }
@@ -3636,8 +3885,9 @@ async fn cmd_node(
                     let chain = mine_state.blockchain.read().unwrap();
                     let current_tip = chain.latest_hash();
                     if template_prev_hash != current_tip {
-                        tracing::warn!(
-                            "Mined block is stale (tip changed during PoW). Discarding."
+                        mine_state.metric_stale_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::debug!(
+                            "Mined block discarded (tip changed during PoW)"
                         );
                         drop(_reorg_read_post);
                         continue;

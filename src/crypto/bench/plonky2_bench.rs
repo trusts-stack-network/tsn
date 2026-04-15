@@ -7,7 +7,7 @@
 //! Contexte de security:
 //! - Plonky2: 128-bit post-quantum security via FRI + Poseidon2
 //! - Pas de trusted setup requis (transparence)
-//! - Security basee uniquement sur des hypotheses de hachage
+//! - Security based only sur des hypotheses de hachage
 //! 
 //! References:
 //! - Plonky2: https://github.com/mir-protocol/plonky2
@@ -37,7 +37,7 @@ fn build_commitment_circuit() -> (CircuitData<F, C, D>, VerifierCircuitData<F, C
     let config = CircuitConfig::standard_recursion_config();
     let mut builder = CircuitBuilder::<F, D>::new(config);
     
-    // Inputs prives
+    // Inputs privates
     let value = builder.add_virtual_target();
     let blinder = builder.add_virtual_target();
     
@@ -54,19 +54,19 @@ fn build_commitment_circuit() -> (CircuitData<F, C, D>, VerifierCircuitData<F, C
     (circuit_data, verifier_data)
 }
 
-/// Circuit de transaction: checks que sum(inputs) = sum(outputs) + fee
+/// Circuit de transaction: verifies que sum(inputs) = sum(outputs) + fee
 fn build_transaction_circuit(num_inputs: usize, num_outputs: usize) -> (CircuitData<F, C, D>, VerifierCircuitData<F, C, D>) {
     let config = CircuitConfig::standard_recursion_config();
     let mut builder = CircuitBuilder::<F, D>::new(config);
     
-    // Inputs (prives)
+    // Inputs (privates)
     let mut input_sum = builder.zero();
     for _ in 0..num_inputs {
         let input = builder.add_virtual_target();
         input_sum = builder.add(input_sum, input);
     }
     
-    // Outputs (prives)
+    // Outputs (privates)
     let mut output_sum = builder.zero();
     for _ in 0..num_outputs {
         let output = builder.add_virtual_target();
@@ -86,7 +86,7 @@ fn build_transaction_circuit(num_inputs: usize, num_outputs: usize) -> (CircuitD
     (circuit_data, verifier_data)
 }
 
-/// Generates ae preuve pour le circuit de commitment
+/// Generates une preuve pour le circuit de commitment
 fn prove_commitment(
     circuit_data: &CircuitData<F, C, D>,
     value: u64,
@@ -94,7 +94,7 @@ fn prove_commitment(
 ) -> (ProofWithPublicInputs<F, C, D>, Duration) {
     let mut pw = PartialWitness::new();
     
-    // Recupere les targets (simplifie - en pratique on stockerait les targets)
+    // Retrieves les targets (simplified - en pratique on stockerait les targets)
     let targets: Vec<_> = circuit_data.prover_only.public_inputs.iter().cloned().collect();
     
     // Setup witnesses
@@ -102,8 +102,8 @@ fn prove_commitment(
     let blinder_f = F::from_canonical_u64(blinder);
     let commitment_f = value_f + blinder_f;
     
-    // Assigne les valeurs (simplifie)
-    // En pratique, on usesrait des targets specifiques stockes lors du build
+    // Assigne les valeurs (simplified)
+    // En pratique, on utiliserait des targets specific stored lors du build
     
     let start = Instant::now();
     let proof = circuit_data.prove(pw).expect("proof generation failed");
@@ -112,7 +112,7 @@ fn prove_commitment(
     (proof, elapsed)
 }
 
-/// Generates ae preuve pour le circuit de transaction
+/// Generates une preuve pour le circuit de transaction
 fn prove_transaction(
     circuit_data: &CircuitData<F, C, D>,
     inputs: Vec<u64>,
@@ -122,7 +122,7 @@ fn prove_transaction(
     let mut pw = PartialWitness::new();
     
     // Assigne les witnesses
-    // Note: Simplifie - en pratique on usesrait les targets specifiques
+    // Note: Simplified - en pratique on utiliserait les targets specific
     
     let start = Instant::now();
     let proof = circuit_data.prove(pw).expect("proof generation failed");
@@ -131,7 +131,7 @@ fn prove_transaction(
     (proof, elapsed)
 }
 
-/// Verifie une preuve
+/// Verifies une preuve
 fn verify_proof(
     verifier_data: &VerifierCircuitData<F, C, D>,
     proof: &ProofWithPublicInputs<F, C, D>,
@@ -212,7 +212,7 @@ pub fn bench_transaction_generation_2_2() -> crate::crypto::bench::halo2_commitm
     })
 }
 
-/// Benchmark: Scaling avec differentes tailles de circuit
+/// Benchmark: Scaling avec different tailles de circuit
 pub fn bench_scaling() -> Vec<crate::crypto::bench::halo2_commitment_bench::BenchmarkResult> {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -222,7 +222,7 @@ pub fn bench_scaling() -> Vec<crate::crypto::bench::halo2_commitment_bench::Benc
         let config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(config);
         
-        // Creates a circuit avec num_gates gates
+        // Creates un circuit avec num_gates gates
         let mut prev = builder.add_virtual_target();
         builder.register_public_input(prev);
         
@@ -253,7 +253,7 @@ pub fn bench_scaling() -> Vec<crate::crypto::bench::halo2_commitment_bench::Benc
     results
 }
 
-/// Execute tous les benchmarks Plonky2
+/// Executes tous les benchmarks Plonky2
 pub fn run_plonky2_benchmarks() -> Vec<crate::crypto::bench::halo2_commitment_bench::BenchmarkResult> {
     println!("╔═══════════════════════════════════════════════════════════════╗");
     println!("║           PLONKY2 BENCHMARKS (Post-Quantum STARKs)               ║");
@@ -274,7 +274,7 @@ pub fn run_plonky2_benchmarks() -> Vec<crate::crypto::bench::halo2_commitment_be
     results.push(bench_transaction_generation_2_2());
     results.extend(bench_scaling());
     
-    // Affiche les results
+    // Display results
     for result in &results {
         result.print();
     }
@@ -290,11 +290,11 @@ mod tests {
     fn test_commitment_circuit() {
         let (circuit_data, verifier_data) = build_commitment_circuit();
         
-        // Generates ae preuve
+        // Generates une preuve
         let mut pw = PartialWitness::new();
         let proof = circuit_data.prove(pw).expect("proof failed");
         
-        // Verifie
+        // Verifies
         assert!(verifier_data.verify(proof).is_ok());
     }
     

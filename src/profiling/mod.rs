@@ -1,8 +1,8 @@
-//! Module de profiling integre pour diagnostics TSN
+//! Module de profiling integrated pour diagnostics TSN
 //!
-//! Ce module provides des metrics detaillees sur les performances des
+//! Ce module fournit des metrics detailed sur les performances des
 //! operations critiques : signature/verification crypto, serialization,
-//! requests DB. Les metrics sont exportees via Prometheus.
+//! requests DB. Les metrics sont exported via Prometheus.
 //!
 //! ## Utilisation
 //!
@@ -41,13 +41,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Version du module de profiling
 pub const PROFILING_VERSION: &str = "1.0.0";
 
-/// Active ou desactive le profiling globalement
+/// Enable or disable profiling globally
 static PROFILING_ENABLED: AtomicU64 = AtomicU64::new(1);
 
 /// Seuil minimum pour logger un avertissement (en millisecondes)
 static SLOW_OP_THRESHOLD_MS: AtomicU64 = AtomicU64::new(100);
 
-/// Checks if le profiling est active
+/// Verifies si le profiling est enabled
 pub fn is_profiling_enabled() -> bool {
     PROFILING_ENABLED.load(Ordering::Relaxed) != 0
 }
@@ -57,17 +57,17 @@ pub fn enable_profiling() {
     PROFILING_ENABLED.store(1, Ordering::Relaxed);
 }
 
-/// Desactive le profiling
+/// Disables le profiling
 pub fn disable_profiling() {
     PROFILING_ENABLED.store(0, Ordering::Relaxed);
 }
 
-/// Defines the seuil d'avertissement pour les operations lentes (en ms)
+/// Defines le seuil d'avertissement pour les operations lentes (en ms)
 pub fn set_slow_threshold_ms(threshold: u64) {
     SLOW_OP_THRESHOLD_MS.store(threshold, Ordering::Relaxed);
 }
 
-/// Recupere le seuil d'avertissement current
+/// Retrieves le seuil d'avertissement actuel
 pub fn get_slow_threshold_ms() -> u64 {
     SLOW_OP_THRESHOLD_MS.load(Ordering::Relaxed)
 }
@@ -89,7 +89,7 @@ pub enum OperationCategory {
 }
 
 impl OperationTimer {
-    /// Creates a nouveau timer
+    /// Creates un nouveau timer
     pub fn new(name: impl Into<String>, category: OperationCategory) -> Self {
         Self {
             start: Instant::now(),
@@ -98,14 +98,14 @@ impl OperationTimer {
         }
     }
     
-    /// Arrete le timer et enregistre la metrique
+    /// Stoppinge le timer et enregistre la metric
     pub fn stop(self) -> Duration {
         let duration = self.start.elapsed();
         
         if is_profiling_enabled() {
             record_duration(self.category, &self.name, duration);
             
-            // Check if l'operation est lente
+            // Verify si l'operation est lente
             let threshold = Duration::from_millis(get_slow_threshold_ms());
             if duration > threshold {
                 tracing::warn!(
@@ -113,7 +113,7 @@ impl OperationTimer {
                     category = ?self.category,
                     duration_ms = %duration.as_millis(),
                     threshold_ms = %threshold.as_millis(),
-                    "Operation lente detectee"
+                    "Operation lente detectede"
                 );
             }
         }
@@ -121,7 +121,7 @@ impl OperationTimer {
         duration
     }
     
-    /// Arrete le timer sans enregistrer (pour les errors)
+    /// Stoppinge le timer sans register (pour les errors)
     pub fn cancel(self) -> Duration {
         self.start.elapsed()
     }
@@ -129,11 +129,11 @@ impl OperationTimer {
 
 impl Drop for OperationTimer {
     fn drop(&mut self) {
-        // Rien a faire ici, usesr explicitement stop() ou cancel()
+        // Rien to faire ici, utiliser explicitement stop() ou cancel()
     }
 }
 
-/// Enregistre une duration dans les metrics appropriees
+/// Enregistre une duration dans les metrics appropriate
 fn record_duration(category: OperationCategory, name: &str, duration: Duration) {
     let duration_secs = duration.as_secs_f64();
     
@@ -148,10 +148,10 @@ fn record_duration(category: OperationCategory, name: &str, duration: Duration) 
             metrics::SERDE_METRICS.record_operation(name, duration_secs);
         }
         OperationCategory::Consensus => {
-            // Integre avec les metrics consensus existantes
+            // Integrated avec les metrics consensus existantes
         }
         OperationCategory::Network => {
-            // Integre avec les metrics network existantes
+            // Integrated avec les metrics network existantes
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Metrics Prometheus pour le profiling des operations critiques
 //!
-//! Ce module definit les histogrammes et compteurs pour :
+//! Ce module defines les histogrammes et compteurs pour :
 //! - Operations cryptographiques (sign, verify, hash)
 //! - Operations base of data (read, write, scan)
 //! - Serialization/deserialization (serialize, deserialize)
@@ -22,14 +22,14 @@ pub struct CryptoMetrics {
     pub duration: HistogramVec,
     /// Compteur total d'operations
     pub total_count: IntCounterVec,
-    /// Compteur d'errors
+    /// Compteur d'erreurs
     pub error_count: IntCounterVec,
     /// Compteur d'operations lentes (> 100ms)
     pub slow_count: IntCounterVec,
 }
 
 impl CryptoMetrics {
-    /// Creates a nouvelle instance des metrics crypto
+    /// Creates une new instance des metrics crypto
     fn new() -> Result<Self, prometheus::Error> {
         Ok(Self {
             duration: register_histogram_vec!(
@@ -52,7 +52,7 @@ impl CryptoMetrics {
             error_count: register_int_counter_vec!(
                 opts!(
                     "tsn_profiling_crypto_errors_total",
-                    "Nombre d'errors lors des operations cryptographiques"
+                    "Nombre d'erreurs lors des operations cryptographiques"
                 ),
                 &["operation"]
             )?,
@@ -67,7 +67,7 @@ impl CryptoMetrics {
         })
     }
     
-    /// Enregistre une operation reussie
+    /// Enregistre une operation successful
     pub fn record_operation(&self, operation: &str, duration_secs: f64) {
         self.duration.with_label_values(&[operation]).observe(duration_secs);
         self.total_count.with_label_values(&[operation]).inc();
@@ -77,14 +77,14 @@ impl CryptoMetrics {
         }
     }
     
-    /// Enregistre une error
+    /// Enregistre une erreur
     pub fn record_error(&self, operation: &str) {
         self.error_count.with_label_values(&[operation]).inc();
     }
     
-    /// Creates a snapshot des metrics currentles
+    /// Creates un snapshot des metrics actuelles
     pub fn snapshot(&self) -> CategorySnapshot {
-        // Les valeurs sont collectees via Prometheus
+        // Les valeurs sont collected via Prometheus
         CategorySnapshot {
             category: "crypto",
             operations: vec![
@@ -101,11 +101,11 @@ pub struct DatabaseMetrics {
     pub duration: HistogramVec,
     /// Compteur total d'operations
     pub total_count: IntCounterVec,
-    /// Compteur d'errors
+    /// Compteur d'erreurs
     pub error_count: IntCounterVec,
     /// Compteur d'operations lentes
     pub slow_count: IntCounterVec,
-    /// Taille des data lues/ecrites
+    /// Taille des data lues/writtenes
     pub bytes_transferred: HistogramVec,
 }
 
@@ -132,7 +132,7 @@ impl DatabaseMetrics {
             error_count: register_int_counter_vec!(
                 opts!(
                     "tsn_profiling_db_errors_total",
-                    "Nombre d'errors lors des operations base of data"
+                    "Nombre d'erreurs lors des operations base of data"
                 ),
                 &["operation", "table"]
             )?,
@@ -148,7 +148,7 @@ impl DatabaseMetrics {
             bytes_transferred: register_histogram_vec!(
                 histogram_opts!(
                     "tsn_profiling_db_bytes_transferred",
-                    "Nombre d'octets transferes lors des operations DB",
+                    "Nombre d'bytes transferred lors des operations DB",
                     vec![64.0, 256.0, 1024.0, 4096.0, 16384.0, 65536.0, 262144.0, 1048576.0]
                 ),
                 &["operation", "table"]
@@ -156,7 +156,7 @@ impl DatabaseMetrics {
         })
     }
     
-    /// Enregistre une operation reussie
+    /// Enregistre une operation successful
     pub fn record_operation(&self, operation: &str, table: &str, duration_secs: f64) {
         self.duration
             .with_label_values(&[operation, table])
@@ -186,12 +186,12 @@ impl DatabaseMetrics {
             .observe(bytes as f64);
     }
     
-    /// Enregistre une error
+    /// Enregistre une erreur
     pub fn record_error(&self, operation: &str, table: &str) {
         self.error_count.with_label_values(&[operation, table]).inc();
     }
     
-    /// Creates a snapshot des metrics
+    /// Creates un snapshot des metrics
     pub fn snapshot(&self) -> CategorySnapshot {
         CategorySnapshot {
             category: "database",
@@ -210,7 +210,7 @@ pub struct SerdeMetrics {
     pub total_count: IntCounterVec,
     /// Taille des data serializedes/deserializedes
     pub bytes_processed: HistogramVec,
-    /// Compteur d'errors
+    /// Compteur d'erreurs
     pub error_count: IntCounterVec,
 }
 
@@ -237,7 +237,7 @@ impl SerdeMetrics {
             bytes_processed: register_histogram_vec!(
                 histogram_opts!(
                     "tsn_profiling_serde_bytes_processed",
-                    "Nombre d'octets traites lors de la serialization",
+                    "Nombre d'bytes processeds lors de la serialization",
                     vec![64.0, 256.0, 1024.0, 4096.0, 16384.0, 65536.0, 262144.0, 1048576.0, 4194304.0]
                 ),
                 &["operation", "type"]
@@ -246,7 +246,7 @@ impl SerdeMetrics {
             error_count: register_int_counter_vec!(
                 opts!(
                     "tsn_profiling_serde_errors_total",
-                    "Nombre d'errors lors des operations de serialization"
+                    "Nombre d'erreurs lors des operations de serialization"
                 ),
                 &["operation", "type"]
             )?,
@@ -272,12 +272,12 @@ impl SerdeMetrics {
             .observe(bytes as f64);
     }
     
-    /// Enregistre une error
+    /// Enregistre une erreur
     pub fn record_error(&self, operation: &str, type_name: &str) {
         self.error_count.with_label_values(&[operation, type_name]).inc();
     }
     
-    /// Creates a snapshot des metrics
+    /// Creates un snapshot des metrics
     pub fn snapshot(&self) -> CategorySnapshot {
         CategorySnapshot {
             category: "serialization",
@@ -288,7 +288,7 @@ impl SerdeMetrics {
     }
 }
 
-/// Snapshot d'une categorie de metrics
+/// Snapshot d'une category de metrics
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CategorySnapshot {
     pub category: &'static str,
@@ -298,25 +298,25 @@ pub struct CategorySnapshot {
 // === Instances globales ===
 
 pub static CRYPTO_METRICS: Lazy<CryptoMetrics> = Lazy::new(|| {
-    CryptoMetrics::new().expect("INIT: echec metrics crypto Prometheus — noms dupliques?")
+    CryptoMetrics::new().expect("INIT: failure metrics crypto Prometheus — noms duplicated?")
 });
 
 pub static DB_METRICS: Lazy<DatabaseMetrics> = Lazy::new(|| {
-    DatabaseMetrics::new().expect("INIT: echec metrics DB Prometheus — noms dupliques?")
+    DatabaseMetrics::new().expect("INIT: failure metrics DB Prometheus — noms duplicated?")
 });
 
 pub static SERDE_METRICS: Lazy<SerdeMetrics> = Lazy::new(|| {
-    SerdeMetrics::new().expect("INIT: echec metrics serde Prometheus — noms dupliques?")
+    SerdeMetrics::new().expect("INIT: failure metrics serde Prometheus — noms duplicated?")
 });
 
-/// Guard pour mesurer automatiquement la duration
+/// Guard pour mesurer automatically la duration
 pub struct ProfilingGuard {
     histogram: Option<Histogram>,
     start: std::time::Instant,
 }
 
 impl ProfilingGuard {
-    /// Creates a nouveau guard pour un histogramme
+    /// Creates un nouveau guard pour un histogramme
     pub fn new(histogram: Histogram) -> Self {
         Self {
             histogram: Some(histogram),
@@ -324,7 +324,7 @@ impl ProfilingGuard {
         }
     }
     
-    /// Creates a guard vide (no-op)
+    /// Creates un guard vide (no-op)
     pub fn noop() -> Self {
         Self {
             histogram: None,
@@ -346,7 +346,7 @@ pub fn record_histogram(histogram: &Histogram, duration: Duration) {
     histogram.observe(duration.as_secs_f64());
 }
 
-/// Creates a guard de profiling et demarre le timer
+/// Creates un guard de profiling et starts le timer
 pub fn profile_duration(histogram: &Histogram) -> ProfilingGuard {
     ProfilingGuard::new(histogram.clone())
 }
@@ -361,7 +361,7 @@ macro_rules! profile {
     }};
 }
 
-/// Macro pour mesurer avec gestion d'error
+/// Macro pour mesurer avec gestion d'erreur
 #[macro_export]
 macro_rules! profile_result {
     ($metrics:expr, $operation:expr, $body:expr) => {{

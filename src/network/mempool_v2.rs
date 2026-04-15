@@ -1,11 +1,11 @@
-//! Mempool avance avec gestion intelligente de la memory.
+//! Mempool advanced avec gestion smart de la memory.
 //!
-//! Cette version ameliore le mempool original avec :
-//! - Gestion de pression memory avec eviction intelligente
+//! Cette version improves le mempool original avec :
+//! - Gestion de pression memory avec eviction smart
 //! - Anti-DoS avec rate limiting par peer
-//! - Prioritisation basee sur les frais et l'oldnete
-//! - Metrics detaillees pour monitoring
-//! - Support async complete avec tokio
+//! - Prioritisation based sur les fees et seniority
+//! - Metrics detailed pour monitoring
+//! - Support async complet avec tokio
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use crate::network::mempool_manager::{MempoolMemoryManager, MempoolMemoryConfig,
 use crate::network::types::{TransactionId, TransactionV1, TransactionV2};
 use crate::network::anti_dos::RateLimiter;
 
-/// Configuration du mempool avance.
+/// Configuration du mempool advanced.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MempoolV2Config {
     /// Configuration du manager de memory.
@@ -55,7 +55,7 @@ impl Default for MempoolV2Config {
     }
 }
 
-/// Statistiques detaillees du mempool.
+/// Statistiques detailed du mempool.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct MempoolV2Stats {
     /// Nombre de transactions V1.
@@ -79,7 +79,7 @@ pub struct MempoolV2Stats {
     /// Nombre de rejets par double-spend.
     pub double_spend_rejections: u64,
     
-    /// Nombre de rejets par frais insuffisants.
+    /// Nombre de rejets par fees insuffisants.
     pub fee_rejections: u64,
     
     /// Nombre de rejets par rate limiting.
@@ -97,20 +97,20 @@ pub struct MempoolV2Stats {
     /// Taille moyenne des transactions.
     pub average_size: f64,
     
-    /// Derniere update des statistiques.
+    /// Last update des statistiques.
     pub last_updated: u64,
 }
 
 /// Informations sur un peer pour rate limiting.
 #[derive(Debug, Clone)]
 struct PeerInfo {
-    /// Nombre de transactions soumises dans la fenbe currentle.
+    /// Nombre de transactions soumises dans la window actuelle.
     tx_count: u32,
     
-    /// Debut de la fenbe de rate limiting.
+    /// Start de la window de rate limiting.
     window_start: Instant,
     
-    /// Derniere activity du peer.
+    /// Last activity du peer.
     last_activity: Instant,
     
     /// Score de reputation (0.0 = mauvais, 1.0 = excellent).
@@ -128,11 +128,11 @@ impl PeerInfo {
         }
     }
     
-    /// Check if le peer peut soumettre une transaction.
+    /// Verify si le peer peut soumettre une transaction.
     fn can_submit(&mut self, max_per_minute: u32) -> bool {
         let now = Instant::now();
         
-        // Reset de la fenbe si plus d'une minute s'est ecoulee
+        // Reset de la window si plus d'une minute s'est elapsed
         if now.duration_since(self.window_start) >= Duration::from_secs(60) {
             self.tx_count = 0;
             self.window_start = now;
@@ -141,24 +141,24 @@ impl PeerInfo {
         self.last_activity = now;
         
         if self.tx_count >= max_per_minute {
-            // Penaliser la reputation pour spam
+            // Penalize la reputation pour spam
             self.reputation = (self.reputation * 0.9).max(0.1);
             false
         } else {
             self.tx_count += 1;
-            // Ameliorer legerement la reputation pour comportement normal
+            // Improve lightment la reputation pour comportement normal
             self.reputation = (self.reputation * 1.001).min(1.0);
             true
         }
     }
     
-    /// Check if le peer est inactif.
+    /// Verify si le peer est inactif.
     fn is_inactive(&self, timeout: Duration) -> bool {
         self.last_activity.elapsed() > timeout
     }
 }
 
-/// Mempool avance avec gestion intelligente de la memory.
+/// Mempool advanced avec gestion smart de la memory.
 pub struct MempoolV2 {
     /// Configuration.
     config: MempoolV2Config,
@@ -172,7 +172,7 @@ pub struct MempoolV2 {
     /// Nullifiers en attente (detection double-spend).
     pending_nullifiers: Arc<RwLock<HashSet<[u8; 32]>>>,
     
-    /// Gestionnaire de memory.
+    /// Manager de memory.
     memory_manager: MempoolMemoryManager,
     
     /// Informations des peers pour rate limiting.
@@ -186,7 +186,7 @@ pub struct MempoolV2 {
 }
 
 impl MempoolV2 {
-    /// Create a nouveau mempool avance.
+    /// Create un nouveau mempool advanced.
     pub fn new(config: MempoolV2Config) -> Self {
         let memory_manager = MempoolMemoryManager::new(config.memory.clone());
         
@@ -202,7 +202,7 @@ impl MempoolV2 {
         }
     }
     
-    /// Configurer l'state shielded pour validation.
+    /// Configure l'state shielded pour validation.
     pub fn set_shielded_state(&mut self, state: Arc<RwLock<ShieldedState>>) {
         self.shielded_state = Some(state);
     }
@@ -217,16 +217,16 @@ impl MempoolV2 {
         let tx_size = self.estimate_transaction_size_v1(&tx);
         let tx_fee = tx.fee;
         
-        // Verifications preliminaires
+        // Verifications preliminary
         self.validate_transaction_basic(tx_size, tx_fee, peer_id).await?;
         
-        // Check if la transaction existe already
+        // Verify si la transaction exists already
         if self.contains(&tx_hash).await {
             self.increment_rejection_stat("duplicate").await;
             return Err(MempoolV2Error::DuplicateTransaction);
         }
         
-        // Check thes nullifiers (double-spend)
+        // Verify les nullifiers (double-spend)
         {
             let pending_nullifiers = self.pending_nullifiers.read().await;
             for nullifier in tx.nullifiers() {
@@ -237,7 +237,7 @@ impl MempoolV2 {
             }
         }
         
-        // Validation stricte si activee
+        // Validation stricte si enabled
         if self.config.strict_validation {
             if let Some(state) = &self.shielded_state {
                 let state_guard = state.read().await;
@@ -248,7 +248,7 @@ impl MempoolV2 {
             }
         }
         
-        // Check the pression memory
+        // Verify la pression memory
         self.memory_manager
             .add_transaction(tx_hash, tx_size, tx_fee)
             .await
@@ -272,7 +272,7 @@ impl MempoolV2 {
             }
         }
         
-        // Mettre a jour les statistiques
+        // Update les statistiques
         {
             let mut stats = self.stats.write().await;
             stats.total_adds += 1;
@@ -296,16 +296,16 @@ impl MempoolV2 {
         let tx_size = self.estimate_transaction_size_v2(&tx);
         let tx_fee = tx.fee();
         
-        // Verifications preliminaires
+        // Verifications preliminary
         self.validate_transaction_basic(tx_size, tx_fee, peer_id).await?;
         
-        // Check if la transaction existe already
+        // Verify si la transaction exists already
         if self.contains(&tx_hash).await {
             self.increment_rejection_stat("duplicate").await;
             return Err(MempoolV2Error::DuplicateTransaction);
         }
         
-        // Check thes nullifiers (double-spend)
+        // Verify les nullifiers (double-spend)
         {
             let pending_nullifiers = self.pending_nullifiers.read().await;
             for nullifier in tx.nullifiers() {
@@ -316,7 +316,7 @@ impl MempoolV2 {
             }
         }
         
-        // Validation stricte si activee
+        // Validation stricte si enabled
         if self.config.strict_validation {
             if let Some(state) = &self.shielded_state {
                 let state_guard = state.read().await;
@@ -327,7 +327,7 @@ impl MempoolV2 {
             }
         }
         
-        // Check the pression memory
+        // Verify la pression memory
         self.memory_manager
             .add_transaction(tx_hash, tx_size, tx_fee)
             .await
@@ -351,7 +351,7 @@ impl MempoolV2 {
             }
         }
         
-        // Mettre a jour les statistiques
+        // Update les statistiques
         {
             let mut stats = self.stats.write().await;
             stats.total_adds += 1;
@@ -372,13 +372,13 @@ impl MempoolV2 {
         fee: u64,
         peer_id: Option<&str>,
     ) -> Result<(), MempoolV2Error> {
-        // Check the taille
+        // Verify la taille
         if size > self.config.max_transaction_size {
             self.increment_rejection_stat("size").await;
             return Err(MempoolV2Error::TransactionTooLarge);
         }
         
-        // Check thes frais minimum
+        // Verify les fees minimum
         if fee < self.config.min_absolute_fee {
             self.increment_rejection_stat("fee").await;
             return Err(MempoolV2Error::InsufficientFee);
@@ -401,7 +401,7 @@ impl MempoolV2 {
         Ok(())
     }
     
-    /// Validation specifique V1.
+    /// Validation specific V1.
     /// Validates anchors and nullifiers against state (basic validation).
     /// Full ZK proof verification is done at block validation time.
     async fn validate_transaction_v1(
@@ -418,7 +418,7 @@ impl MempoolV2 {
         }
     }
 
-    /// Validation specifique V2.
+    /// Validation specific V2.
     /// Validates anchors, nullifiers, and ownership signatures against state.
     /// Full STARK proof verification is done at block validation time.
     async fn validate_transaction_v2(
@@ -452,16 +452,16 @@ impl MempoolV2 {
         }
     }
     
-    /// Delete une transaction du mempool.
+    /// Supprimer une transaction du mempool.
     pub async fn remove_transaction(&self, tx_hash: &TransactionId) -> bool {
         let mut removed = false;
         
-        // Delete de V1
+        // Supprimer de V1
         if let Some(tx) = {
             let mut v1_txs = self.v1_transactions.write().await;
             v1_txs.remove(tx_hash)
         } {
-            // Delete the nullifiers
+            // Supprimer les nullifiers
             {
                 let mut pending_nullifiers = self.pending_nullifiers.write().await;
                 for nullifier in tx.nullifiers() {
@@ -472,7 +472,7 @@ impl MempoolV2 {
             // Delete du manager de memory
             self.memory_manager.remove_transaction(tx_hash).await;
             
-            // Mettre a jour les statistiques
+            // Update les statistiques
             {
                 let mut stats = self.stats.write().await;
                 stats.v1_transactions = stats.v1_transactions.saturating_sub(1);
@@ -482,12 +482,12 @@ impl MempoolV2 {
             removed = true;
         }
         
-        // Delete de V2
+        // Supprimer de V2
         if let Some(tx) = {
             let mut v2_txs = self.v2_transactions.write().await;
             v2_txs.remove(tx_hash)
         } {
-            // Delete the nullifiers
+            // Supprimer les nullifiers
             {
                 let mut pending_nullifiers = self.pending_nullifiers.write().await;
                 for nullifier in tx.nullifiers() {
@@ -498,7 +498,7 @@ impl MempoolV2 {
             // Delete du manager de memory
             self.memory_manager.remove_transaction(tx_hash).await;
             
-            // Mettre a jour les statistiques
+            // Update les statistiques
             {
                 let mut stats = self.stats.write().await;
                 stats.v2_transactions = stats.v2_transactions.saturating_sub(1);
@@ -509,22 +509,22 @@ impl MempoolV2 {
         }
         
         if removed {
-            debug!("Transaction deletede du mempool: {}", hex::encode(tx_hash));
+            debug!("Transaction removede du mempool: {}", hex::encode(tx_hash));
         }
         
         removed
     }
     
-    /// Check if une transaction est dans le mempool.
+    /// Verify si une transaction est dans le mempool.
     pub async fn contains(&self, tx_hash: &TransactionId) -> bool {
         let v1_contains = self.v1_transactions.read().await.contains_key(tx_hash);
         let v2_contains = self.v2_transactions.read().await.contains_key(tx_hash);
         v1_contains || v2_contains
     }
     
-    /// Obtenir les transactions par priority pour mining.
+    /// Get les transactions par priority pour mining.
     pub async fn get_transactions_for_mining(&self, limit: usize) -> (Vec<ShieldedTransaction>, Vec<Transaction>) {
-        // Obtenir les IDs tries par priority
+        // Get les IDs sorted par priority
         let priority_ids = self.memory_manager.get_transactions_by_priority(limit * 2).await;
         
         let mut v1_txs = Vec::new();
@@ -548,20 +548,20 @@ impl MempoolV2 {
         (v1_txs, v2_txs)
     }
     
-    /// Delete the transactions confirmees.
+    /// Delete les transactions confirmed.
     pub async fn remove_confirmed_transactions(&self, tx_hashes: &[TransactionId]) {
         for hash in tx_hashes {
             self.remove_transaction(hash).await;
         }
         
-        info!("Supprime {} transactions confirmees du mempool", tx_hashes.len());
+        info!("Removed {} transactions confirmed du mempool", tx_hashes.len());
     }
     
-    /// Delete the transactions avec des nullifiers depenses.
+    /// Delete les transactions avec des nullifiers spents.
     pub async fn remove_spent_nullifiers(&self, spent_nullifiers: &[[u8; 32]]) {
         let mut to_remove = Vec::new();
         
-        // Identifier les transactions a supprimer
+        // Identify les transactions to delete
         {
             let v1_txs = self.v1_transactions.read().await;
             for (hash, tx) in v1_txs.iter() {
@@ -586,21 +586,21 @@ impl MempoolV2 {
             }
         }
         
-        // Delete the transactions identifiees
+        // Delete les transactions identifiesdes
         for hash in &to_remove {
             self.remove_transaction(hash).await;
         }
         
         if !to_remove.is_empty() {
-            info!("Supprime {} transactions avec nullifiers depenses", to_remove.len());
+            info!("Removed {} transactions avec nullifiers spents", to_remove.len());
         }
     }
     
-    /// Nettoyage periodic.
+    /// Cleanup periodic.
     pub async fn cleanup(&self) -> Result<usize, MempoolV2Error> {
         let mut total_cleaned = 0;
         
-        // Nettoyage du manager de memory
+        // Cleanup du manager de memory
         total_cleaned += self.memory_manager.cleanup().await
             .map_err(|e| MempoolV2Error::Internal(e.to_string()))?;
         
@@ -612,17 +612,17 @@ impl MempoolV2 {
             peers.retain(|_, info| !info.is_inactive(inactive_timeout));
             let cleaned_peers = before_count - peers.len();
             if cleaned_peers > 0 {
-                debug!("Nettoye {} peers inactifs", cleaned_peers);
+                debug!("Cleaned up {} peers inactifs", cleaned_peers);
             }
         }
         
-        // Mettre a jour les statistiques
+        // Update les statistiques
         self.update_stats().await;
         
         Ok(total_cleaned)
     }
     
-    /// Mettre a jour les statistiques.
+    /// Update les statistiques.
     async fn update_stats(&self) {
         let v1_count = self.v1_transactions.read().await.len();
         let v2_count = self.v2_transactions.read().await.len();
@@ -647,7 +647,7 @@ impl MempoolV2 {
         }
     }
     
-    /// Incrementer les statistiques de rejet.
+    /// Increment les statistiques de rejet.
     async fn increment_rejection_stat(&self, reason: &str) {
         let mut stats = self.stats.write().await;
         stats.total_rejections += 1;
@@ -669,7 +669,7 @@ impl MempoolV2 {
     
     /// Estimer la taille d'une transaction V1.
     fn estimate_transaction_size_v1(&self, tx: &ShieldedTransaction) -> usize {
-        // Estimation basique - a ameliorer avec la serialization reelle
+        // Estimation basique - to improve avec la serialization real
         std::mem::size_of::<ShieldedTransaction>() + 
         tx.nullifiers().len() * 32 + 
         tx.commitments().len() * 32
@@ -677,22 +677,22 @@ impl MempoolV2 {
     
     /// Estimer la taille d'une transaction V2.
     fn estimate_transaction_size_v2(&self, tx: &Transaction) -> usize {
-        // Estimation basique - a ameliorer avec la serialization reelle
+        // Estimation basique - to improve avec la serialization real
         match tx {
             Transaction::V1(_) => 1000, // Estimation
-            Transaction::V2(_) => 1500, // Estimation plus grande pour post-quantique
+            Transaction::V2(_) => 1500, // Estimation plus large pour post-quantique
             Transaction::Migration(_) => 2000, // Estimation pour migration
         }
     }
     
-    /// Start thes tasks de nettoyage automatique.
+    /// Start les tasks de cleanup automatique.
     pub async fn start_background_tasks(&self) -> Vec<tokio::task::JoinHandle<()>> {
         let mut handles = Vec::new();
         
-        // Tache de nettoyage du manager de memory
+        // Task de cleanup du manager de memory
         handles.push(self.memory_manager.start_cleanup_task().await);
         
-        // Tache de nettoyage general du mempool
+        // Task de cleanup general du mempool
         let mempool = self.clone();
         let cleanup_interval = Duration::from_secs(self.config.peer_cleanup_interval_seconds);
         handles.push(tokio::spawn(async move {
@@ -727,13 +727,13 @@ impl Clone for MempoolV2 {
     }
 }
 
-/// Erreurs du mempool avance.
+/// Errors du mempool advanced.
 #[derive(Debug, thiserror::Error)]
 pub enum MempoolV2Error {
-    #[error("Transaction already presente dans le mempool")]
+    #[error("Transaction already present dans le mempool")]
     DuplicateTransaction,
     
-    #[error("Double-spend detecte")]
+    #[error("Double-spend detected")]
     DoubleSpend,
     
     #[error("Transaction trop volumineuse")]
@@ -742,10 +742,10 @@ pub enum MempoolV2Error {
     #[error("Frais insuffisants")]
     InsufficientFee,
     
-    #[error("Rate limit depasse pour ce peer")]
+    #[error("Rate limit exceeded pour ce peer")]
     RateLimited,
     
-    #[error("Validation de la transaction echouee")]
+    #[error("Validation de la transaction failed")]
     ValidationFailed,
     
     #[error("Pression memory - mempool plein")]
@@ -765,13 +765,13 @@ mod tests {
         let config = MempoolV2Config::default();
         let mempool = MempoolV2::new(config);
         
-        // Create a transaction de test
+        // Create une transaction de test
         let tx = ShieldedTransaction::default(); // Placeholder
         
         // Ajouter la transaction
         let result = mempool.add_transaction(tx, Some("peer1")).await;
-        // Note: ce test faila car ShieldedTransaction::default() n'existe pas
-        // Il faut create une transaction valide pour les vrais tests
+        // Note: ce test failsra car ShieldedTransaction::default() n'exists pas
+        // Il faut create une transaction valid pour les vrais tests
     }
     
     #[tokio::test]
@@ -781,16 +781,16 @@ mod tests {
         
         let mempool = MempoolV2::new(config);
         
-        // TODO: Implementer des tests avec de vraies transactions
+        // TODO: Implement des tests avec de vraies transactions
     }
     
     #[tokio::test]
     async fn test_memory_pressure() {
         let mut config = MempoolV2Config::default();
-        config.memory.max_memory_bytes = 1024; // Tres petit pour forcer l'eviction
+        config.memory.max_memory_bytes = 1024; // Very petit pour forcer eviction
         
         let mempool = MempoolV2::new(config);
         
-        // TODO: Implementer des tests de pression memory
+        // TODO: Implement des tests de pression memory
     }
 }

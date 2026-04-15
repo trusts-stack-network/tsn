@@ -1,7 +1,7 @@
-//! File appender with rotation
+//! Appender de file avec rotation
 //!
-//! This module provides a file appender that supports rotation
-//! automatique basee sur la taille ou la date.
+//! Ce module fournit un appender de file qui supporte la rotation
+//! automatique based sur la taille ou la date.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use super::{LogRotation, LoggingError, Result};
 pub enum RotationPolicy {
     /// Pas de rotation
     Never,
-    /// Rotation basee sur la taille (in bytes)
+    /// Rotation based sur la taille (en octets)
     Size(u64),
     /// Rotation quotidienne
     Daily,
@@ -28,7 +28,7 @@ impl From<LogRotation> for RotationPolicy {
             LogRotation::Never => RotationPolicy::Never,
             LogRotation::Daily => RotationPolicy::Daily,
             LogRotation::Weekly => RotationPolicy::Weekly,
-            LogRotation::Monthly => RotationPolicy::Weekly, // Simplifie
+            LogRotation::Monthly => RotationPolicy::Weekly, // Simplified
             LogRotation::Size(bytes) => RotationPolicy::Size(bytes),
         }
     }
@@ -36,38 +36,38 @@ impl From<LogRotation> for RotationPolicy {
 
 /// Appender de file avec support de rotation
 pub struct RotatingFileAppender {
-    /// Directory des logs
+    /// Log directory
     log_dir: PathBuf,
-    /// Base file name
+    /// Nom de base du file
     file_name: String,
     /// Politique de rotation
     rotation: RotationPolicy,
-    /// Maximum file size
+    /// Taille maximale du file
     max_size: u64,
-    /// State interne protege par mutex
+    /// Internal state protected by mutex
     state: Mutex<AppenderState>,
 }
 
 struct AppenderState {
-    /// Currently open file
+    /// File currently ouvert
     current_file: Option<std::fs::File>,
-    /// Current file path
+    /// Chemin du file actuel
     current_path: PathBuf,
-    /// Current file size
+    /// Taille actuelle du file
     current_size: u64,
-    /// Date of last file change (for time-based rotation)
+    /// Date du dernier changement de file (pour rotation temporelle)
     last_rotation: chrono::DateTime<chrono::Utc>,
 }
 
 impl RotatingFileAppender {
-    /// Creates a nouvel appender avec rotation
+    /// Creates un nouvel appender avec rotation
     pub fn new(
         log_dir: PathBuf,
         file_name: String,
         rotation: LogRotation,
         max_size: u64,
     ) -> Result<Self> {
-        // Create directory if needed
+        // Create the directory if needed
         if !log_dir.exists() {
             std::fs::create_dir_all(&log_dir).map_err(|e| {
                 LoggingError::DirectoryCreationError(e)
@@ -77,7 +77,7 @@ impl RotatingFileAppender {
         let rotation_policy = rotation.into();
         let current_path = Self::generate_file_path(&log_dir, &file_name, rotation_policy);
         
-        // Open or create the file
+        // Ouvrir ou create le file
         let (file, current_size) = Self::open_or_create_file(&current_path)?;
 
         let state = AppenderState {
@@ -105,7 +105,7 @@ impl RotatingFileAppender {
         let timestamp = match rotation {
             RotationPolicy::Never => String::new(),
             RotationPolicy::Size(_) => {
-                // Pour la rotation par taille, on uses un timestamp precis
+                // For size-based rotation, we use a precise timestamp
                 chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string()
             }
             RotationPolicy::Daily => {
@@ -125,7 +125,7 @@ impl RotatingFileAppender {
         }
     }
 
-    /// Opens an existing file or creates a new one
+    /// Ouvre un file existant ou en creates un nouveau
     fn open_or_create_file(path: &Path) -> Result<(std::fs::File, u64)> {
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -160,20 +160,20 @@ impl RotatingFileAppender {
         }
     }
 
-    /// Performs file rotation
+    /// Effectue la rotation du file
     fn rotate(&self, state: &mut AppenderState) -> Result<()> {
-        // Close the current file
+        // Fermer le file actuel
         if let Some(file) = state.current_file.take() {
             drop(file);
         }
 
-        // Generate le nouveau path
+        // Generate the new path
         let new_path = Self::generate_file_path(&self.log_dir,
             &self.file_name,
             self.rotation,
         );
 
-        // Open the new file
+        // Ouvrir le nouveau file
         let (file, size) = Self::open_or_create_file(&new_path)?;
 
         state.current_file = Some(file);
@@ -184,13 +184,13 @@ impl RotatingFileAppender {
         Ok(())
     }
 
-    /// Gets the current file path
+    /// Obtient le path du file actuel
     pub fn current_path(&self) -> PathBuf {
         let state = self.state.lock().unwrap();
         state.current_path.clone()
     }
 
-    /// Gets the current file size
+    /// Obtient la taille actuelle du file
     pub fn current_size(&self) -> u64 {
         let state = self.state.lock().unwrap();
         state.current_size
@@ -210,7 +210,7 @@ impl Write for RotatingFileAppender {
             })?;
         }
 
-        // Write to the file
+        // Write dans le file
         if let Some(ref mut file) = state.current_file {
             let written = file.write(buf)?;
             state.current_size += written as u64;
@@ -252,7 +252,7 @@ impl Write for &RotatingFileAppender {
             })?;
         }
 
-        // Write to the file
+        // Write dans le file
         if let Some(ref mut file) = state.current_file {
             let written = file.write(buf)?;
             state.current_size += written as u64;
@@ -326,7 +326,7 @@ mod tests {
 
         appender.flush().unwrap();
         
-        // Check that the file contains the data
+        // Verify que le file contient les data
         let content = std::fs::read_to_string(appender.current_path()).unwrap();
         assert_eq!(content, "Hello, World!\n");
     }
@@ -337,15 +337,15 @@ mod tests {
         let mut appender = RotatingFileAppender::new(
             temp_dir.path().to_path_buf(),
             String::from("test"),
-            LogRotation::Size(10), // Rotation after 10 octets
+            LogRotation::Size(10), // Rotation after 10 bytes
             10,
         ).unwrap();
 
         let initial_path = appender.current_path();
         
-        // Write assez of data pour declencher la rotation
+        // Write enough of data pour trigger la rotation
         appender.write(b"0123456789").unwrap(); // 10 octets
-        appender.write(b"trigger").unwrap(); // Declenche rotation
+        appender.write(b"trigger").unwrap(); // Triggers rotation
 
         // The file should have changed
         assert_ne!(appender.current_path(), initial_path);

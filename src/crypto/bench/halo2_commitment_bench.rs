@@ -33,7 +33,7 @@ type C = PoseidonGoldilocksConfig;
 const SAMPLE_SIZE: usize = 10;
 const WARMUP_ITERATIONS: usize = 3;
 
-/// Resultat d'un benchmark
+/// Result d'un benchmark
 #[derive(Debug, Clone)]
 pub struct BenchmarkResult {
     pub name: String,
@@ -64,7 +64,7 @@ impl BenchmarkResult {
         }
     }
     
-    /// Affiche les results formates
+    /// Display formatted results
     pub fn print(&self) {
         println!("┌─────────────────────────────────────────────────────────────┐");
         println!("│ Benchmark: {:<48} │", self.name);
@@ -81,7 +81,7 @@ impl BenchmarkResult {
     }
 }
 
-/// Benchmark runner simple (sans criterion pour avoid les dependances supplementaires)
+/// Benchmark runner simple (sans criterion pour avoidr les dependencies additional)
 pub struct BenchmarkRunner {
     results: Vec<BenchmarkResult>,
 }
@@ -91,7 +91,7 @@ impl BenchmarkRunner {
         Self { results: Vec::new() }
     }
     
-    /// Execute un benchmark
+    /// Executes un benchmark
     pub fn bench<F: FnMut()>(&mut self, name: &str, mut f: F) -> BenchmarkResult {
         // Warmup
         for _ in 0..WARMUP_ITERATIONS {
@@ -112,7 +112,7 @@ impl BenchmarkRunner {
         result
     }
     
-    /// Affiche tous les results
+    /// Display all results
     pub fn print_all(&self) {
         println!("\n");
         println!("╔═══════════════════════════════════════════════════════════════╗");
@@ -144,7 +144,7 @@ fn build_plonky2_commitment_circuit() -> (CircuitData<F, C, D>, VerifierCircuitD
     (circuit_data, verifier_data)
 }
 
-/// Generates ae preuve Plonky2
+/// Generates une preuve Plonky2
 fn prove_plonky2_commitment(
     circuit_data: &CircuitData<F, C, D>,
     value: F,
@@ -152,7 +152,7 @@ fn prove_plonky2_commitment(
 ) -> (ProofWithPublicInputs<F, C, D>, Duration) {
     let mut pw = PartialWitness::new();
     
-    let value_target = circuit_data.prover_only.public_inputs[0]; // Simplifie
+    let value_target = circuit_data.prover_only.public_inputs[0]; // Simplified
     let blinder_target = circuit_data.prover_only.public_inputs[0];
     
     pw.set_target(value_target, value);
@@ -168,7 +168,7 @@ fn prove_plonky2_commitment(
     (proof, elapsed)
 }
 
-/// Verifie une preuve Plonky2
+/// Verifies une preuve Plonky2
 fn verify_plonky2_commitment(
     verifier_data: &VerifierCircuitData<F, C, D>,
     proof: &ProofWithPublicInputs<F, C, D>,
@@ -208,7 +208,7 @@ pub fn bench_plonky2_verification() -> BenchmarkResult {
 /// Benchmark: Groth16 proof generation (via arkworks)
 pub fn bench_groth16_generation() -> BenchmarkResult {
     // Note: Ceci est un placeholder - Groth16 requires un circuit R1CS complete
-    // En pratique, on usesrait ark-circom ou un circuit R1CS defini
+    // En pratique, on utiliserait ark-circom ou un circuit R1CS defined
     let mut runner = BenchmarkRunner::new();
     runner.bench("Groth16 commitment generation (arkworks)", || {
         // Simulation d'operation cryptographique
@@ -220,7 +220,7 @@ pub fn bench_groth16_generation() -> BenchmarkResult {
     })
 }
 
-/// Benchmark: Comparaison memory
+/// Benchmark: Comparison memory
 pub fn bench_memory_comparison() -> Vec<BenchmarkResult> {
     let mut results = Vec::new();
     
@@ -238,7 +238,7 @@ pub fn bench_memory_comparison() -> Vec<BenchmarkResult> {
     results
 }
 
-/// Execute tous les benchmarks
+/// Executes tous les benchmarks
 pub fn run_all_benchmarks() -> Vec<BenchmarkResult> {
     let mut all_results = Vec::new();
     
@@ -257,7 +257,7 @@ pub fn run_all_benchmarks() -> Vec<BenchmarkResult> {
     // Memory benchmarks
     all_results.extend(bench_memory_comparison());
     
-    // Affiche les results
+    // Display results
     let runner = BenchmarkRunner { results: all_results.clone() };
     runner.print_all();
     

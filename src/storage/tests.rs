@@ -1,7 +1,7 @@
-//! Complete unit tests for storage modules/
+//! Tests unitaires complets pour les modules storage/
 //!
-//! Couvre database.rs, sled_backend.rs et faucet_store.rs avec tests d'error,
-//! data persistence and consistency during CRUD operations.
+//! Couvre database.rs, sled_backend.rs et faucet_store.rs avec tests d'erreur,
+//! persistence and data consistency during CRUD operations.
 
 #[cfg(test)]
 mod database_tests {
@@ -14,7 +14,7 @@ mod database_tests {
     use tempfile::TempDir;
     use tokio;
 
-    /// Constants for tests
+    /// Constantes pour les tests
     const TEST_BLOCK_HASH_SIZE: usize = 32;
     const TEST_DIFFICULTY: u64 = 1000;
     const TEST_TIMESTAMP: u64 = 1640995200; // 1er janvier 2022
@@ -91,7 +91,7 @@ mod database_tests {
     }
 
     #[tokio::test]
-    async fn test_get_nonexistent_block() {
+    async fn test_get_nonexistsnt_block() {
         let (db, _temp_dir) = create_test_database().await;
         let fake_id = BlockId::from_hash([99u8; TEST_BLOCK_HASH_SIZE]);
 
@@ -117,7 +117,7 @@ mod database_tests {
         let retrieved_tx = retrieved.unwrap();
         assert!(retrieved_tx.is_some(), "Transaction not found");
         
-        // Check that the retrieved transaction matches
+        // Verify the retrieved transaction matches
         match (&transaction, &retrieved_tx.unwrap()) {
             (Transaction::Coinbase(orig), Transaction::Coinbase(retrieved)) => {
                 assert_eq!(orig.fee, retrieved.fee);
@@ -128,7 +128,7 @@ mod database_tests {
     }
 
     #[tokio::test]
-    async fn test_get_nonexistent_transaction() {
+    async fn test_get_nonexistsnt_transaction() {
         let (db, _temp_dir) = create_test_database().await;
         let fake_id = TransactionId::from_hash([88u8; TEST_BLOCK_HASH_SIZE]);
 
@@ -226,7 +226,7 @@ mod database_tests {
             handles.push(handle);
         }
         
-        // Wait for all tasks to completee
+        // Wait for all tasks to complete
         for handle in handles {
             handle.await.expect("Concurrent task failed");
         }
@@ -308,7 +308,7 @@ mod sled_backend_tests {
         
         let retrieved_block = retrieved.unwrap().unwrap();
         
-        // Check that all fields are correctly serialized/deserialized
+        // Verify all fields are correctly serialized/deserialized
         assert_eq!(retrieved_block.header.version, 42);
         assert_eq!(retrieved_block.header.prev_hash, [0xABu8; TEST_BLOCK_HASH_SIZE]);
         assert_eq!(retrieved_block.header.merkle_root, [0xCDu8; TEST_BLOCK_HASH_SIZE]);
@@ -417,16 +417,16 @@ mod faucet_store_tests {
         let amount = 1000000; // 1 TSN
         let timestamp = create_test_timestamp();
 
-        // Check that no claim exists initially
+        // Verify no claim exists initially
         let initial_check = store.has_claimed(&address).await;
         assert!(initial_check.is_ok(), "Failed to check initial claim status");
         assert!(!initial_check.unwrap(), "Address should not have claimed initially");
 
-        // Register a claim
+        // Register une claim
         let record_result = store.record_claim(&address, amount, timestamp).await;
         assert!(record_result.is_ok(), "Failed to record claim: {:?}", record_result);
 
-        // Check that the claim now exists
+        // Verify the claim exists now
         let post_claim_check = store.has_claimed(&address).await;
         assert!(post_claim_check.is_ok(), "Failed to check post-claim status");
         assert!(post_claim_check.unwrap(), "Address should have claimed after recording");
@@ -463,11 +463,11 @@ mod faucet_store_tests {
         let first_record = store.record_claim(&address, first_amount, first_timestamp).await;
         assert!(first_record.is_ok(), "Failed to record first claim");
 
-        // Second claim (should overwrite the first)
+        // Second claim (should overwrite the first))
         let second_record = store.record_claim(&address, second_amount, second_timestamp).await;
         assert!(second_record.is_ok(), "Failed to record second claim");
 
-        // Check that only the last claim is kept
+        // Verify only the last claim is kept
         let claim_details = store.get_claim(&address).await;
         assert!(claim_details.is_ok(), "Failed to get claim details");
         
@@ -500,12 +500,12 @@ mod faucet_store_tests {
         let record2 = store.record_claim(&address2, amount2, timestamp + 60).await;
         assert!(record2.is_ok(), "Failed to record claim for address2");
 
-        // Check individual statuses
+        // Verify individual statuses
         assert!(store.has_claimed(&address1).await.unwrap(), "Address1 should have claimed");
         assert!(store.has_claimed(&address2).await.unwrap(), "Address2 should have claimed");
         assert!(!store.has_claimed(&address3).await.unwrap(), "Address3 should not have claimed");
 
-        // Check individual details
+        // Verify individual details
         let claim1 = store.get_claim(&address1).await.unwrap().unwrap();
         assert_eq!(claim1.amount, amount1);
 
@@ -526,7 +526,7 @@ mod faucet_store_tests {
         let amount = 3000000;
         let timestamp = create_test_timestamp();
 
-        // Register a claim dans la first instance
+        // Register a claim in the first instance
         {
             let store = FaucetStore::new(db_path_str)
                 .await
@@ -536,7 +536,7 @@ mod faucet_store_tests {
             assert!(record_result.is_ok(), "Failed to record claim in first instance");
         }
 
-        // Check the persistence dans une nouvelle instance
+        // Verify persistence in a new instance
         {
             let store = FaucetStore::new(db_path_str)
                 .await
@@ -557,7 +557,7 @@ mod faucet_store_tests {
 
     #[tokio::test]
     async fn test_faucet_claim_serialization() {
-        // Test FaucetClaim serialization/deserialization
+        // Test serialization/deserialization de FaucetClaim
         let address = create_test_address(200);
         let amount = 5000000;
         let timestamp = 1640995200;
@@ -601,12 +601,12 @@ mod faucet_store_tests {
         let zero_timestamp_result = store.record_claim(&address, 1000, 0).await;
         assert!(zero_timestamp_result.is_ok(), "Should allow zero timestamp");
 
-        // Test avec amount very grand
+        // Test with very large amount
         let large_amount = u64::MAX;
         let large_amount_result = store.record_claim(&address, large_amount, create_test_timestamp()).await;
         assert!(large_amount_result.is_ok(), "Should allow maximum amount");
 
-        // Check that la derniere valeur est conservee
+        // Verify que la last valeur est kept
         let final_claim = store.get_claim(&address).await.unwrap().unwrap();
         assert_eq!(final_claim.amount, large_amount);
     }

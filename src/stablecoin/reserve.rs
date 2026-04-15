@@ -1,11 +1,11 @@
 // ZST — Moteur de reserve
-// Calculs du reserve ratio, prix ZRS, frais dynamiques, simulations
+// Calculs du reserve ratio, prix ZRS, fees dynamiques, simulations
 
 use crate::stablecoin::config::StablecoinConfig;
 use crate::stablecoin::errors::StablecoinError;
 use crate::stablecoin::types::*;
 
-/// Moteur de calcul de la reserve ZST
+/// Moteur de calculation de la reserve ZST
 pub struct ReserveEngine {
     pub config: StablecoinConfig,
 }
@@ -15,32 +15,32 @@ impl ReserveEngine {
         Self { config }
     }
 
-    /// Calcule la valeur de la reserve en micro-XAU
+    /// Calculationates la valeur de la reserve en micro-XAU
     /// reserve_value = reserve_tsn * price_tsn / price_xau
     /// Ici on travaille en TSN atomiques, et tsn_per_xau est en micro-TSN par XAU
-    /// Retourne la valeur en unites atomiques ZST (= grammes d'or * 10^8)
+    /// Returns la valeur en units atomiques ZST (= grammes d'or * 10^8)
     pub fn reserve_value_in_xau(&self, state: &ReserveState) -> Result<u128, StablecoinError> {
         if state.last_price.tsn_per_xau == 0 {
             return Err(StablecoinError::NoPriceAvailable);
         }
-        // reserve_tsn est en unites atomiques (10^8)
+        // reserve_tsn est en units atomiques (10^8)
         // tsn_per_xau est le nombre de micro-TSN pour 1g d'or (10^6)
-        // On veut: reserve_value_xau = reserve_tsn / tsn_per_xau (ajuste pour les decimales)
+        // On veut: reserve_value_xau = reserve_tsn / tsn_per_xau (adjusted pour les decimals)
         //
         // reserve_tsn (atomique) / (tsn_per_xau * ATOMIC_UNIT / MICRO_UNIT)
         // = reserve_tsn * MICRO_UNIT / (tsn_per_xau * ATOMIC_UNIT)
         //
-        // Simplifie: reserve_tsn * 10^6 / (tsn_per_xau * 10^8)
+        // Simplified: reserve_tsn * 10^6 / (tsn_per_xau * 10^8)
         //          = reserve_tsn / (tsn_per_xau * 100)
         //
-        // En unites atomiques ZST (10^8 par gramme):
+        // En units atomiques ZST (10^8 par gramme):
         // reserve_value_zst_atomic = reserve_tsn * ATOMIC_UNIT / (tsn_per_xau * 100)
         //
         // Plus simple: reserve_tsn / tsn_per_xau * MICRO_UNIT
-        // Mais attention aux overflows et a la precision.
+        // Mais attention aux overflows et to la precision.
         //
         // Approche: (reserve_tsn * MICRO_UNIT) / tsn_per_xau
-        // Cela donne des unites atomiques ZST (10^8 par gramme d'or)
+        // Cela donne des units atomiques ZST (10^8 par gramme d'or)
         let numerator = state
             .reserve_tsn
             .checked_mul(MICRO_UNIT as u128)
@@ -49,8 +49,8 @@ impl ReserveEngine {
         Ok(value)
     }
 
-    /// Calcule les liabilities (dettes) en unites atomiques ZST
-    /// liabilities = supply_zst (car 1 ZST = 1g XAU, et supply_zst est en unites atomiques)
+    /// Calculationates les liabilities (dettes) en units atomiques ZST
+    /// liabilities = supply_zst (car 1 ZST = 1g XAU, et supply_zst est en units atomiques)
     pub fn liabilities(&self, state: &ReserveState) -> u128 {
         state.supply_zst
     }
@@ -74,7 +74,7 @@ impl ReserveEngine {
         Ok(ratio.min(u64::MAX as u128) as u64)
     }
 
-    /// Calcule le prix d'un ZRS en unites atomiques TSN
+    /// Calculationates le prix d'un ZRS en units atomiques TSN
     /// prix_zrs = max(reserve_value - liabilities, 0) / supply_zrs
     /// Converti en TSN atomiques via le prix oracle
     pub fn calculate_zrs_price(&self, state: &ReserveState) -> Result<u128, StablecoinError> {
@@ -90,14 +90,14 @@ impl ReserveEngine {
         let liabilities = self.liabilities(state);
 
         if reserve_value <= liabilities {
-            // Reserve sous-collateralisee, ZRS vaut 0
+            // Reserve sous-collateralizede, ZRS vaut 0
             return Ok(0);
         }
 
-        // equity_xau = reserve_value - liabilities (en unites atomiques XAU)
+        // equity_xau = reserve_value - liabilities (en units atomiques XAU)
         let equity_xau = reserve_value - liabilities;
 
-        // prix_zrs_xau = equity_xau / supply_zrs (en unites atomiques XAU par ZRS)
+        // prix_zrs_xau = equity_xau / supply_zrs (en units atomiques XAU par ZRS)
         // Convertir en TSN: prix_zrs_tsn = prix_zrs_xau * tsn_per_xau / MICRO_UNIT
         let price_tsn = equity_xau
             .checked_mul(state.last_price.tsn_per_xau as u128)
@@ -108,7 +108,7 @@ impl ReserveEngine {
         Ok(price_tsn)
     }
 
-    /// Checks if le mint ZST est autorise (ratio >= min after mint)
+    /// Verifies si le mint ZST est authorized (ratio >= min after mint)
     pub fn can_mint_zst(
         &self,
         state: &ReserveState,
@@ -118,13 +118,13 @@ impl ReserveEngine {
         let fee = self.calculate_mint_fee(state, StablecoinAction::MintZST, tsn_amount)?;
         let tsn_after_fee = tsn_amount.checked_sub(fee).ok_or(StablecoinError::ArithmeticOverflow)?;
 
-        // TSN depose va dans la reserve
+        // TSN deposited va dans la reserve
         simulated.reserve_tsn = simulated
             .reserve_tsn
             .checked_add(tsn_after_fee)
             .ok_or(StablecoinError::ArithmeticOverflow)?;
 
-        // ZST cree = tsn_after_fee converti au prix oracle
+        // ZST created = tsn_after_fee converted au prix oracle
         let zst_out = self.tsn_to_zst(tsn_after_fee, state.last_price.tsn_per_xau)?;
         simulated.supply_zst = simulated
             .supply_zst
@@ -135,21 +135,21 @@ impl ReserveEngine {
         Ok(ratio_after >= self.config.min_reserve_ratio)
     }
 
-    /// Checks if le burn ZST est autorise (toujours, sauf circuit breaker/cooldown)
+    /// Verifies si le burn ZST est authorized (toujours, sauf circuit breaker/cooldown)
     pub fn can_burn_zst(
         &self,
         state: &ReserveState,
         zst_amount: u128,
         current_timestamp: u64,
     ) -> Result<bool, StablecoinError> {
-        // Verifier circuit breaker
+        // Verify circuit breaker
         self.check_circuit_breaker(state, current_timestamp)?;
-        // Verifier cooldown
+        // Verify cooldown
         self.check_cooldown(state, zst_amount)?;
         Ok(true)
     }
 
-    /// Checks if le mint ZRS est autorise (ratio < max after mint)
+    /// Verifies si le mint ZRS est authorized (ratio < max after mint)
     pub fn can_mint_zrs(
         &self,
         state: &ReserveState,
@@ -180,7 +180,7 @@ impl ReserveEngine {
         Ok(ratio_after <= self.config.max_reserve_ratio_mint_zrs)
     }
 
-    /// Checks if le burn ZRS est autorise (ratio > min_burn_zrs after burn)
+    /// Verifies si le burn ZRS est authorized (ratio > min_burn_zrs after burn)
     pub fn can_burn_zrs(
         &self,
         state: &ReserveState,
@@ -189,7 +189,7 @@ impl ReserveEngine {
         let mut simulated = state.clone();
         let zrs_price = self.calculate_zrs_price(state)?;
 
-        // TSN a rendre = zrs_amount * zrs_price / ATOMIC_UNIT
+        // TSN to rendre = zrs_amount * zrs_price / ATOMIC_UNIT
         let tsn_out_gross = zrs_amount
             .checked_mul(zrs_price)
             .ok_or(StablecoinError::ArithmeticOverflow)?
@@ -200,7 +200,7 @@ impl ReserveEngine {
         simulated.reserve_tsn = simulated.reserve_tsn.saturating_sub(tsn_out);
         simulated.supply_zrs = simulated.supply_zrs.saturating_sub(zrs_amount);
 
-        // Si supply_zst = 0, pas de ratio a checksr
+        // Si supply_zst = 0, pas de ratio to verify
         if simulated.supply_zst == 0 {
             return Ok(true);
         }
@@ -209,7 +209,7 @@ impl ReserveEngine {
         Ok(ratio_after >= self.config.min_reserve_ratio_burn_zrs)
     }
 
-    /// Calcule les frais dynamiques (stress fee) pour le burn ZST
+    /// Calcule les fees dynamiques (stress fee) pour le burn ZST
     /// ratio >= 300%: 0.30% (normal)
     /// 200% <= ratio < 300%: 0.30% + (300% - ratio) / 100% * 2% → max 2.30%
     /// 150% <= ratio < 200%: 2.30% + (200% - ratio) / 50% * 2.70% → max 5.00%
@@ -219,11 +219,11 @@ impl ReserveEngine {
         let base_fee = self.config.fee_burn_zst_bps;
 
         if ratio >= 30_000 {
-            // >= 300% — frais normal
+            // >= 300% — fees normal
             Ok(base_fee)
         } else if ratio >= 20_000 {
             // 200% <= ratio < 300%
-            // Interpolation lineaire: base + (30000 - ratio) / 10000 * 200
+            // Interpolation linear: base + (30000 - ratio) / 10000 * 200
             let extra = ((30_000 - ratio) as u128 * 200) / 10_000;
             Ok(base_fee + extra as u64)
         } else if ratio >= 15_000 {
@@ -232,12 +232,12 @@ impl ReserveEngine {
             let extra = ((20_000 - ratio) as u128 * 270) / 5_000;
             Ok(230 + extra as u64)
         } else {
-            // < 150% — frais maximum
+            // < 150% — fees maximum
             Ok(self.config.fee_stress_max_bps)
         }
     }
 
-    /// Calcule les frais pour une operation mint
+    /// Calculationates les fees pour une operation mint
     pub fn calculate_mint_fee(
         &self,
         state: &ReserveState,
@@ -252,7 +252,7 @@ impl ReserveEngine {
         self.calculate_fee_amount(tsn_amount, fee_bps)
     }
 
-    /// Calcule les frais pour une operation burn
+    /// Calculationates les fees pour une operation burn
     pub fn calculate_burn_fee(
         &self,
         state: &ReserveState,
@@ -267,7 +267,7 @@ impl ReserveEngine {
         self.calculate_fee_amount(tsn_amount, fee_bps)
     }
 
-    /// Calcule un montant de frais: amount * fee_bps / BPS_SCALE
+    /// Calcule un montant de fees: amount * fee_bps / BPS_SCALE
     /// Arrondi toujours en faveur du protocole (vers le haut)
     pub fn calculate_fee_amount(&self, amount: u128, fee_bps: u64) -> Result<u128, StablecoinError> {
         let numerator = amount
@@ -278,7 +278,7 @@ impl ReserveEngine {
         Ok(fee)
     }
 
-    /// Distribue les frais: 80% reserve, 20% tresorerie
+    /// Distribue les fees: 80% reserve, 20% treasury
     pub fn distribute_fee(&self, fee: u128) -> (u128, u128) {
         let to_reserve = fee * self.config.fee_to_reserve_bps as u128 / BPS_SCALE as u128;
         let to_treasury = fee - to_reserve;
@@ -308,7 +308,7 @@ impl ReserveEngine {
         Ok(tsn)
     }
 
-    /// Checks the circuit breaker
+    /// Verifies le circuit breaker
     pub fn check_circuit_breaker(
         &self,
         state: &ReserveState,
@@ -325,7 +325,7 @@ impl ReserveEngine {
         Ok(())
     }
 
-    /// Checks the cooldown de burn ZST par bloc
+    /// Verifies le cooldown de burn ZST par bloc
     pub fn check_cooldown(
         &self,
         state: &ReserveState,
@@ -346,7 +346,7 @@ impl ReserveEngine {
         Ok(())
     }
 
-    /// Simule un mint ZST et retourne le result prevu
+    /// Simule un mint ZST et returns le result planned
     pub fn simulate_mint_zst(
         &self,
         state: &ReserveState,
@@ -392,7 +392,7 @@ impl ReserveEngine {
         })
     }
 
-    /// Simule un burn ZST et retourne le result prevu
+    /// Simule un burn ZST et returns le result planned
     pub fn simulate_burn_zst(
         &self,
         state: &ReserveState,
@@ -420,7 +420,7 @@ impl ReserveEngine {
         let tsn_out = tsn_gross.checked_sub(fee).ok_or(StablecoinError::ArithmeticOverflow)?;
 
         let mut after = state.clone();
-        // La reserve perd le TSN gross rendu, mais retrieves la part des frais
+        // La reserve perd le TSN gross rendu, mais retrieves la part des fees
         after.reserve_tsn = after.reserve_tsn.saturating_sub(tsn_gross);
         after.reserve_tsn += fee_reserve;
         after.treasury_tsn += fee_treasury;

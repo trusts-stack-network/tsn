@@ -197,7 +197,7 @@ pub enum InspectTarget {
         /// Show database statistics
         #[arg(short, long)]
         stats: bool,
-        /// Show raw key-value pairs
+        /// Show raw key-value peers
         #[arg(short, long)]
         raw: bool,
     },
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_cli_parsing() {
-        // Test que les commandes peuvent be parsees
+        // Test que les commandes peuvent be parsed
         let cli = DevCli::parse_from(["tsn-dev", "generate", "transactions", "--count", "5"]);
         match cli.command {
             DevCommands::Generate { target } => {

@@ -4,7 +4,7 @@
 use pbkdf2;
 use sha2;
 
-/// Erreur de dechiffrement (demonstration vulnerable)
+/// Error de decryption (demonstration vulnerable)
 #[derive(Debug)]
 pub enum DecryptionError {
     InvalidLength,
@@ -13,7 +13,7 @@ pub enum DecryptionError {
     DecryptionFailed,
 }
 
-/// Dechiffrement AES-ECB vulnerable (demonstration uniquement)
+/// Decryption AES-ECB vulnerable (demonstration only)
 fn aes_ecb_decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, DecryptionError> {
     use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
     use aes::Aes128;
@@ -37,12 +37,12 @@ fn aes_ecb_decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, DecryptionE
 pub struct VulnerableCrypto;
 
 impl VulnerableCrypto {
-    /// Vulnerabilite: Timing attack sur comparaison de MAC
+    /// Vulnerability: Timing attack sur comparison de MAC
     pub fn verify_mac_vulnerable(calculated: &[u8], expected: &[u8]) -> bool {
         if calculated.len() != expected.len() {
             return false;
         }
-        // Timing attack: retourne early sur premier byte different
+        // Timing attack: returns early sur first byte different
         for i in 0..calculated.len() {
             if calculated[i] != expected[i] {
                 return false;
@@ -51,7 +51,7 @@ impl VulnerableCrypto {
         true
     }
 
-    /// Vulnerabilite: Nonce statique (AES-GCM catastrophic failure)
+    /// Vulnerability: Nonce statique (AES-GCM catastrophic failure)
     pub fn encrypt_aes_gcm_static_nonce(
         key: &[u8; 32],
         plaintext: &[u8],
@@ -68,7 +68,7 @@ impl VulnerableCrypto {
         cipher.encrypt(static_nonce, plaintext).unwrap()
     }
 
-    /// Vulnerabilite: Padding oracle (differenciation errors)
+    /// Vulnerability: Padding oracle (differentiation errors)
     pub fn decrypt_pkcs7_vulnerable(
         key: &[u8],
         ciphertext: &[u8],
@@ -79,7 +79,7 @@ impl VulnerableCrypto {
         
         let decrypted = aes_ecb_decrypt(key, ciphertext)?;
         
-        // Padding oracle: validation non constant-time + error specifique
+        // Padding oracle: validation non constant-time + error specific
         let pad_len = decrypted[decrypted.len() - 1] as usize;
         if pad_len == 0 || pad_len > 16 {
             return Err(DecryptionError::InvalidPadding);
@@ -95,7 +95,7 @@ impl VulnerableCrypto {
         Ok(decrypted[..decrypted.len() - pad_len].to_vec())
     }
 
-    /// Vulnerabilite: Secret non zeroized
+    /// Vulnerability: Secret non zeroized
     pub fn derive_key_weak(password: &str, salt: &[u8]) -> Vec<u8> {
         let mut key = [0u8; 32];
         // Mauvais: PBKDF2 avec iterations faibles + pas de zeroize

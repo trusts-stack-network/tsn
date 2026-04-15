@@ -96,6 +96,17 @@ pub struct AppState {
     pub auto_heal_mode: RwLock<String>,
     /// Ghost peer blacklist — peers removed by sync cleanup are never re-added via P2P discovery
     pub removed_peers: std::sync::Mutex<std::collections::HashSet<String>>,
+    // v2.1.5: Mining/sync performance counters for benchmarking
+    /// Count of "empty batch" events (blocks received but none accepted)
+    pub metric_empty_batches: std::sync::atomic::AtomicU64,
+    /// Count of stale mined blocks (tip changed during PoW)
+    pub metric_stale_blocks: std::sync::atomic::AtomicU64,
+    /// Count of successful recovery-from-fork events
+    pub metric_fork_recoveries: std::sync::atomic::AtomicU64,
+    /// Cumulative time spent in recovery (milliseconds)
+    pub metric_recovery_time_ms: std::sync::atomic::AtomicU64,
+    /// Count of commitment root mismatches
+    pub metric_commitment_mismatches: std::sync::atomic::AtomicU64,
     /// Seed signing key for snapshot manifests (loaded from data/seed_key.bin)
     pub seed_signing_key: Option<ed25519_dalek::SigningKey>,
     /// In-memory store of recent snapshot manifests (max 10)
@@ -217,6 +228,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/tip", get(get_tip).post(receive_tip))
         .route("/sync/status", get(sync_status))
         .route("/node/info", get(node_info))
+        .route("/mining/metrics", get(mining_metrics))
         .route("/snapshot/info", get(snapshot_info))
         .route("/snapshot/download", get(snapshot_download))
         .route("/snapshot/latest", get(snapshot_latest_manifest))
@@ -405,7 +417,7 @@ struct RoadmapMilestone {
     name: String,
     description: String,
     quarter: String,
-    status: String, // "completeed", "active", "pending"
+    status: String, // "completed", "active", "pending"
     progress_pct: f64,
     metrics: serde_json::Value,
 }
@@ -440,7 +452,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
         name: "Mainnet Launch".to_string(),
         description: "Lancement officiel du network principal TSN".to_string(),
         quarter: "Q1 2026".to_string(),
-        status: "completeed".to_string(),
+        status: "completed".to_string(),
         progress_pct: 100.0,
         metrics: serde_json::json!({
             "height": height,
@@ -459,7 +471,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "sharding_v2".to_string(),
         name: "Sharding V2".to_string(),
-        description: "Amelioration de l'evolutivite avec sharding dynamique".to_string(),
+        description: "Improvement de scalability avec sharding dynamique".to_string(),
         quarter: "Q2 2026".to_string(),
         status: "active".to_string(),
         progress_pct: sharding_progress,
@@ -488,7 +500,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "mobile_sdk".to_string(),
         name: "Mobile SDK".to_string(),
-        description: "SDK natif pour applications mobiles decentralisees".to_string(),
+        description: "SDK natif pour applications mobiles decentralized".to_string(),
         quarter: "Q4 2026".to_string(),
         status: "pending".to_string(),
         progress_pct: 0.0,
@@ -3543,4 +3555,22 @@ async fn snapshot_confirm(
     );
 
     Ok(Json(confirmation))
+}
+
+/// GET /mining/metrics — performance counters for benchmarking
+async fn mining_metrics(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    Json(serde_json::json!({
+        "height": chain.height(),
+        "empty_batches": state.metric_empty_batches.load(Relaxed),
+        "stale_blocks": state.metric_stale_blocks.load(Relaxed),
+        "fork_recoveries": state.metric_fork_recoveries.load(Relaxed),
+        "recovery_time_ms": state.metric_recovery_time_ms.load(Relaxed),
+        "commitment_mismatches": state.metric_commitment_mismatches.load(Relaxed),
+        "reorg_count": state.reorg_count.load(Relaxed),
+        "orphan_count": state.orphan_count.load(Relaxed),
+    }))
 }
