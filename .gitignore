@@ -1,0 +1,33 @@
+# Build
+target/
+*.o
+*.so
+*.dylib
+
+# Keys and secrets
+*.bin
+*.key
+*.pem
+*.secret
+seed_key*
+signing_key*
+.env
+
+# Data
+data/
+data-miner/
+data-relay/
+data-light/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node modules
+node_modules/

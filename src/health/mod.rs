@@ -1,0 +1,180 @@
+//! Multi-level health check system for Trust Stack Network
+//!
+//! This module provides completee TSN node health monitoring with:
+//! - Periodic health checks for all modules (storage, network, consensus, crypto)
+//! - Metrics de latence et disponibilite
+//! - Alertes automatiques en cas de degradation
+//! - HTTP endpoint /health for external monitoring
+
+pub mod checks;
+pub mod aggregator;
+pub mod reporter;
+pub mod endpoint;
+pub mod types;
+
+pub use types::{
+    HealthStatus, HealthCheck, HealthCheckResult, HealthReport,
+    ComponentHealth, SystemHealth, HealthCheckConfig, HealthSeverity,
+};
+pub use checks::{
+    StorageHealthCheck, NetworkHealthCheck, ConsensusHealthCheck,
+    CryptoHealthCheck, MempoolHealthCheck, SyncHealthCheck,
+};
+pub use aggregator::HealthAggregator;
+pub use reporter::{HealthReporter, AlertChannel};
+pub use endpoint::HealthEndpoint;
+
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use std::time::Duration;
+use tracing::{info, error};
+
+/// Service principal de health checking
+pub struct HealthCheckService {
+    config: HealthCheckConfig,
+    aggregator: Arc<HealthAggregator>,
+    reporter: Arc<HealthReporter>,
+    endpoint: Option<HealthEndpoint>,
+    is_running: Arc<RwLock<bool>>,
+}
+
+impl HealthCheckService {
+    /// Creates a nouveau service de health checks
+    pub fn new(config: HealthCheckConfig) -> Self {
+        let aggregator = Arc::new(HealthAggregator::new(config.clone()));
+        let reporter = Arc::new(HealthReporter::new(config.alert_channels.clone()));
+        
+        let endpoint = if config.enable_endpoint {
+            Some(HealthEndpoint::new(
+                config.endpoint_bind.clone(),
+                config.endpoint_port,
+                aggregator.clone(),
+            ))
+        } else {
+            None
+        };
+        
+        Self {
+            config,
+            aggregator,
+            reporter,
+            endpoint,
+            is_running: Arc::new(RwLock::new(false)),
+        }
+    }
+    
+    /// Starts the service de health checks
+    pub async fn start(&self) -> Result<(), HealthCheckError> {
+        let mut running = self.is_running.write().await;
+        if *running {
+            return Ok(());
+        }
+        
+        info!("🩺 Starting health check service");
+        
+        // Start l'endpoint HTTP si active
+        if let Some(endpoint) = &self.endpoint {
+            endpoint.start().await?;
+        }
+        
+        // Start the periodic health checks loop
+        self.start_health_check_loop().await;
+        
+        *running = true;
+        info!("✅ Service de health checks demarre");
+        
+        Ok(())
+    }
+    
+    /// Stops the service
+    pub async fn stop(&self) {
+        let mut running = self.is_running.write().await;
+        *running = false;
+        
+        if let Some(endpoint) = &self.endpoint {
+            endpoint.stop().await;
+        }
+        
+        info!("🛑 Health check service stopped");
+    }
+    
+    /// Checks if the service is running
+    pub async fn is_running(&self) -> bool {
+        *self.is_running.read().await
+    }
+    
+    /// Obtient l'agregateur de sante
+    pub fn aggregator(&self) -> Arc<HealthAggregator> {
+        self.aggregator.clone()
+    }
+    
+    /// Performs an immediate health check of all components
+    pub async fn check_now(&self) -> HealthReport {
+        self.aggregator.run_all_checks().await
+    }
+    
+    /// Starts the periodic health checks loop
+    async fn start_health_check_loop(&self) {
+        let aggregator = self.aggregator.clone();
+        let reporter = self.reporter.clone();
+        let interval_duration = self.config.check_interval;
+        let is_running = self.is_running.clone();
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(interval_duration);
+            
+            loop {
+                interval.tick().await;
+                
+                if !*is_running.read().await {
+                    break;
+                }
+                
+                // Execute all health checks
+                let report = aggregator.run_all_checks().await;
+                
+                // Send alerts if needed
+                if report.has_critical_issues() {
+                    if let Err(e) = reporter.send_alert(&report).await {
+                        error!("Erreur lors de l'envoi des alertes: {}", e);
+                    }
+                }
+                
+                // Status log
+                if report.overall_status != HealthStatus::Healthy {
+                    info!(
+                        "Health check status: {:?} ({} issues)",
+                        report.overall_status,
+                        report.issues_count()
+                    );
+                }
+            }
+        });
+    }
+}
+
+/// Health check service errors
+#[derive(Debug, thiserror::Error)]
+pub enum HealthCheckError {
+    #[error("Service already running")]
+    AlreadyRunning,
+    
+    #[error("Erreur IO: {0}")]
+    Io(#[from] std::io::Error),
+    
+    #[error("Erreur de configuration: {0}")]
+    Config(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[tokio::test]
+    async fn test_health_service_creation() {
+        let config = HealthCheckConfig::default();
+        let service = HealthCheckService::new(config);
+        
+        assert!(!service.is_running().await);
+    }
+}

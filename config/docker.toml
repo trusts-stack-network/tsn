@@ -1,0 +1,10 @@
+# Configuration Docker par default pour TSN
+
+[network]
+listen_addr = "0.0.0.0:30303"
+rpc_addr = "0.0.0.0:8080"
+bootstrap_nodes = []
+
+[consensus]
+mode = "full"
+mining
