@@ -161,7 +161,7 @@ impl ShieldedBlockchain {
             tracing::info!("Loading blockchain from disk (height: {})", height);
 
             let mut blocks = LruCache::new(NonZeroUsize::new(1000).unwrap());
-            let mut height_index;
+            let height_index;
             let mut state = ShieldedState::new();
 
             // Try to load state snapshot for fast startup
@@ -421,43 +421,6 @@ impl ShieldedBlockchain {
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
 
-            // v2.1.5b: Startup sanity check — detect corrupted chain state.
-            // After a broken snapshot restore, cumulative_work may be wildly wrong
-            // (e.g. 151M instead of 870B at height 25000). This causes all incoming
-            // blocks to be rejected as LESS_WORK, creating an infinite sync loop.
-            // Detection: if height > 1000 and cumulative_work < height * GENESIS_DIFFICULTY,
-            // the chain data is corrupted and must be reset.
-            // v2.1.5b: Startup sanity check — detect corrupted chain state.
-            let (final_height, final_work, final_fsb, final_finalized, final_cp_height, final_cp_hash) =
-                if height > 1000 && fast_sync_base > 0 {
-                    let min_expected_work = (height as u128) * (crate::config::GENESIS_DIFFICULTY as u128);
-                    if cumulative_work < min_expected_work {
-                        tracing::error!(
-                            "STARTUP_SANITY: cumulative_work={} far below minimum {} for height {}. \
-                             Chain data is corrupted (broken snapshot). Auto-resetting.",
-                            cumulative_work, min_expected_work, height
-                        );
-                        // Clear all stale data
-                        let _ = db.clear_blocks();
-                        let _ = db.set_metadata("height", "0");
-                        let _ = db.set_metadata("cumulative_work", "0");
-                        let _ = db.set_metadata("fast_sync_base_height", "0");
-                        let _ = db.clear_state_snapshot();
-                        let _ = db.save_cumulative_work(0, 0);
-                        // Reset in-memory state
-                        let mut reset_index = Vec::new();
-                        reset_index.push([0u8; 32]);
-                        height_index = reset_index;
-                        state = ShieldedState::new();
-                        tracing::info!("STARTUP_SANITY: Reset to height 0, will fast-sync on next cycle");
-                        (0u64, 0u128, 0u64, 0u64, 0u64, None)
-                    } else {
-                        (height, cumulative_work, fast_sync_base, height.saturating_sub(crate::config::MAX_REORG_DEPTH).max(cp_height), cp_height, cp_hash)
-                    }
-                } else {
-                    (height, cumulative_work, fast_sync_base, height.saturating_sub(crate::config::MAX_REORG_DEPTH).max(cp_height), cp_height, cp_hash)
-                };
-
             Ok(Self {
                 blocks,
                 height_index,
@@ -467,14 +430,14 @@ impl ShieldedBlockchain {
                 orphans: HashMap::new(),
                 verifying_params: None,
                 assume_valid_height,
-                last_checkpoint_height: final_cp_height,
-                last_checkpoint_hash: final_cp_hash,
-                cumulative_work: final_work,
-                fast_sync_base_height: final_fsb,
+                last_checkpoint_height: cp_height,
+                last_checkpoint_hash: cp_hash,
+                cumulative_work,
+                fast_sync_base_height: fast_sync_base,
                 fast_sync_commitment_offset,
                 prev_block_states: std::collections::VecDeque::new(),
-                canonical_height: final_height,
-                finalized_height: final_finalized,
+                canonical_height: height,
+                finalized_height: height.saturating_sub(crate::config::MAX_REORG_DEPTH).max(cp_height),
             })
         } else {
             // Create a fresh chain with a dummy genesis
