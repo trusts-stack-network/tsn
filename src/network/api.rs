@@ -7,7 +7,7 @@
 use axum::{
     extract::{ConnectInfo, Path, Query, State},
     http::StatusCode,
-    response::Html,
+    response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -113,6 +113,8 @@ pub struct AppState {
     pub snapshot_manifests: RwLock<Vec<super::snapshot_manifest::SnapshotManifest>>,
     /// Mining address (pk_hash hex) for display in console
     pub mining_address: Option<String>,
+    /// Wallet service for balance/scan/send (None if no wallet configured)
+    pub wallet_service: Option<Arc<crate::wallet::WalletService>>,
 }
 
 /// Info about an HTTP peer, updated on every interaction.
@@ -280,6 +282,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // .route("/debug/verify-path", post(debug_verify_path))
         .route("/wallet/viewing-key", get(wallet_viewing_key))
         .route("/wallet/watch", post(wallet_watch))
+        .route("/wallet/balance", get(wallet_balance_api))
+        .route("/wallet/history", get(wallet_history_api))
+        .route("/wallet/address", get(wallet_address_api))
+        .route("/wallet/scan", post(wallet_scan_api))
+        .route("/wallet/rescan", post(wallet_rescan_api))
         .route("/faucet/status/:pk_hash", get(faucet_status))
         .route("/faucet/claim", post(faucet_claim))
         .route("/faucet/game-claim", post(faucet_game_claim))
@@ -3575,4 +3582,112 @@ async fn mining_metrics(
         "reorg_count": state.reorg_count.load(Relaxed),
         "orphan_count": state.orphan_count.load(Relaxed),
     }))
+}
+
+// ============================================================================
+// Wallet API endpoints (v2.2.0)
+// ============================================================================
+
+async fn wallet_balance_api(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let Some(ref ws) = state.wallet_service else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "no wallet configured"}))).into_response();
+    };
+    let balance = ws.balance().await;
+    let height = ws.last_scanned_height().await;
+    let count = ws.unspent_count().await;
+    let coin_decimals = crate::config::COIN_DECIMALS;
+    let divisor = 10u64.pow(coin_decimals);
+    Json(serde_json::json!({
+        "balance": balance,
+        "balance_tsn": balance as f64 / divisor as f64,
+        "scanned_height": height,
+        "note_count": count,
+    })).into_response()
+}
+
+async fn wallet_history_api(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let Some(ref ws) = state.wallet_service else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "no wallet configured"}))).into_response();
+    };
+    let limit = params.get("limit").and_then(|l| l.parse().ok()).unwrap_or(20usize);
+    let history = ws.tx_history(limit).await;
+    Json(serde_json::json!({
+        "transactions": history,
+    })).into_response()
+}
+
+async fn wallet_address_api(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let Some(ref ws) = state.wallet_service else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "no wallet configured"}))).into_response();
+    };
+    let address = ws.address_hex().await;
+    let pk_hash = hex::encode(ws.pk_hash().await);
+    Json(serde_json::json!({
+        "address": address,
+        "pk_hash": pk_hash,
+    })).into_response()
+}
+
+async fn wallet_scan_api(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let Some(ref ws) = state.wallet_service else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "no wallet configured"}))).into_response();
+    };
+    let scanned = ws.last_scanned_height().await;
+    let chain_height = {
+        let chain = state.blockchain.read().unwrap();
+        chain.height()
+    };
+
+    let mut new_notes = 0usize;
+    for h in (scanned + 1)..=chain_height {
+        let block = {
+            let chain = state.blockchain.read().unwrap();
+            chain.get_block_by_height(h)
+        };
+        if let Some(block) = block {
+            let tree_size = {
+                let chain = state.blockchain.read().unwrap();
+                chain.state().commitment_count() as u64
+            };
+            // Approximate start position (scan_block handles deduplication via UNIQUE constraint)
+            match ws.scan_block(&block, 0).await {
+                Ok(n) => new_notes += n,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": format!("scan failed: {}", e)}))).into_response();
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "new_notes": new_notes,
+        "scanned_from": scanned + 1,
+        "scanned_to": chain_height,
+    })).into_response()
+}
+
+async fn wallet_rescan_api(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let Some(ref ws) = state.wallet_service else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "no wallet configured"}))).into_response();
+    };
+    if let Err(e) = ws.clear_notes().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("rescan failed: {}", e)}))).into_response();
+    }
+    Json(serde_json::json!({
+        "status": "ok",
+        "message": "wallet cleared, scan from height 0",
+    })).into_response()
 }

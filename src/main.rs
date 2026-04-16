@@ -7,7 +7,7 @@ use tsn::consensus::{MiningPool, SimdMode};
 use tsn::core::{ShieldedBlock, ShieldedBlockchain};
 use tsn::network::{create_router, Mempool, peer_id};
 use tsn::node::NodeRole;
-use tsn::wallet::ShieldedWallet;
+use tsn::wallet::{ShieldedWallet, WalletLock, WalletService};
 
 #[derive(Parser)]
 #[command(name = "tsn", version)]
@@ -1186,8 +1186,9 @@ async fn cmd_wallet_menu(wallet_path: &str, node_url: &str) -> anyhow::Result<()
     let reset = "\x1b[0m";
 
     loop {
-        // Load wallet for display
-        let wallet = ShieldedWallet::load(wallet_path);
+        // Load wallet for display (try SQLite first, fallback to JSON)
+        let wallet = ShieldedWallet::open(wallet_path)
+            .or_else(|_| ShieldedWallet::load(wallet_path));
         let pk_hash_hex = wallet.as_ref()
             .map(|w| hex::encode(w.pk_hash()))
             .unwrap_or_else(|_| "???".to_string());
@@ -1248,9 +1249,15 @@ async fn cmd_wallet_menu(wallet_path: &str, node_url: &str) -> anyhow::Result<()
             }
             "4" => {
                 println!("  Rescanning wallet from height 0...");
-                if let Ok(mut w) = ShieldedWallet::load(wallet_path) {
-                    w.clear_notes();
-                    w.save(wallet_path).ok();
+                {
+                    let _lock = WalletLock::acquire(wallet_path)?;
+                    if let Ok(mut w) = ShieldedWallet::open(wallet_path)
+                        .or_else(|_| ShieldedWallet::load(wallet_path)) {
+                        w.clear_notes();
+                        if let Err(e) = w.save(wallet_path) {
+                            tracing::error!("Failed to save wallet after rescan: {}", e);
+                        }
+                    }
                 }
                 cmd_balance(wallet_path, node_url).await?;
             }
@@ -1275,8 +1282,9 @@ async fn cmd_history(wallet_path: &str, _node_url: &str, limit: usize) -> anyhow
     let coin_decimals = config::COIN_DECIMALS;
     let divisor = 10u64.pow(coin_decimals) as f64;
 
-    // Read TX history from wallet file
-    let wallet = ShieldedWallet::load(wallet_path)?;
+    // Read TX history from wallet
+    let wallet = ShieldedWallet::open(wallet_path)
+        .or_else(|_| ShieldedWallet::load(wallet_path))?;
     let history = wallet.tx_history();
 
     if history.is_empty() {
@@ -1333,7 +1341,10 @@ async fn cmd_history(wallet_path: &str, _node_url: &str, limit: usize) -> anyhow
 }
 
 async fn cmd_balance(wallet_path: &str, node_url: &str) -> anyhow::Result<()> {
-    let mut wallet = ShieldedWallet::load(wallet_path)?;
+    // Acquire exclusive lock to prevent race with mining process
+    let _lock = WalletLock::acquire(wallet_path)?;
+    let mut wallet = ShieldedWallet::open(wallet_path)
+        .or_else(|_| ShieldedWallet::load(wallet_path))?;
     let coin_decimals = config::COIN_DECIMALS;
     let divisor = 10u64.pow(coin_decimals);
     let scanned_height = wallet.last_scanned_height();
@@ -1375,7 +1386,9 @@ async fn cmd_balance(wallet_path: &str, node_url: &str) -> anyhow::Result<()> {
                             pos += 1; // coinbase
                         }
                     }
-                    wallet.save(wallet_path).ok();
+                    if let Err(e) = wallet.save(wallet_path) {
+                        tracing::error!("Failed to save wallet after local scan: {}", e);
+                    }
                     scan_source = dir;
                 }
                 break;
@@ -1441,7 +1454,10 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
     let total_needed = amount_base + fee_base;
 
     // Load and scan wallet
-    let mut wallet = ShieldedWallet::load(wallet_path)?;
+    // Acquire exclusive lock to prevent race with mining process
+    let _lock = WalletLock::acquire(wallet_path)?;
+    let mut wallet = ShieldedWallet::open(wallet_path)
+        .or_else(|_| ShieldedWallet::load(wallet_path))?;
     try_scan_via_api(&mut wallet, node_url, wallet_path).await;
 
     let balance = wallet.balance();
@@ -1499,7 +1515,9 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
                         }
                         if count > 0 {
                             eprintln!("  ({} spent notes filtered)", count);
-                            wallet.save(wallet_path).ok();
+                            if let Err(e) = wallet.save(wallet_path) {
+                                tracing::error!("Failed to save wallet after nullifier check: {}", e);
+                            }
                         }
                     }
                 }
@@ -1710,7 +1728,9 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         height: 0, // will be updated when mined
         timestamp: now,
     });
-    wallet.save(wallet_path).ok();
+    if let Err(e) = wallet.save(wallet_path) {
+        tracing::error!("Failed to save wallet after send: {}", e);
+    }
 
     Ok(())
 }
@@ -1879,7 +1899,9 @@ async fn try_scan_via_api(wallet: &mut ShieldedWallet, node_url: &str, wallet_pa
     }
 
     if chain_height > scanned_height {
-        wallet.save(wallet_path).ok();
+        if let Err(e) = wallet.save(wallet_path) {
+            tracing::error!("Failed to save wallet after API scan: {}", e);
+        }
     }
     (true, new_notes)
 }
@@ -1894,8 +1916,8 @@ fn cmd_mine(
 ) -> anyhow::Result<()> {
     let jobs = jobs.max(1);
     let simd = require_simd_support(simd);
-    // Load wallet for mining rewards
-    let wallet = ShieldedWallet::load(wallet_path)?;
+    // Open wallet (SQLite or migrate from JSON) for mining rewards
+    let wallet = ShieldedWallet::open(wallet_path)?;
     let miner_pk_hash = wallet.pk_hash();
     let viewing_key = wallet.viewing_key().clone();
 
@@ -2142,9 +2164,9 @@ async fn cmd_node(
     // Create data directory if needed
     std::fs::create_dir_all(data_dir)?;
 
-    // Load wallet for any role (miner: mining rewards, relay: relay rewards, light: balance/send)
+    // Open wallet (SQLite or migrate from JSON) for any role
     let miner_info = if let Some(wallet_path) = &mine_wallet {
-        let wallet = ShieldedWallet::load(wallet_path)?;
+        let wallet = ShieldedWallet::open(wallet_path)?;
         let pk_hash = wallet.pk_hash();
         let viewing_key = wallet.viewing_key().clone();
         Some((pk_hash, viewing_key))
@@ -2529,6 +2551,22 @@ async fn cmd_node(
         .build()
         .unwrap_or_default();
 
+    // Initialize wallet service (SQLite backend) before AppState
+    let wallet_service: Option<Arc<WalletService>> = if let Some(wallet_path) = &mine_wallet {
+        match ShieldedWallet::open(wallet_path) {
+            Ok(wallet) => {
+                tracing::info!("Wallet service initialized (SQLite): {}", wallet_path);
+                Some(Arc::new(WalletService::new(wallet)))
+            }
+            Err(e) => {
+                tracing::warn!("Could not initialize wallet service: {} — falling back to legacy mode", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let state = Arc::new(AppState {
         blockchain: RwLock::new(blockchain),
         mempool: RwLock::new(mempool),
@@ -2565,6 +2603,7 @@ async fn cmd_node(
         },
         snapshot_manifests: std::sync::RwLock::new(Vec::new()),
         mining_address: miner_info.as_ref().map(|(pk, _)| hex::encode(pk)),
+        wallet_service: wallet_service.clone(),
     });
 
     // ========================================================================
@@ -3909,7 +3948,15 @@ async fn cmd_node(
                             // Save mined coinbase note to wallet (so balance updates immediately)
                             // Use the correct global position in the commitment tree
                             if let Some(ref wp) = mine_wallet_path {
-                                if let Ok(mut wallet) = ShieldedWallet::load(wp) {
+                                // Acquire exclusive lock to prevent race with ./tsn wallet
+                                let _lock = match WalletLock::acquire(wp) {
+                                    Ok(l) => l,
+                                    Err(e) => {
+                                        tracing::error!("Failed to lock wallet for mining: {}", e);
+                                        continue;
+                                    }
+                                };
+                                if let Ok(mut wallet) = ShieldedWallet::open(wp) {
                                     // The miner reward commitment was just added to the tree.
                                     // Its position = tree_size_before_this_block's commitments
                                     // = current_tree_size - N (where N = commitments in this block)
@@ -3922,9 +3969,12 @@ async fn cmd_node(
 
                                     let new_notes = wallet.scan_block(&mined_block, block_start_pos);
                                     if new_notes > 0 {
-                                        wallet.save(wp).ok();
+                                        if let Err(e) = wallet.save(wp) {
+                                            tracing::error!("Failed to save wallet after mining: {}", e);
+                                        }
                                     }
                                 }
+                                // _lock dropped here — releases flock
                             }
 
                             // Remove mined transactions from mempool (both V1 and V2)
@@ -4168,6 +4218,14 @@ async fn cmd_node(
     // Keep the main task alive
     tokio::signal::ctrl_c().await?;
     println!("Shutting down...");
+
+    // Graceful wallet shutdown — flush SQLite WAL
+    if let Some(ref ws) = wallet_service {
+        match ws.flush().await {
+            Ok(()) => println!("Wallet flushed."),
+            Err(e) => eprintln!("Warning: wallet flush failed: {}", e),
+        }
+    }
 
     Ok(())
 }

@@ -86,12 +86,14 @@ pub struct ShieldedWallet {
     viewing_key: ViewingKey,
     /// Hash of our public key (for note matching).
     pk_hash: [u8; 32],
-    /// Notes owned by this wallet.
+    /// Notes owned by this wallet (in-memory, synced from DB when available).
     notes: Vec<WalletNote>,
     /// Last scanned block height.
     last_scanned_height: u64,
     /// Transaction history (sent + received).
     tx_history: Vec<WalletTxRecord>,
+    /// SQLite database backend (None = legacy JSON mode).
+    db: Option<super::wallet_db::WalletDb>,
 }
 
 impl ShieldedWallet {
@@ -112,6 +114,7 @@ impl ShieldedWallet {
             notes: Vec::new(),
             last_scanned_height: 0,
             tx_history: Vec::new(),
+            db: None,
         }
     }
 
@@ -134,6 +137,7 @@ impl ShieldedWallet {
             notes: Vec::new(),
             last_scanned_height: 0,
             tx_history: Vec::new(),
+            db: None,
         }
     }
 
@@ -191,11 +195,153 @@ impl ShieldedWallet {
             notes,
             last_scanned_height: stored.last_scanned_height,
             tx_history: stored.tx_history,
+            db: None,
         })
     }
 
-    /// Save the wallet to a JSON file.
+    /// Open a wallet from SQLite database, with automatic migration from JSON.
+    ///
+    /// This is the preferred entry point for v2.2.0+.
+    /// - If wallet.db exists: opens it
+    /// - If wallet.json exists but wallet.db does not: migrates to SQLite
+    /// - If neither exists: returns an error
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, WalletError> {
+        let path = path.as_ref();
+
+        // Determine DB and JSON paths
+        let db_path = if path.extension().map_or(false, |e| e == "db") {
+            path.to_path_buf()
+        } else {
+            path.with_extension("db")
+        };
+
+        let json_path = if path.extension().map_or(false, |e| e == "json") {
+            path.to_path_buf()
+        } else {
+            path.with_extension("json")
+        };
+
+        let json_opt = if json_path.exists() { Some(json_path.as_path()) } else { None };
+        let db = super::wallet_db::WalletDb::open_or_migrate(&db_path, json_opt)?;
+
+        // Load keys from database
+        let (_, public_key, secret_key, pk_hash) = db.load_keys()
+            .and_then(|opt| opt.ok_or(WalletError::InvalidKey))?;
+
+        let keypair = KeyPair::from_bytes(&public_key, &secret_key)
+            .map_err(|_| WalletError::InvalidKey)?;
+
+        let nullifier_key = NullifierKey::new(&secret_key);
+        let viewing_key = ViewingKey::new(&secret_key);
+
+        // Load notes from database
+        let raw_notes = db.all_notes_raw()?;
+        let notes = raw_notes.into_iter().filter_map(|(note_data, commitment, position, height, is_spent, pq_rand, pq_cm)| {
+            let note = Note::from_bytes(&note_data).ok()?;
+            let cm = NoteCommitment::from_bytes(commitment);
+            let mut wn = WalletNote::new(note, cm, position, height);
+            wn.is_spent = is_spent;
+            wn.pq_randomness = pq_rand;
+            wn.pq_commitment = pq_cm;
+            Some(wn)
+        }).collect();
+
+        let last_scanned_height = db.last_scanned_height()?;
+        let tx_history = db.tx_history(10000)?; // load all
+
+        Ok(Self {
+            keypair,
+            nullifier_key,
+            viewing_key,
+            pk_hash,
+            notes,
+            last_scanned_height,
+            tx_history,
+            db: Some(db),
+        })
+    }
+
+    /// Open a wallet from SQLite, or create a new one if nothing exists.
+    pub fn open_or_create<P: AsRef<Path>>(path: P) -> Result<Self, WalletError> {
+        let path = path.as_ref();
+        let db_path = if path.extension().map_or(false, |e| e == "db") {
+            path.to_path_buf()
+        } else {
+            path.with_extension("db")
+        };
+        let json_path = if path.extension().map_or(false, |e| e == "json") {
+            path.to_path_buf()
+        } else {
+            path.with_extension("json")
+        };
+
+        // If DB or JSON exists, delegate to open()
+        if db_path.exists() || json_path.exists() {
+            return Self::open(path);
+        }
+
+        // Create new wallet with SQLite backend
+        let mut wallet = Self::generate();
+        let db = super::wallet_db::WalletDb::open(&db_path)?;
+        db.store_keys(
+            &wallet.address().to_hex(),
+            &wallet.keypair.public_key_bytes(),
+            &wallet.keypair.secret_key_bytes(),
+            &wallet.pk_hash,
+        )?;
+        wallet.db = Some(db);
+        Ok(wallet)
+    }
+
+    /// Persist current in-memory notes to the SQLite database.
+    /// Called after scan_block or other operations that modify notes.
+    pub fn persist_to_db(&self) -> Result<(), WalletError> {
+        let db = self.db.as_ref().ok_or_else(|| WalletError::DbError("No database backend".into()))?;
+
+        let batch: Vec<_> = self.notes.iter().map(|wn| {
+            let note_data = wn.note.to_bytes();
+            let commitment = wn.commitment.to_bytes();
+            (note_data, commitment, wn.position, wn.height, wn.pq_randomness, wn.pq_commitment)
+        }).collect();
+
+        db.insert_notes_batch(&batch, self.last_scanned_height)?;
+
+        // Sync spent status
+        for wn in &self.notes {
+            if wn.is_spent {
+                db.mark_spent_by_commitment(&wn.commitment.to_bytes())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if this wallet has a SQLite database backend.
+    pub fn has_db(&self) -> bool {
+        self.db.is_some()
+    }
+
+    /// Get reference to the database backend (if available).
+    pub fn db(&self) -> Option<&super::wallet_db::WalletDb> {
+        self.db.as_ref()
+    }
+
+    /// Flush the WAL checkpoint (for graceful shutdown).
+    pub fn flush_db(&self) -> Result<(), WalletError> {
+        if let Some(ref db) = self.db {
+            db.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Save the wallet state.
+    /// If a SQLite backend is available, persists to database.
+    /// Otherwise falls back to atomic JSON file write.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), WalletError> {
+        // Prefer SQLite if available
+        if self.db.is_some() {
+            return self.persist_to_db();
+        }
         let stored_notes: Vec<StoredNote> = self
             .notes
             .iter()
@@ -222,7 +368,12 @@ impl ShieldedWallet {
 
         let data =
             serde_json::to_string_pretty(&stored).map_err(|e| WalletError::ParseError(e))?;
-        std::fs::write(path, data).map_err(WalletError::IoError)?;
+
+        // Atomic write: write to temp file then rename (prevents corruption on crash)
+        let path = path.as_ref();
+        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+        std::fs::write(&tmp, &data).map_err(WalletError::IoError)?;
+        std::fs::rename(&tmp, path).map_err(WalletError::IoError)?;
 
         Ok(())
     }
@@ -543,6 +694,7 @@ impl ShieldedWallet {
             notes: Vec::new(),
             last_scanned_height: 0,
             tx_history: Vec::new(),
+            db: None,
         })
     }
 
@@ -606,31 +758,31 @@ pub struct WalletTxRecord {
     pub timestamp: u64,    // unix timestamp
 }
 
-/// Stored wallet format for serialization.
+/// Stored wallet format for serialization (JSON legacy + migration).
 #[derive(Serialize, Deserialize)]
-struct StoredShieldedWallet {
-    address: String,
-    public_key: String,
-    secret_key: String,
-    pk_hash: String,
-    notes: Vec<StoredNote>,
-    last_scanned_height: u64,
+pub(crate) struct StoredShieldedWallet {
+    pub address: String,
+    pub public_key: String,
+    pub secret_key: String,
+    pub pk_hash: String,
+    pub notes: Vec<StoredNote>,
+    pub last_scanned_height: u64,
     #[serde(default)]
-    tx_history: Vec<WalletTxRecord>,
+    pub tx_history: Vec<WalletTxRecord>,
 }
 
-/// Stored note format.
+/// Stored note format (JSON legacy + migration).
 #[derive(Serialize, Deserialize)]
-struct StoredNote {
-    note_data: String,
-    commitment: String,
-    position: u64,
-    height: u64,
-    is_spent: bool,
+pub(crate) struct StoredNote {
+    pub note_data: String,
+    pub commitment: String,
+    pub position: u64,
+    pub height: u64,
+    pub is_spent: bool,
     #[serde(default)]
-    pq_randomness: Option<String>,
+    pub pq_randomness: Option<String>,
     #[serde(default)]
-    pq_commitment: Option<String>,
+    pub pq_commitment: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -643,6 +795,71 @@ pub enum WalletError {
 
     #[error("Invalid key data")]
     InvalidKey,
+
+    #[error("Lock error: {0}")]
+    LockError(String),
+
+    #[error("Database error: {0}")]
+    DbError(String),
+
+    #[error("Migration error: {0}")]
+    MigrationError(String),
+}
+
+/// File lock for exclusive wallet access.
+/// Prevents concurrent processes from corrupting wallet data.
+/// The lock is released automatically when dropped (fd close).
+pub struct WalletLock {
+    _file: std::fs::File,
+}
+
+impl WalletLock {
+    /// Acquire an exclusive lock on the wallet file.
+    /// Blocks until the lock is available.
+    pub fn acquire<P: AsRef<Path>>(wallet_path: P) -> Result<Self, WalletError> {
+        use std::os::unix::io::AsRawFd;
+
+        let lock_path = wallet_path.as_ref().with_extension("lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(WalletError::IoError)?;
+
+        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if ret != 0 {
+            return Err(WalletError::LockError(format!(
+                "flock failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+
+        Ok(Self { _file: file })
+    }
+
+    /// Try to acquire the lock without blocking.
+    /// Returns None if the lock is held by another process.
+    pub fn try_acquire<P: AsRef<Path>>(wallet_path: P) -> Result<Option<Self>, WalletError> {
+        use std::os::unix::io::AsRawFd;
+
+        let lock_path = wallet_path.as_ref().with_extension("lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(WalletError::IoError)?;
+
+        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::WouldBlock {
+                return Ok(None);
+            }
+            return Err(WalletError::LockError(format!("flock failed: {}", err)));
+        }
+
+        Ok(Some(Self { _file: file }))
+    }
 }
 
 // ============================================================================

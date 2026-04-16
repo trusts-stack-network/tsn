@@ -1,6 +1,6 @@
 [package]
 name = "tsn"
-version = "2.1.6"
+version = "2.2.0"
 edition = "2021"
 description = "TSN (Trust Stack Network) - A privacy-preserving post-quantum cryptocurrency"
 license = "MIT"
@@ -88,6 +88,7 @@ libp2p = { version = "0.54", features = [
 
 # Database
 sled = "0.34"
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Compression (for snapshot download + auto-update extraction)
 flate2 = "1"
