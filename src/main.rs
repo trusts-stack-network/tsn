@@ -973,10 +973,18 @@ fn auto_wallet_for_mining(data_dir: &str) -> String {
         println!("Wallet found: {}", w);
         return w;
     }
-    // Check in data dir
-    let data_wallet = std::path::PathBuf::from(data_dir).join("wallet.json");
-    if data_wallet.exists() {
-        let p = data_wallet.to_string_lossy().to_string();
+    // Check in data dir (SQLite first, then JSON)
+    let data_dir_path = std::path::PathBuf::from(data_dir);
+    let data_wallet_db = data_dir_path.join("wallet.db");
+    let data_wallet_json = data_dir_path.join("wallet.json");
+    if data_wallet_db.exists() {
+        // Return the .json path — open() handles .json → .db resolution
+        let p = data_wallet_json.to_string_lossy().to_string();
+        println!("Wallet found: {}", p);
+        return p;
+    }
+    if data_wallet_json.exists() {
+        let p = data_wallet_json.to_string_lossy().to_string();
         println!("Wallet found: {}", p);
         return p;
     }
@@ -1024,7 +1032,7 @@ fn auto_wallet_for_mining(data_dir: &str) -> String {
     // Derive wallet deterministically from seed phrase via PBKDF2
     let seed_bytes = seed_phrase_to_bytes(&seed_phrase);
     let wallet = ShieldedWallet::from_seed(&seed_bytes);
-    let path = data_wallet.to_string_lossy().to_string();
+    let path = data_wallet_json.to_string_lossy().to_string();
     wallet.save(&path).expect("Failed to create wallet");
     println!("  Wallet created: {}", path);
     println!("  Address: {}", hex::encode(wallet.pk_hash()));
@@ -1075,12 +1083,24 @@ fn auto_detect_role() -> NodeRole {
 
 /// Auto-detect wallet.json next to binary or in current dir
 fn auto_detect_wallet() -> Option<String> {
+    // Helper: check if wallet exists at a given base path (try .db first, then .json)
+    let check_wallet = |dir: &std::path::Path, name: &str| -> Option<String> {
+        let db_path = dir.join(format!("{}.db", name));
+        if db_path.exists() {
+            return Some(db_path.with_extension("json").to_string_lossy().to_string());
+        }
+        let json_path = dir.join(format!("{}.json", name));
+        if json_path.exists() {
+            return Some(json_path.to_string_lossy().to_string());
+        }
+        None
+    };
+
     // Check next to binary
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let wallet_path = parent.join("wallet.json");
-            if wallet_path.exists() {
-                return Some(wallet_path.to_string_lossy().to_string());
+            if let Some(w) = check_wallet(parent, "wallet") {
+                return Some(w);
             }
             // Check data* subdirectories next to binary
             if let Ok(entries) = std::fs::read_dir(parent) {
@@ -1088,9 +1108,8 @@ fn auto_detect_wallet() -> Option<String> {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
                     if name_str.starts_with("data") && entry.path().is_dir() {
-                        let w = entry.path().join("wallet.json");
-                        if w.exists() {
-                            return Some(w.to_string_lossy().to_string());
+                        if let Some(w) = check_wallet(&entry.path(), "wallet") {
+                            return Some(w);
                         }
                     }
                 }
@@ -1098,9 +1117,8 @@ fn auto_detect_wallet() -> Option<String> {
         }
     }
     // Check current directory
-    let cwd_wallet = std::path::Path::new("wallet.json");
-    if cwd_wallet.exists() {
-        return Some("wallet.json".to_string());
+    if let Some(w) = check_wallet(std::path::Path::new("."), "wallet") {
+        return Some(w);
     }
     // Check data* subdirectories in current directory
     if let Ok(entries) = std::fs::read_dir(".") {
@@ -1108,9 +1126,8 @@ fn auto_detect_wallet() -> Option<String> {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
             if name_str.starts_with("data") && entry.path().is_dir() {
-                let w = entry.path().join("wallet.json");
-                if w.exists() {
-                    return Some(w.to_string_lossy().to_string());
+                if let Some(w) = check_wallet(&entry.path(), "wallet") {
+                    return Some(w);
                 }
             }
         }
