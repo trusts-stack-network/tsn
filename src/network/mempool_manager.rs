@@ -305,7 +305,7 @@ impl MempoolMemoryManager {
             *current_memory += size;
         }
         
-        debug!("Transaction addede au manager de memory: {} (size: {}, fee: {}, priority: {:.2})",
+        debug!("Transaction added to memory manager: {} (size: {}, fee: {}, priority: {:.2})",
                hex::encode(&tx_id), size, fee, priority_score);
         
         Ok(())
@@ -340,7 +340,7 @@ impl MempoolMemoryManager {
                 *current_memory = current_memory.saturating_sub(metadata.size);
             }
             
-            debug!("Transaction removede du manager de memory: {}", hex::encode(tx_id));
+            debug!("Transaction removed from memory manager: {}", hex::encode(tx_id));
             true
         } else {
             false
@@ -704,10 +704,10 @@ impl Clone for MempoolMemoryManager {
 /// Errors of the manager de memory.
 #[derive(Debug, thiserror::Error)]
 pub enum MempoolError {
-    #[error("Transaction trop volumineuse")]
+    #[error("Transaction too large")]
     TransactionTooLarge,
-    
-    #[error("Pression memory - unable d'add la transaction")]
+
+    #[error("Memory pressure - unable to add transaction")]
     MemoryPressure,
     
     #[error("Taux de fees insufficient pour la pression memory current")]

@@ -124,7 +124,7 @@ impl TcpConnection {
         };
 
         if message_size > 4 * 1024 * 1024 { // 4MB max
-            return Err(NetworkError::InvalidMessage(\"Message trop volumineux\".to_string()));
+            return Err(NetworkError::InvalidMessage("Message too large".to_string()));
         }
 
         // Lit the message complet

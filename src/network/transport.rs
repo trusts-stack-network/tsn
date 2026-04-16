@@ -116,7 +116,7 @@ impl TcpConnection {
             self.buffer.advance(consumed);
 
             if self.buffer.len() > 1024 * 1024 {
-                warn!("Buffer TCP trop gros pour {}, reset", masked_addr(&self.addr));
+                warn!("TCP buffer too large for {}, reset", masked_addr(&self.addr));
                 self.buffer.clear();
                 break;
             }
@@ -397,7 +397,7 @@ impl NetworkTransport {
                 });
                 let after_count = connections.len();
                 if before_count != after_count {
-                    info!("Nettoyage TCP: {} -> {} connections", before_count, after_count);
+                    info!("TCP cleanup: {} -> {} connections", before_count, after_count);
                 }
             }
 
@@ -407,7 +407,7 @@ impl NetworkTransport {
                 // Clean up old entries periodically
                 if before_count > 1000 {
                     limiters.clear();
-                    debug!("Nettoyage rate limiters UDP: {} -> 0", before_count);
+                    debug!("UDP rate limiter cleanup: {} -> 0", before_count);
                 }
             }
         }

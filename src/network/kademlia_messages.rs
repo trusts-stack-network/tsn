@@ -13,7 +13,7 @@ use super::kademlia::{NodeId, KademliaNode};
 /// Unique identifier for requests/responses
 pub type RequestId = [u8; 8];
 
-/// Generates a ID de request random
+/// Generates a random request ID
 pub fn generate_request_id() -> RequestId {
     use rand::RngCore;
     let mut id = [0u8; 8];
@@ -21,10 +21,10 @@ pub fn generate_request_id() -> RequestId {
     id
 }
 
-/// Types de messages DHT Kademlia
+/// DHT Kademlia message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum KademliaMessage {
-    /// Ping : test de connectivity
+    /// Ping: connectivity test
     Ping {
         request_id: RequestId,
         sender_id: NodeId,
@@ -130,7 +130,7 @@ impl KademliaMessage {
         )
     }
     
-    /// Generates a timestamp actuel
+    /// Generates a current timestamp
     pub fn current_timestamp() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -174,7 +174,7 @@ pub type DhtKey = [u8; 20];
 pub struct DhtValue {
     pub data: Vec<u8>,
     pub stored_at: u64,    // storage timestamp
-    pub ttl_secs: u64,     // duration de vie
+    pub ttl_secs: u64,     // time to live
     pub publisher_id: NodeId, // who published this value
 }
 
@@ -209,7 +209,7 @@ impl DhtValue {
 /// Result of a FIND_VALUE request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FindValueResult {
-    /// Valeur founde
+    /// Value found
     Value(DhtValue),
     /// Value not found, but here are closer nodes
     CloserNodes(Vec<KademliaContact>),
@@ -218,7 +218,7 @@ pub enum FindValueResult {
 /// Configuration for DHT messages
 #[derive(Debug, Clone)]
 pub struct DhtConfig {
-    /// Size maximale d'un message DHT (in bytes)
+    /// Maximum DHT message size (in bytes)
     pub max_message_size: usize,
     /// Default TTL for stored values
     pub default_value_ttl: u64,
@@ -232,7 +232,7 @@ impl Default for DhtConfig {
     fn default() -> Self {
         Self {
             max_message_size: 1024 * 1024, // 1MB
-            default_value_ttl: 3600,       // 1 heure
+            default_value_ttl: 3600,       // 1 hour
             max_contacts_per_response: 20, // K nodes
             request_timeout: std::time::Duration::from_secs(10),
         }
@@ -321,22 +321,22 @@ pub mod builders {
 /// Errors specific to the DHT
 #[derive(Debug, thiserror::Error)]
 pub enum DhtError {
-    #[error("Timeout de request DHT")]
+    #[error("DHT request timeout")]
     RequestTimeout,
     
-    #[error("Message DHT trop large: {size} > {max}")]
+    #[error("DHT message too large: {size} > {max}")]
     MessageTooLarge { size: usize, max: usize },
     
-    #[error("Key DHT invalid: {0}")]
+    #[error("Invalid DHT key: {0}")]
     InvalidKey(String),
     
-    #[error("Valeur DHT expired")]
+    #[error("DHT value expired")]
     ValueExpired,
     
-    #[error("Stockage DHT plein")]
+    #[error("DHT storage full")]
     StorageFull,
     
-    #[error("Node inaccessible: {0}")]
+    #[error("Node unreachable: {0}")]
     NodeUnreachable(NodeId),
     
     #[error("Serialization failed: {0}")]

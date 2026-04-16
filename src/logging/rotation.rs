@@ -126,14 +126,14 @@ impl RotationManager {
             let files_to_remove = &log_files[self.config.max_files..];
             
             for (_, file_path) in files_to_remove {
-                debug!("Suppression du file de log ancien: {:?}", file_path);
+                debug!("Removing old log file: {:?}", file_path);
                 
                 match tokio::fs::remove_file(file_path).await {
                     Ok(_) => {
-                        info!("File de log removed: {:?}", file_path);
+                        info!("Log file removed: {:?}", file_path);
                     }
                     Err(e) => {
-                        warn!("Impossible de supprimer {:?}: {}", file_path, e);
+                        warn!("Failed to remove log file {:?}: {}", file_path, e);
                     }
                 }
             }
@@ -228,7 +228,7 @@ pub struct LogStats {
 }
 
 impl LogStats {
-    /// Calculationates statistics for a log directory
+    /// Calculates statistics for a log directory
     pub fn calculate(log_dir: &Path, file_prefix: &str) -> Result<Self> {
         let mut files: Vec<(std::time::SystemTime, PathBuf, u64)> = Vec::new();
         
@@ -359,14 +359,14 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        // Verify qu'on a 5 files
+        // Verify we have 5 files
         let files = manager.list_log_files().unwrap();
         assert_eq!(files.len(), 5);
 
-        // Nettoyer
+        // Cleanup
         manager.cleanup_old_logs().await.unwrap();
 
-        // Verify qu'il not reste que 2 files
+        // Verify only 2 files remain
         let files = manager.list_log_files().unwrap();
         assert_eq!(files.len(), 2);
     }
@@ -375,7 +375,7 @@ mod tests {
     fn test_log_stats() {
         let temp_dir = TempDir::new().unwrap();
         
-        // Create quelques files
+        // Create some files
         for i in 0..3 {
             let file_path = temp_dir.path().join(format!("test_{}.log", i));
             let mut file = std::fs::File::create(&file_path).unwrap();

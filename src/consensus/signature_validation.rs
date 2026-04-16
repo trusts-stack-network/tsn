@@ -362,7 +362,7 @@ mod tests {
         // IDs must be different for different keys
         assert_ne!(id1, id2);
         
-        // Les IDs doivent be deterministics
+        // IDs must be deterministic
         assert_eq!(id1, validator.derive_key_id(&pk1));
     }
 }

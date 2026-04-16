@@ -16,9 +16,9 @@ pub enum RotationPolicy {
     Never,
     /// Rotation based on size (in bytes)
     Size(u64),
-    /// Rotation quotidienne
+    /// Daily rotation
     Daily,
-    /// Rotation hebdomadaire
+    /// Weekly rotation
     Weekly,
 }
 

@@ -179,7 +179,7 @@ pub fn verify_batch_optimized(
     let all_valid = invalid_indices.is_empty();
     let verification_time_us = start_time.elapsed().as_micros() as u64;
     
-    // Calculation de efficiency of the parallelism (estimation)
+    // Calculate parallelism efficiency (estimation)
     let parallelism_efficiency = calculate_parallelism_efficiency(
         entries.len(),
         threads_used,

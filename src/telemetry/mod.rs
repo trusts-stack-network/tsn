@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn test_timer_creation() {
         let timer = Timer::new("test_op", "test_context");
-        // Le timer sera drop to the fin of the test
+        // Timer will be dropped at end of test
         drop(timer);
     }
 }

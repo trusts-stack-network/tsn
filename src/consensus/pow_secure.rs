@@ -26,7 +26,7 @@ pub enum PowError {
     InvalidDifficulty(u32),
     #[error("Nonce overflow")]
     NonceOverflow,
-    #[error("Calculation de hash failed")]
+    #[error("Hash calculation failed")]
     HashCalculationFailed,
     #[error("Invalid target")]
     InvalidTarget,
@@ -36,7 +36,7 @@ pub enum PowError {
 pub struct PowConfig {
     pub target_difficulty: u32,
     pub max_nonce: u64,
-    pub timestamp_tolerance: u64, // secondes
+    pub timestamp_tolerance: u64, // seconds
 }
 
 impl Default for PowConfig {
@@ -49,7 +49,7 @@ impl Default for PowConfig {
     }
 }
 
-/// Mineur PoW secure
+/// Secure PoW miner
 pub struct SecureMiner {
     config: PowConfig,
 }
@@ -91,7 +91,7 @@ impl SecureMiner {
             return Err(PowError::InvalidTimestamp(timestamp));
         }
         
-        // Pas trop vieux (24h)
+        // Not too old (24h)
         if timestamp + 86400 < current {
             warn!("Very old timestamp detected: {} (current: {})", timestamp, current);
         }
@@ -108,7 +108,7 @@ impl SecureMiner {
         coinbase_address: &[u8; 32],
     ) -> Result<ShieldedBlock, PowError> {
         
-        // Obtention secure of the timestamp
+        // Secure timestamp retrieval
         let timestamp = self.current_timestamp()?;
         block.header.timestamp = timestamp;
         
@@ -123,7 +123,7 @@ impl SecureMiner {
         let mut nonce: u64 = 0;
         
         loop {
-            // Verification of the overflow
+            // Overflow check
             if nonce >= self.config.max_nonce {
                 return Err(PowError::NonceOverflow);
             }
@@ -133,7 +133,7 @@ impl SecureMiner {
             // Hash calculation (simulated - to be replaced by Poseidon)
             let hash = block.hash();
             
-            // Verification de the difficulty
+            // Difficulty verification
             if self.meets_difficulty(&hash, self.config.target_difficulty) {
                 info!("Block mined! Nonce: {}, Hash: {:?}", nonce, hash);
                 return Ok(block);
@@ -141,14 +141,14 @@ impl SecureMiner {
             
             nonce += 1;
             
-            // Log periodic
+            // Periodic log
             if nonce % 10000 == 0 {
                 debug!("Mining... nonce: {}", nonce);
             }
         }
     }
 
-    /// Checks if a hash satisfait the difficulty cible
+    /// Checks if a hash meets the target difficulty
     fn meets_difficulty(&self, hash: &Hash, difficulty: u32) -> bool {
         let hash_bytes = hash.as_bytes();
         let leading_zeros = hash_bytes.iter()
@@ -166,14 +166,14 @@ impl SecureMiner {
         // Validation of the timestamp
         self.validate_timestamp(block.header.timestamp)?;
         
-        // Verification de the difficulty
+        // Difficulty verification
         let hash = block.hash();
         let valid = self.meets_difficulty(&hash, self.config.target_difficulty);
         
         Ok(valid)
     }
 
-    /// Ajuste the difficulty in fonction of the temps elapsed
+    /// Adjusts the difficulty based on the elapsed time
     /// 
     /// # Security
     /// Computation error handling
@@ -189,7 +189,7 @@ impl SecureMiner {
         
         let ratio = actual_time as f64 / target_time as f64;
         
-        // Limites d'ajustement (×4 or ÷4 max)
+        // Adjustment limits (×4 or ÷4 max)
         let adjusted = if ratio > 4.0 {
             current_difficulty.saturating_sub(1)
         } else if ratio < 0.25 {
@@ -198,7 +198,7 @@ impl SecureMiner {
             current_difficulty
         };
         
-        // Limites de difficulty
+        // Difficulty limits
         let clamped = adjusted.clamp(1, 32);
         
         Ok(clamped)
@@ -235,19 +235,19 @@ mod tests {
     fn test_adjust_difficulty_bounds() {
         let miner = SecureMiner::new();
         
-        // Test augmentation
+        // Test increase
         let diff = miner.adjust_difficulty(10, 1, 100).unwrap();
         assert_eq!(diff, 11);
         
-        // Test diminution
+        // Test decrease
         let diff = miner.adjust_difficulty(10, 400, 100).unwrap();
         assert_eq!(diff, 9);
         
-        // Test limite lower
+        // Test lower limit
         let diff = miner.adjust_difficulty(1, 400, 100).unwrap();
         assert_eq!(diff, 1);
         
-        // Test limite higher
+        // Test upper limit
         let diff = miner.adjust_difficulty(32, 1, 100).unwrap();
         assert_eq!(diff, 32);
     }

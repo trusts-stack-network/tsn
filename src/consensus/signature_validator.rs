@@ -157,7 +157,7 @@ impl SignatureValidator {
     ///
     /// # Arguments
     /// * `message` - The signed message (block or transaction hash)
-    /// * `signature_bytes` - La signature brute
+    /// * `signature_bytes` - The raw signature bytes
     /// * `public_key_bytes` - The signer's public key
     /// * `block_height` - The block height (to determine the scheme)
     ///

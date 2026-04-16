@@ -1,4 +1,4 @@
-//! Configuration of the system de logging
+//! Logging system configuration
 //!
 //! This module defines configuration structures for logging,
 //! including rotation options, log levels, and output formats.
@@ -13,11 +13,11 @@ use tracing::Level;
 pub enum LogRotation {
     /// No rotation
     Never,
-    /// Rotation quotidienne
+    /// Daily rotation
     Daily,
-    /// Rotation hebdomadaire
+    /// Weekly rotation
     Weekly,
-    /// Rotation mensuelle
+    /// Monthly rotation
     Monthly,
     /// Rotation by size (in bytes)
     Size(u64),
@@ -44,7 +44,7 @@ impl std::fmt::Display for LogRotation {
 /// Log output destination
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogOutput {
-    /// Sortie console only
+    /// Console output only
     Console,
     /// File only
     File,

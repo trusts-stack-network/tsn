@@ -84,7 +84,7 @@ impl TimeSeries {
             return None;
         }
 
-        // Calculation de the pente (regression linear simple)
+        // Calculate the slope (simple linear regression)
         let n = recent_points.len() as f64;
         let sum_x: f64 = recent_points.iter().map(|p| p.timestamp as f64).sum();
         let sum_y: f64 = recent_points.iter().map(|p| p.value).sum();

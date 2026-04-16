@@ -788,7 +788,7 @@ impl ShieldedState {
                 if let Some(expected) = &snapshot.migration_hash {
                     if &check != expected {
                         tracing::error!(
-                            "Migration hash invalid lors de la restauration! attendu={}, calculationated={}",
+                            "Invalid migration hash during restoration! expected={}, calculated={}",
                             hex::encode(expected),
                             hex::encode(check)
                         );

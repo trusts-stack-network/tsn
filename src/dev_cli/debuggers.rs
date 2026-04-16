@@ -14,65 +14,65 @@ pub async fn validate_transaction_interactive(
     verbose: bool,
     skip_proofs: bool,
 ) -> Result<()> {
-    println!("🔍 Chargement de la transaction depuis {:?}", transaction_file);
-    
+    println!("Loading transaction from {:?}", transaction_file);
+
     let transaction_data = std::fs::read_to_string(&transaction_file)
-        .with_context(|| format!("Impossible de lire le file {:?}", transaction_file))?;
-    
+        .with_context(|| format!("Failed to read file {:?}", transaction_file))?;
+
     let transaction: Transaction = serde_json::from_str(&transaction_data)
-        .with_context(|| "Impossible de parser la transaction JSON")?;
-    
-    println!("✅ Transaction loadede : {}", transaction.hash());
-    
+        .with_context(|| "Failed to parse transaction JSON")?;
+
+    println!("Transaction loaded: {}", transaction.hash());
+
     if verbose {
-        println!("📋 Details de la transaction :");
+        println!("Transaction details:");
         println!("  - Hash: {}", transaction.hash());
         println!("  - Type: {:?}", transaction.transaction_type());
         println!("  - Timestamp: {}", transaction.timestamp());
         println!("  - Size: {} bytes", serde_json::to_vec(&transaction)?.len());
     }
-    
-    // Step 1: Validation de the structure
-    println!("\n🔧 Step 1: Validation de la structure...");
+
+    // Step 1: Structure validation
+    println!("\nStep 1: Validating structure...");
     if let Err(e) = transaction.validate_structure() {
-        println!("❌ Structure error: {}", e);
+        println!("Structure error: {}", e);
         return Err(e);
     }
-    println!("✅ Structure valid");
-    
-    // Step 2: Validation de the signature
-    println!("\n🔐 Step 2: Validation de la signature...");
+    println!("Structure valid");
+
+    // Step 2: Signature validation
+    println!("\nStep 2: Validating signature...");
     match verify_transaction_signature(&transaction) {
-        Ok(true) => println!("✅ Signature valid"),
+        Ok(true) => println!("Signature valid"),
         Ok(false) => {
-            println!("❌ Signature invalid");
+            println!("Signature invalid");
             return Err(anyhow::anyhow!("Signature invalid"));
         }
         Err(e) => {
-            println!("❌ Error during la verification de signature: {}", e);
+            println!("Error during signature verification: {}", e);
             return Err(e);
         }
     }
-    
-    // Step 3: Validation of preuves ZK (optionnel)
+
+    // Step 3: ZK proof validation (optional)
     if !skip_proofs {
-        println!("\n🧮 Step 3: Validation des preuves ZK...");
+        println!("\nStep 3: Validating ZK proofs...");
         match verify_transaction_proof(&transaction) {
-            Ok(true) => println!("✅ Preuves ZK valids"),
+            Ok(true) => println!("ZK proofs valid"),
             Ok(false) => {
-                println!("❌ Preuves ZK invalids");
-                return Err(anyhow::anyhow!("Preuves ZK invalids"));
+                println!("ZK proofs invalid");
+                return Err(anyhow::anyhow!("ZK proofs invalid"));
             }
             Err(e) => {
-                println!("❌ Error during la verification des preuves: {}", e);
+                println!("Error during proof verification: {}", e);
                 return Err(e);
             }
         }
     } else {
-        println!("\n⏭️  Step 3: Validation des preuves ZK ignored");
+        println!("\nStep 3: ZK proof validation skipped");
     }
-    
-    println!("\n🎉 Transaction valid !");
+
+    println!("\nTransaction valid!");
     Ok(())
 }
 
@@ -82,18 +82,18 @@ pub async fn validate_block_interactive(
     verbose: bool,
     skip_proofs: bool,
 ) -> Result<()> {
-    println!("🔍 Chargement du bloc depuis {:?}", block_file);
-    
+    println!("Loading block from {:?}", block_file);
+
     let block_data = std::fs::read_to_string(&block_file)
-        .with_context(|| format!("Impossible de lire le file {:?}", block_file))?;
-    
+        .with_context(|| format!("Failed to read file {:?}", block_file))?;
+
     let block: Block = serde_json::from_str(&block_data)
-        .with_context(|| "Impossible de parser le bloc JSON")?;
-    
-    println!("✅ Bloc loaded : {}", block.hash());
-    
+        .with_context(|| "Failed to parse block JSON")?;
+
+    println!("Block loaded: {}", block.hash());
+
     if verbose {
-        println!("📋 Details du bloc :");
+        println!("Block details:");
         println!("  - Hash: {}", block.hash());
         println!("  - Height: {}", block.height());
         println!("  - Parent: {}", block.parent_hash());
@@ -101,142 +101,142 @@ pub async fn validate_block_interactive(
         println!("  - Transactions: {}", block.transactions().len());
         println!("  - Size: {} bytes", serde_json::to_vec(&block)?.len());
     }
-    
-    // Step 1: Validation de the structure of the bloc
-    println!("\n🔧 Step 1: Validation de la structure du bloc...");
+
+    // Step 1: Block structure validation
+    println!("\nStep 1: Validating block structure...");
     if let Err(e) = block.validate_structure() {
-        println!("❌ Structure error: {}", e);
+        println!("Structure error: {}", e);
         return Err(e);
     }
-    println!("✅ Structure du bloc valid");
-    
-    // Step 2: Validation of the proof-of-work
-    println!("\n⛏️  Step 2: Validation du proof-of-work...");
+    println!("Block structure valid");
+
+    // Step 2: Proof-of-work validation
+    println!("\nStep 2: Validating proof-of-work...");
     if let Err(e) = block.validate_pow() {
-        println!("❌ Proof-of-work invalid: {}", e);
+        println!("Proof-of-work invalid: {}", e);
         return Err(e);
     }
-    println!("✅ Proof-of-work valid");
-    
-    // Step 3: Validation of transactions
-    println!("\n💳 Step 3: Validation des transactions ({})...", block.transactions().len());
+    println!("Proof-of-work valid");
+
+    // Step 3: Transaction validation
+    println!("\nStep 3: Validating transactions ({})...", block.transactions().len());
     for (i, tx) in block.transactions().iter().enumerate() {
         if verbose {
-            println!("  Validation transaction {}/{}: {}", i + 1, block.transactions().len(), tx.hash());
+            println!("  Validating transaction {}/{}: {}", i + 1, block.transactions().len(), tx.hash());
         }
-        
-        // Validation de the signature
+
+        // Signature validation
         match verify_transaction_signature(tx) {
             Ok(true) => {
-                if verbose { println!("    ✅ Signature valid"); }
+                if verbose { println!("    Signature valid"); }
             }
             Ok(false) => {
-                println!("    ❌ Signature invalid pour tx {}", tx.hash());
-                return Err(anyhow::anyhow!("Transaction {} a une signature invalid", tx.hash()));
+                println!("    Signature invalid for tx {}", tx.hash());
+                return Err(anyhow::anyhow!("Transaction {} has invalid signature", tx.hash()));
             }
             Err(e) => {
-                println!("    ❌ Error signature pour tx {}: {}", tx.hash(), e);
+                println!("    Signature error for tx {}: {}", tx.hash(), e);
                 return Err(e);
             }
         }
-        
-        // Validation of preuves ZK (optionnel)
+
+        // ZK proof validation (optional)
         if !skip_proofs {
             match verify_transaction_proof(tx) {
                 Ok(true) => {
-                    if verbose { println!("    ✅ Preuves ZK valids"); }
+                    if verbose { println!("    ZK proofs valid"); }
                 }
                 Ok(false) => {
-                    println!("    ❌ Preuves ZK invalids pour tx {}", tx.hash());
-                    return Err(anyhow::anyhow!("Transaction {} a des preuves ZK invalids", tx.hash()));
+                    println!("    ZK proofs invalid for tx {}", tx.hash());
+                    return Err(anyhow::anyhow!("Transaction {} has invalid ZK proofs", tx.hash()));
                 }
                 Err(e) => {
-                    println!("    ❌ Error preuves ZK pour tx {}: {}", tx.hash(), e);
+                    println!("    ZK proof error for tx {}: {}", tx.hash(), e);
                     return Err(e);
                 }
             }
         }
     }
-    println!("✅ Toutes les transactions sont valids");
-    
-    println!("\n🎉 Bloc valid !");
+    println!("All transactions valid");
+
+    println!("\nBlock valid!");
     Ok(())
 }
 
-/// Trace l'execution d'une transaction on the network
+/// Trace transaction execution on the network
 pub async fn trace_transaction_execution(
     tx_hash: String,
     node_url: String,
     show_state: bool,
 ) -> Result<()> {
-    println!("🔍 Tracing de la transaction {} sur {}", tx_hash, node_url);
-    
+    println!("Tracing transaction {} on {}", tx_hash, node_url);
+
     let client = ApiClient::new(&node_url)?;
-    
-    // Retrieve the details de the transaction
-    println!("\n📡 Retrieval des details de la transaction...");
+
+    // Retrieve transaction details
+    println!("\nRetrieving transaction details...");
     let tx_details = client.get_transaction(&tx_hash).await
-        .with_context(|| format!("Impossible de retrieve la transaction {}", tx_hash))?;
-    
-    println!("✅ Transaction founde dans le bloc {}", tx_details.block_hash);
-    println!("📋 Details :");
+        .with_context(|| format!("Failed to retrieve transaction {}", tx_hash))?;
+
+    println!("Transaction found in block {}", tx_details.block_hash);
+    println!("Details:");
     println!("  - Status: {:?}", tx_details.status);
-    println!("  - Bloc: {} (hauteur {})", tx_details.block_hash, tx_details.block_height);
-    println!("  - Index dans le bloc: {}", tx_details.transaction_index);
+    println!("  - Block: {} (height {})", tx_details.block_hash, tx_details.block_height);
+    println!("  - Index in block: {}", tx_details.transaction_index);
     println!("  - Gas used: {}", tx_details.gas_used);
-    println!("  - Frais: {} TSN", tx_details.fee);
-    
+    println!("  - Fee: {} TSN", tx_details.fee);
+
     if show_state {
-        println!("\n🔄 Changements d'state :");
+        println!("\nState changes:");
         for change in &tx_details.state_changes {
-            println!("  - {}: {} → {}", change.account, change.before, change.after);
+            println!("  - {}: {} -> {}", change.account, change.before, change.after);
         }
     }
-    
-    // Tracer the propagation network
-    println!("\n🌐 Tracing de la propagation network...");
+
+    // Trace network propagation
+    println!("\nTracing network propagation...");
     let propagation_info = client.get_transaction_propagation(&tx_hash).await
-        .with_context(|| "Impossible de retrieve les infos de propagation")?;
-    
-    println!("📊 Statistiques de propagation :");
-    println!("  - First vue: {}", propagation_info.first_seen);
+        .with_context(|| "Failed to retrieve propagation info")?;
+
+    println!("Propagation statistics:");
+    println!("  - First seen: {}", propagation_info.first_seen);
     println!("  - Confirmed: {}", propagation_info.confirmed_at);
-    println!("  - Delay de propagation: {}ms", propagation_info.propagation_delay_ms);
-    println!("  - Nodes ayant vu la tx: {}", propagation_info.nodes_seen);
-    
+    println!("  - Propagation delay: {}ms", propagation_info.propagation_delay_ms);
+    println!("  - Nodes that saw tx: {}", propagation_info.nodes_seen);
+
     Ok(())
 }
 
-/// Profiler de performance for different operations
+/// Performance profiler for different operations
 pub async fn profile_operation(
     operation: String,
     duration: u64,
     output_file: PathBuf,
 ) -> Result<()> {
-    println!("📊 Profilage de l'operation '{}' pendant {}s", operation, duration);
-    
+    println!("Profiling operation '{}' for {}s", operation, duration);
+
     let start_time = Instant::now();
     let end_time = start_time + Duration::from_secs(duration);
-    
+
     let mut samples = Vec::new();
     let mut sample_count = 0;
-    
+
     while Instant::now() < end_time {
         let sample_start = Instant::now();
-        
-        // Execute l'operation selon the type
+
+        // Execute the operation by type
         let result = match operation.as_str() {
             "mining" => profile_mining_operation().await,
             "validation" => profile_validation_operation().await,
             "sync" => profile_sync_operation().await,
             _ => {
-                return Err(anyhow::anyhow!("Operation '{}' non supported", operation));
+                return Err(anyhow::anyhow!("Operation '{}' not supported", operation));
             }
         };
-        
+
         let sample_duration = sample_start.elapsed();
         sample_count += 1;
-        
+
         let sample = ProfileSample {
             timestamp: sample_start,
             duration_ms: sample_duration.as_millis() as u64,
@@ -244,32 +244,32 @@ pub async fn profile_operation(
             success: result.is_ok(),
             error: result.err().map(|e| e.to_string()),
         };
-        
+
         samples.push(sample);
-        
+
         if sample_count % 10 == 0 {
-            println!("📈 {} samples collected...", sample_count);
+            println!("{} samples collected...", sample_count);
         }
-        
-        // Wait before the prochain sample
+
+        // Wait before next sample
         sleep(Duration::from_millis(100)).await;
     }
-    
-    // Calculer the statistics
+
+    // Calculate statistics
     let total_samples = samples.len();
     let successful_samples = samples.iter().filter(|s| s.success).count();
     let avg_duration = samples.iter().map(|s| s.duration_ms).sum::<u64>() / total_samples as u64;
     let min_duration = samples.iter().map(|s| s.duration_ms).min().unwrap_or(0);
     let max_duration = samples.iter().map(|s| s.duration_ms).max().unwrap_or(0);
-    
-    println!("\n📊 Results du profilage :");
-    println!("  - Samples totaux: {}", total_samples);
-    println!("  - Samples successfuls: {} ({:.1}%)", successful_samples, 
+
+    println!("\nProfiling results:");
+    println!("  - Total samples: {}", total_samples);
+    println!("  - Successful samples: {} ({:.1}%)", successful_samples,
              (successful_samples as f64 / total_samples as f64) * 100.0);
-    println!("  - Duration moyenne: {}ms", avg_duration);
-    println!("  - Duration min/max: {}ms / {}ms", min_duration, max_duration);
-    
-    // Save the data
+    println!("  - Average duration: {}ms", avg_duration);
+    println!("  - Min/max duration: {}ms / {}ms", min_duration, max_duration);
+
+    // Save data
     let profile_data = ProfileData {
         operation,
         duration_seconds: duration,
@@ -280,35 +280,35 @@ pub async fn profile_operation(
         max_duration_ms: max_duration,
         samples,
     };
-    
+
     let json_data = serde_json::to_string_pretty(&profile_data)?;
     std::fs::write(&output_file, json_data)
-        .with_context(|| format!("Impossible d'write le file {:?}", output_file))?;
-    
-    println!("💾 Data de profilage savedes dans {:?}", output_file);
-    
+        .with_context(|| format!("Failed to write file {:?}", output_file))?;
+
+    println!("Profile data saved to {:?}", output_file);
+
     Ok(())
 }
 
-/// Analyseur d'utilisation memory
+/// Memory usage analyzer
 pub async fn analyze_memory_usage(
     node_url: String,
     interval: u64,
     duration: u64,
 ) -> Result<()> {
-    println!("🧠 Analyse de la memory sur {} (samplenage: {}s, duration: {}s)", 
+    println!("Analyzing memory on {} (sampling: {}s, duration: {}s)",
              node_url, interval, duration);
-    
+
     let client = ApiClient::new(&node_url)?;
     let start_time = Instant::now();
     let end_time = start_time + Duration::from_secs(duration);
-    
+
     let mut samples = Vec::new();
-    
+
     while Instant::now() < end_time {
         let sample_start = Instant::now();
-        
-        // Retrieve the stats memory of the node
+
+        // Retrieve memory stats from node
         match client.get_memory_stats().await {
             Ok(stats) => {
                 samples.push(MemorySample {
@@ -319,69 +319,69 @@ pub async fn analyze_memory_usage(
                     mempool_size: stats.mempool_transactions,
                     blockchain_size_mb: stats.blockchain_size / 1024 / 1024,
                 });
-                
-                println!("📊 Heap: {}MB / {}MB, RSS: {}MB, Mempool: {} tx", 
+
+                println!("Heap: {}MB / {}MB, RSS: {}MB, Mempool: {} tx",
                          stats.heap_used / 1024 / 1024,
                          stats.heap_total / 1024 / 1024,
                          stats.rss / 1024 / 1024,
                          stats.mempool_transactions);
             }
             Err(e) => {
-                println!("⚠️  Error lors de la retrieval des stats: {}", e);
+                println!("Warning: failed to retrieve stats: {}", e);
             }
         }
-        
+
         sleep(Duration::from_secs(interval)).await;
     }
-    
-    // Analyser the tendances
+
+    // Analyze trends
     if !samples.is_empty() {
         let avg_heap = samples.iter().map(|s| s.heap_used_mb).sum::<u64>() / samples.len() as u64;
         let max_heap = samples.iter().map(|s| s.heap_used_mb).max().unwrap_or(0);
         let avg_rss = samples.iter().map(|s| s.rss_mb).sum::<u64>() / samples.len() as u64;
         let max_rss = samples.iter().map(|s| s.rss_mb).max().unwrap_or(0);
-        
-        println!("\n📈 Analyse de la memory :");
-        println!("  - Heap moyen/max: {}MB / {}MB", avg_heap, max_heap);
-        println!("  - RSS moyen/max: {}MB / {}MB", avg_rss, max_rss);
-        
-        // Detect the fuites potentielles
+
+        println!("\nMemory analysis:");
+        println!("  - Avg/max heap: {}MB / {}MB", avg_heap, max_heap);
+        println!("  - Avg/max RSS: {}MB / {}MB", avg_rss, max_rss);
+
+        // Detect potential leaks
         if samples.len() >= 10 {
             let first_half_avg = samples[..samples.len()/2].iter()
                 .map(|s| s.heap_used_mb).sum::<u64>() / (samples.len()/2) as u64;
             let second_half_avg = samples[samples.len()/2..].iter()
                 .map(|s| s.heap_used_mb).sum::<u64>() / (samples.len()/2) as u64;
-            
+
             if second_half_avg > first_half_avg * 110 / 100 {
-                println!("⚠️  Fuite memory potentielle detectede (+{}MB)", 
+                println!("Warning: potential memory leak detected (+{}MB)",
                          second_half_avg - first_half_avg);
             }
         }
     }
-    
+
     Ok(())
 }
 
-// Fonctions d'aide for the profilage
+// Helper functions for profiling
 async fn profile_mining_operation() -> Result<()> {
-    // Simuler a operation de minage
+    // Simulate mining operation
     sleep(Duration::from_millis(50)).await;
     Ok(())
 }
 
 async fn profile_validation_operation() -> Result<()> {
-    // Simuler a validation de transaction
+    // Simulate transaction validation
     sleep(Duration::from_millis(10)).await;
     Ok(())
 }
 
 async fn profile_sync_operation() -> Result<()> {
-    // Simuler a synchronization
+    // Simulate synchronization
     sleep(Duration::from_millis(100)).await;
     Ok(())
 }
 
-// Structures of data for the profilage
+// Data structures for profiling
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ProfileSample {
     timestamp: Instant,

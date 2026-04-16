@@ -21,11 +21,11 @@
 
 // Verify also the declarations de fonctions and the boucles for vous assurer qu'elles are correctly closedes
 // For example:
-// fn ma_fonction() {
-//     // code ici
-// } // Fermeture de the fonction
+// fn example_function() {
+//     // code here
+// } // end of function
 
-// Pour resolve l'error specific to the ligne 110, vous devriez verify que the delimiters are correctly closeds
+// To resolve the error at line 110, verify that all delimiters are properly closed
 // Si vous utilisez of commentaires multilignes, assurez-vous qu'ils soient correctly closeds
 // For example:
 // /*

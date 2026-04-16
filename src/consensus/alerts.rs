@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{warn, error, info};
 
-/// Types d'alerts de consensus
+/// Consensus alert types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AlertType {
-    /// Temps inter-blocs anormalement high
+    /// Abnormally high inter-block time
     HighBlockTime {
         current: Duration,
         threshold: Duration,
@@ -17,13 +17,13 @@ pub enum AlertType {
         current: f64,
         threshold: f64,
     },
-    /// Hashrate in chute libre
+    /// Hashrate in freefall
     HashrateDropped {
         current: f64,
         previous: f64,
         drop_percentage: f64,
     },
-    /// Difficulty instable
+    /// Unstable difficulty
     DifficultyInstability {
         variance: f64,
         threshold: f64,
@@ -86,15 +86,15 @@ impl Alert {
 /// Alert threshold configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertThresholds {
-    /// Seuil de temps inter-blocs (secondes)
+    /// Inter-block time threshold (seconds)
     pub max_block_time: Duration,
     /// Orphan rate threshold (percentage)
     pub max_orphan_rate: f64,
     /// Hashrate drop threshold (percentage)
     pub max_hashrate_drop: f64,
-    /// Seuil de variance de difficulty
+    /// Difficulty variance threshold
     pub max_difficulty_variance: f64,
-    /// Seuil de chain stagnation
+    /// Chain stagnation threshold
     pub max_stagnation_time: Duration,
     /// Potential attack threshold (percentage of total hashrate)
     pub attack_threshold: f64,
@@ -188,7 +188,7 @@ impl ConsensusAlertManager {
                 },
                 AlertSeverity::Warning,
                 format!(
-                    "Temps inter-blocs high: {:?} (seuil: {:?})",
+                    "High inter-block time: {:?} (threshold: {:?})",
                     block_time, self.thresholds.max_block_time
                 ),
             );
@@ -212,7 +212,7 @@ impl ConsensusAlertManager {
                 },
                 severity,
                 format!(
-                    "Taux d'orphelins high: {:.2}% (seuil: {:.2}%)",
+                    "High orphan rate: {:.2}% (threshold: {:.2}%)",
                     orphan_rate, self.thresholds.max_orphan_rate
                 ),
             );
@@ -241,14 +241,14 @@ impl ConsensusAlertManager {
                     },
                     severity,
                     format!(
-                        "Chute du hashrate: {:.2}% (de {:.2} to {:.2})",
+                        "Hashrate drop: {:.2}% (from {:.2} to {:.2})",
                         drop_percentage, previous_hashrate, current_hashrate
                     ),
                 );
                 self.emit_alert(alert);
             }
 
-            // Detection d'attaque potentielle
+            // Potential attack detection
             let total_network_hashrate = self.estimate_network_hashrate();
             if current_hashrate > total_network_hashrate * (self.thresholds.attack_threshold / 100.0) {
                 let alert = Alert::new(
@@ -258,7 +258,7 @@ impl ConsensusAlertManager {
                     },
                     AlertSeverity::Emergency,
                     format!(
-                        "Attaque potentielle detectede: hashrate suspect {:.2} vs network {:.2}",
+                        "Potential attack detected: suspicious hashrate {:.2} vs network {:.2}",
                         current_hashrate, total_network_hashrate
                     ),
                 );
@@ -290,7 +290,7 @@ impl ConsensusAlertManager {
                     },
                     AlertSeverity::Warning,
                     format!(
-                        "Instability de difficulty detectede: CV={:.3} (seuil: {:.3})",
+                        "Difficulty instability detected: CV={:.3} (threshold: {:.3})",
                         coefficient_variation, self.thresholds.max_difficulty_variance
                     ),
                 );
@@ -317,7 +317,7 @@ impl ConsensusAlertManager {
                     },
                     severity,
                     format!(
-                        "Stagnation de la chain: {:?} depuis le last bloc (seuil: {:?})",
+                        "Chain stagnation: {:?} since last block (threshold: {:?})",
                         elapsed, self.thresholds.max_stagnation_time
                     ),
                 );
@@ -350,10 +350,10 @@ impl ConsensusAlertManager {
                 AlertSeverity::Info => info!("🔵 {}", alert.message),
                 AlertSeverity::Warning => warn!("🟡 {}", alert.message),
                 AlertSeverity::Critical => error!("🟠 {}", alert.message),
-                AlertSeverity::Emergency => error!("🔴 URGENCE: {}", alert.message),
+                AlertSeverity::Emergency => error!("🔴 EMERGENCY: {}", alert.message),
             }
 
-            // Envoie l'alert via the canal
+            // Send the alert via the channel
             if let Err(e) = self.alert_sender.send(alert.clone()) {
                 error!("Error sending alert: {}", e);
             }
@@ -375,7 +375,7 @@ impl ConsensusAlertManager {
     pub fn resolve_alert(&mut self, alert_id: &str) {
         if let Some(alert) = self.active_alerts.iter_mut().find(|a| a.id == alert_id) {
             alert.resolve();
-            info!("✅ Alerte resolvede: {}", alert.message);
+            info!("✅ Alert resolved: {}", alert.message);
         }
         self.active_alerts.retain(|a| !a.resolved);
     }
@@ -457,11 +457,11 @@ mod tests {
         let thresholds = AlertThresholds::default();
         let mut manager = ConsensusAlertManager::new(thresholds, tx);
         
-        // Temps de bloc normal - pas d'alert
+        // Normal block time - no alert
         manager.update_metrics(Duration::from_secs(60), 1000.0, 100.0, 2.0);
         assert!(rx.try_recv().is_err());
         
-        // Temps de bloc high - alert
+        // High block time - alert
         manager.update_metrics(Duration::from_secs(400), 1000.0, 100.0, 2.0);
         let alert = rx.try_recv().unwrap();
         assert!(matches!(alert.alert_type, AlertType::HighBlockTime { .. }));
@@ -473,7 +473,7 @@ mod tests {
         let thresholds = AlertThresholds::default();
         let mut manager = ConsensusAlertManager::new(thresholds, tx);
         
-        // Taux d'orphelins high
+        // High orphan rate
         manager.update_metrics(Duration::from_secs(60), 1000.0, 100.0, 8.0);
         let alert = rx.try_recv().unwrap();
         assert!(matches!(alert.alert_type, AlertType::HighOrphanRate { .. }));
@@ -485,10 +485,10 @@ mod tests {
         let thresholds = AlertThresholds::default();
         let mut manager = ConsensusAlertManager::new(thresholds, tx);
         
-        // Premier point of data
+        // First data point
         manager.update_metrics(Duration::from_secs(60), 1000.0, 100.0, 2.0);
         
-        // Chute importante of the hashrate
+        // Significant hashrate drop
         manager.update_metrics(Duration::from_secs(60), 600.0, 100.0, 2.0);
         let alert = rx.try_recv().unwrap();
         assert!(matches!(alert.alert_type, AlertType::HashrateDropped { .. }));
