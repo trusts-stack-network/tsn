@@ -140,6 +140,11 @@ pub struct AppState {
     /// Key = "{peer_tip_hash16}|{peer_height}", value = Instant when cooldown ends.
     /// Prevents N peers from each triggering fork recovery for the same fork.
     pub fork_recovery_cooldown: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    /// v2.3.0 Phase 2.1: highest `latest_eligible` for which auto_snapshot_export
+    /// has already been triggered. Guards against double-trigger when both the
+    /// miner path and the P2P handler cross the same interval boundary (e.g. on
+    /// a reorg at an interval-crossing height).
+    pub last_snapshot_auto_trigger: std::sync::atomic::AtomicU64,
 }
 
 /// Info about an HTTP peer, updated on every interaction.

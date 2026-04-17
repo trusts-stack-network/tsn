@@ -2017,6 +2017,50 @@ fn cmd_mine(
 /// Automatic snapshot export — triggered when a new block-based interval becomes finalized.
 /// Exports the snapshot, signs the manifest, and requests cross-confirmations from seeds.
 /// Runs as a fire-and-forget background task.
+/// v2.3.0 Phase 2.1 — shared snapshot auto-trigger.
+/// Called from both the P2P NewBlock handler and the local miner path after a
+/// block is successfully added to the chain. Exports a signed snapshot when a
+/// new multiple of SNAPSHOT_MANIFEST_INTERVAL just became finalized
+/// (tip >= multiple + MAX_REORG_DEPTH).
+///
+/// Single-fire guarantee: the AtomicU64 `last_snapshot_auto_trigger` CAS ensures
+/// at most one export is spawned per interval-crossing, even if both paths race
+/// on the same tip or a reorg brings us back to the crossing height.
+fn check_snapshot_auto_trigger(state: &std::sync::Arc<tsn::network::AppState>, tip_h: u64) {
+    use std::sync::atomic::Ordering;
+    let interval = tsn::config::SNAPSHOT_MANIFEST_INTERVAL;
+    let max_reorg = tsn::config::MAX_REORG_DEPTH;
+    if tip_h <= max_reorg + interval {
+        return;
+    }
+    let finalized = tip_h - max_reorg;
+    let latest_eligible = (finalized / interval) * interval;
+    let prev_finalized = (tip_h - 1).saturating_sub(max_reorg);
+    let prev_eligible = (prev_finalized / interval) * interval;
+    if latest_eligible <= prev_eligible {
+        return;
+    }
+    let last = state.last_snapshot_auto_trigger.load(Ordering::Relaxed);
+    if latest_eligible <= last {
+        return;
+    }
+    if state
+        .last_snapshot_auto_trigger
+        .compare_exchange(last, latest_eligible, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    tracing::info!(
+        "Snapshot auto-trigger: height {} finalized interval {}",
+        latest_eligible, interval
+    );
+    let snap_state = state.clone();
+    tokio::spawn(async move {
+        auto_snapshot_export(snap_state).await;
+    });
+}
+
 async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>) {
     use tracing::{info, warn};
 
@@ -2628,6 +2672,7 @@ async fn cmd_node(
             std::num::NonZeroUsize::new(tsn::network::api::BLOCK_DEDUP_CAPACITY).unwrap(),
         )),
         fork_recovery_cooldown: std::sync::Mutex::new(std::collections::HashMap::new()),
+        last_snapshot_auto_trigger: std::sync::atomic::AtomicU64::new(0),
     });
 
     // ========================================================================
@@ -3123,28 +3168,11 @@ async fn cmd_node(
                                                     });
                                                 }
                                             }
-                                            // v2.1.5: Auto snapshot trigger — block-based, not clock-based.
-                                            // When a new multiple of SNAPSHOT_MANIFEST_INTERVAL becomes
-                                            // finalized (tip >= multiple + MAX_REORG_DEPTH), export a
-                                            // signed snapshot and request cross-confirmations.
+                                            // v2.3.0 Phase 2.1: block-based snapshot auto-trigger.
+                                            // Shared with the miner-local path via check_snapshot_auto_trigger.
                                             {
                                                 let tip_h = p2p_blockchain.blockchain.read().unwrap().height();
-                                                let interval = tsn::config::SNAPSHOT_MANIFEST_INTERVAL;
-                                                let max_reorg = tsn::config::MAX_REORG_DEPTH;
-                                                if tip_h > max_reorg + interval {
-                                                    let finalized = tip_h - max_reorg;
-                                                    let latest_eligible = (finalized / interval) * interval;
-                                                    let prev_finalized = (tip_h - 1).saturating_sub(max_reorg);
-                                                    let prev_eligible = (prev_finalized / interval) * interval;
-                                                    if latest_eligible > prev_eligible {
-                                                        // A new interval just became finalized — trigger snapshot
-                                                        info!("Snapshot auto-trigger: height {} finalized interval {}", latest_eligible, interval);
-                                                        let snap_state = p2p_blockchain.clone();
-                                                        tokio::spawn(async move {
-                                                            auto_snapshot_export(snap_state).await;
-                                                        });
-                                                    }
-                                                }
+                                                check_snapshot_auto_trigger(&p2p_blockchain, tip_h);
                                             }
                                         }
                                         Ok(false) => {
@@ -4049,6 +4077,15 @@ async fn cmd_node(
                             continue;
                         }
                     }
+                }
+
+                // v2.3.0 Phase 2.1: snapshot auto-trigger from the miner path.
+                // Must run outside the blockchain write-lock (just released above).
+                // check_snapshot_auto_trigger is a no-op unless the new tip crosses an
+                // interval boundary and the CAS claims the exported interval first.
+                {
+                    let tip_h = mine_state.blockchain.read().unwrap().height();
+                    check_snapshot_auto_trigger(&mine_state, tip_h);
                 }
 
                 // Broadcast via P2P GossipSub (primary — instant push to all peers)
