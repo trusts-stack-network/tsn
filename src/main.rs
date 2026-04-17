@@ -2621,6 +2621,13 @@ async fn cmd_node(
         snapshot_manifests: std::sync::RwLock::new(Vec::new()),
         mining_address: miner_info.as_ref().map(|(pk, _)| hex::encode(pk)),
         wallet_service: wallet_service.clone(),
+        seen_tips: std::sync::Mutex::new(lru::LruCache::new(
+            std::num::NonZeroUsize::new(tsn::network::api::TIP_DEDUP_CAPACITY).unwrap(),
+        )),
+        seen_blocks: std::sync::Mutex::new(lru::LruCache::new(
+            std::num::NonZeroUsize::new(tsn::network::api::BLOCK_DEDUP_CAPACITY).unwrap(),
+        )),
+        fork_recovery_cooldown: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     // ========================================================================
@@ -3071,6 +3078,26 @@ async fn cmd_node(
                             match serde_json::from_slice::<tsn::core::ShieldedBlock>(&data) {
                                 Ok(block) => {
                                     let height = block.coinbase.height;
+                                    // v2.3.0 Phase 1: dedup same block within BLOCK_DEDUP_SECS (60s).
+                                    // GossipSub can redeliver blocks (mesh heal / orphans) and HTTP may
+                                    // have already accepted this block — skip before taking reorg_lock.
+                                    let block_hash = block.hash_hex();
+                                    let now_secs = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    {
+                                        let mut cache = p2p_blockchain.seen_blocks.lock()
+                                            .unwrap_or_else(|e| e.into_inner());
+                                        if let Some(&seen_at) = cache.get(&block_hash) {
+                                            if now_secs.saturating_sub(seen_at) < tsn::network::api::BLOCK_DEDUP_SECS {
+                                                tracing::debug!("dedup: P2P block #{} {} already seen ({}s ago)",
+                                                    height, &block_hash[..16], now_secs - seen_at);
+                                                continue;
+                                            }
+                                        }
+                                        cache.put(block_hash.clone(), now_secs);
+                                    }
                                     let result = {
                                         // v2.0.9: Take reorg_lock to prevent race with miner
                                         let _reorg_guard = p2p_blockchain.reorg_lock.read().await;

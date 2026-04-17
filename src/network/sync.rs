@@ -294,6 +294,29 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
 
     // ── Step 8: Fork resolution via headers-first ancestor search ──
     let sync_from_height = if is_fork {
+        // v2.3.0 Phase 1: dedup fork recovery across peers.
+        // Without this, 16 peers announcing the same fork trigger 16 sequential rollbacks.
+        // Key identifies the fork target by (peer_tip_hash16, peer_height).
+        let fork_hash_prefix = &peer_info.latest_hash[..16.min(peer_info.latest_hash.len())];
+        let fork_key = format!("{}|{}", fork_hash_prefix, peer_info.height);
+        {
+            let now = std::time::Instant::now();
+            let mut cooldown = state.fork_recovery_cooldown.lock()
+                .unwrap_or_else(|e| e.into_inner());
+            cooldown.retain(|_, until| *until > now);
+            if cooldown.contains_key(&fork_key) {
+                debug!(
+                    "dedup: fork recovery for {}@h={} already in cooldown, skipping peer {}",
+                    fork_hash_prefix, peer_info.height, peer_id(peer_url)
+                );
+                return Ok(0);
+            }
+            cooldown.insert(
+                fork_key.clone(),
+                now + std::time::Duration::from_secs(crate::network::api::FORK_COOLDOWN_SECS),
+            );
+        }
+
         let _reorg_guard = state.reorg_lock.write().await;
 
         // Check fast_sync_base BEFORE searching, to detect fallback ancestors

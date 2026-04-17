@@ -46,6 +46,19 @@ const SYNC_RATE_LIMIT_RPS: u64 = 200;
 /// Rate limit: burst size for sync routes
 const SYNC_RATE_LIMIT_BURST: u32 = 400;
 
+/// v2.3.0 Phase 1 — dedup windows (seconds).
+/// Same (peer, height, hash) tip received within this window is skipped.
+pub const TIP_DEDUP_SECS: u64 = 30;
+/// Same block hash received within this window is skipped.
+pub const BLOCK_DEDUP_SECS: u64 = 60;
+/// Same fork (peer_tip_hash, peer_height) cooldown after first recovery attempt.
+pub const FORK_COOLDOWN_SECS: u64 = 60;
+
+/// Maximum entries kept in the tip dedup LRU.
+pub const TIP_DEDUP_CAPACITY: usize = 500;
+/// Maximum entries kept in the block dedup LRU.
+pub const BLOCK_DEDUP_CAPACITY: usize = 1000;
+
 /// Shared application state for the API.
 pub struct AppState {
     pub blockchain: RwLock<ShieldedBlockchain>,
@@ -115,6 +128,18 @@ pub struct AppState {
     pub mining_address: Option<String>,
     /// Wallet service for balance/scan/send (None if no wallet configured)
     pub wallet_service: Option<Arc<crate::wallet::WalletService>>,
+    /// v2.3.0 Phase 1: LRU cache of recently processed tip announcements.
+    /// Key = "{peer_id}|{height}|{hash16}", value = unix epoch seconds of first sight.
+    /// Entries older than TIP_DEDUP_SECS are treated as expired and reprocessed.
+    pub seen_tips: std::sync::Mutex<lru::LruCache<String, u64>>,
+    /// v2.3.0 Phase 1: LRU cache of recently processed block hashes.
+    /// Key = full block hash hex, value = unix epoch seconds of first sight.
+    /// Covers both HTTP receive_block and P2P NewBlock paths.
+    pub seen_blocks: std::sync::Mutex<lru::LruCache<String, u64>>,
+    /// v2.3.0 Phase 1: Fork recovery cooldown.
+    /// Key = "{peer_tip_hash16}|{peer_height}", value = Instant when cooldown ends.
+    /// Prevents N peers from each triggering fork recovery for the same fork.
+    pub fork_recovery_cooldown: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
 }
 
 /// Info about an HTTP peer, updated on every interaction.
@@ -1113,6 +1138,27 @@ async fn receive_block(
 
     let block_hash = block.hash_hex();
 
+    // v2.3.0 Phase 1: dedup same block within BLOCK_DEDUP_SECS (60s).
+    // Covers the case where multiple peers relay the same block to us in a burst.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    {
+        let mut cache = state.seen_blocks.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&seen_at) = cache.get(&block_hash) {
+            if now_secs.saturating_sub(seen_at) < BLOCK_DEDUP_SECS {
+                debug!("dedup: block {} already seen ({}s ago), skipping",
+                    &block_hash[..16], now_secs - seen_at);
+                return Ok(Json(ReceiveBlockResponse {
+                    status: "duplicate".to_string(),
+                    hash: block_hash,
+                }));
+            }
+        }
+        cache.put(block_hash.clone(), now_secs);
+    }
+
     info!("Received block {} from peer", &block_hash[..16]);
 
     // Try to add the block (handles forks and reorgs automatically)
@@ -1670,19 +1716,10 @@ static RELAY_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
 const MAX_RELAY_PEERS: usize = 8;
 
 async fn relay_block(block: &ShieldedBlock, peers: &[String], client: &reqwest::Client) {
+    // v2.3.0 Phase 1: block-level dedup now lives in receive_block via AppState.seen_blocks.
+    // By the time relay_block is called, the caller has already filtered out duplicates,
+    // so the previous static RELAYED LRU is gone.
     let block_hash_str = block.hash_hex()[..16].to_string();
-
-    // Dedup: skip relay if we already relayed this block (prevents spam from multiple sources)
-    {
-        use std::sync::Mutex;
-        static RELAYED: std::sync::LazyLock<Mutex<lru::LruCache<String, ()>>> =
-            std::sync::LazyLock::new(|| Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(200).unwrap())));
-        let mut cache = RELAYED.lock().unwrap();
-        if cache.contains(&block_hash_str) {
-            return;
-        }
-        cache.put(block_hash_str.clone(), ());
-    }
 
     // Filter contactable peers, cap at MAX_RELAY_PEERS.
     // Prioritize seed nodes (known IPs) over random peers.
@@ -2635,6 +2672,35 @@ async fn receive_tip(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid hash hex: {}", e)))?
         .try_into()
         .map_err(|_| (StatusCode::BAD_REQUEST, "Hash must be exactly 32 bytes".to_string()))?;
+
+    // v2.3.0 Phase 1: dedup same tip within TIP_DEDUP_SECS (30s).
+    // Key = sender IP + height + hash16 — identifies a specific (peer, tip) pair.
+    let hash16 = req.hash.get(..16).unwrap_or(&req.hash);
+    let tip_key = format!("{}|{}|{}", ip, req.height, hash16);
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    {
+        let mut cache = state.seen_tips.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&seen_at) = cache.get(&tip_key) {
+            if now_secs.saturating_sub(seen_at) < TIP_DEDUP_SECS {
+                debug!("dedup: tip h={} hash={} already seen from {} ({}s ago)",
+                    req.height, hash16, peer_id(&peer_url), now_secs - seen_at);
+                let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+                let local_height = chain.height();
+                let local_hash = hex::encode(chain.latest_hash());
+                drop(chain);
+                return Ok(Json(TipResponse {
+                    height: local_height,
+                    hash: local_hash,
+                    peer_count: state.sync_gate.peer_count(),
+                    network_tip_height: state.sync_gate.network_tip_height(),
+                }));
+            }
+        }
+        cache.put(tip_key, now_secs);
+    }
 
     // Use the hash as a pseudo peer-id (we don't have real peer IDs in HTTP mode)
     let peer_id = format!("peer-{}", &req.hash[..16]);
