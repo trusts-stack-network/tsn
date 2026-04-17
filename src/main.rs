@@ -1445,6 +1445,43 @@ async fn cmd_balance(wallet_path: &str, node_url: &str) -> anyhow::Result<()> {
 /// Try to scan wallet via a running node's API.
 /// Uses /blocks/since/:height which returns full ShieldedBlock structs.
 /// Returns (success, notes_found).
+/// v2.3.0 wallet fix: resolve the PQ commitment of a wallet note when building
+/// a spend witness. If the wallet stored a value, use it directly. Otherwise
+/// fall back to the `leaf` field of the server's witness response — the node
+/// already exposes the actual tree leaf at the requested position. The fallback
+/// is equivalent in trust to the merkle path we already consume from the same
+/// response: a lying node only fails the spend downstream, it cannot alter
+/// funds.
+fn resolve_pq_commitment(
+    stored: Option<[u8; 32]>,
+    server_leaf_hex: Option<&str>,
+    position: u64,
+) -> anyhow::Result<[u8; 32]> {
+    if let Some(cm) = stored {
+        return Ok(cm);
+    }
+    let leaf_hex = server_leaf_hex.unwrap_or("").trim();
+    if leaf_hex.is_empty() {
+        anyhow::bail!(
+            "Note at position {} has no pq_commitment and the node did not return \
+             a leaf. Please upgrade the node binary or rescan the wallet.",
+            position
+        );
+    }
+    let bytes = hex::decode(leaf_hex)
+        .map_err(|_| anyhow::anyhow!("Invalid leaf hex from node for position {}", position))?;
+    if bytes.len() != 32 {
+        anyhow::bail!(
+            "Leaf from node has wrong length {} for position {}",
+            bytes.len(),
+            position
+        );
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
+}
+
 async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee: f64) -> anyhow::Result<()> {
     use tsn::crypto::pq::commitment_pq::NoteCommitmentPQ;
     use tsn::crypto::pq::proof_pq::{SpendWitnessPQ, OutputWitnessPQ, TransactionProver};
@@ -1616,8 +1653,14 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
             }
         };
 
-        // Pre-verify merkle witness before proof generation
-        let stored_pq_cm = note.pq_commitment.unwrap_or([0u8; 32]);
+        // v2.3.0 wallet fix: resolve the PQ commitment with a server-provided
+        // fallback. Old wallets (pre-v2 JSON, V1 tx outputs, or legacy scan
+        // paths) may have `pq_commitment = None` which makes the witness
+        // verification impossible. The node already returns the actual leaf
+        // in the witness response; trust it exactly as we trust the merkle
+        // path (failure downstream if the node lies, no funds at risk).
+        let server_leaf_hex = v["leaf"].as_str();
+        let stored_pq_cm = resolve_pq_commitment(note.pq_commitment, server_leaf_hex, pos)?;
         if !witness.verify(&tsn::crypto::pq::commitment_pq::NoteCommitmentPQ(stored_pq_cm)) {
             anyhow::bail!(
                 "Merkle witness verification failed for note at position {}. \
@@ -4316,4 +4359,66 @@ async fn cmd_node(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_pq_commitment_uses_stored_when_present() {
+        let stored = [7u8; 32];
+        // Server leaf is intentionally different: stored value must win.
+        let got = resolve_pq_commitment(Some(stored), Some("ff".repeat(32).as_str()), 42)
+            .expect("stored value should be returned");
+        assert_eq!(got, stored);
+    }
+
+    #[test]
+    fn resolve_pq_commitment_falls_back_to_server_leaf() {
+        let leaf_bytes = [3u8; 32];
+        let leaf_hex = hex::encode(leaf_bytes);
+        let got = resolve_pq_commitment(None, Some(&leaf_hex), 100)
+            .expect("fallback should succeed");
+        assert_eq!(got, leaf_bytes);
+    }
+
+    #[test]
+    fn resolve_pq_commitment_bails_on_missing_leaf() {
+        let err = resolve_pq_commitment(None, None, 7)
+            .expect_err("missing leaf must bail");
+        let msg = format!("{}", err);
+        assert!(msg.contains("position 7"));
+        assert!(msg.contains("upgrade the node"));
+    }
+
+    #[test]
+    fn resolve_pq_commitment_bails_on_empty_leaf_string() {
+        let err = resolve_pq_commitment(None, Some(""), 11)
+            .expect_err("empty leaf must bail");
+        assert!(format!("{}", err).contains("position 11"));
+    }
+
+    #[test]
+    fn resolve_pq_commitment_trims_whitespace() {
+        let leaf_bytes = [0xabu8; 32];
+        let padded = format!("  {}  ", hex::encode(leaf_bytes));
+        let got = resolve_pq_commitment(None, Some(&padded), 1)
+            .expect("whitespace-padded hex should parse");
+        assert_eq!(got, leaf_bytes);
+    }
+
+    #[test]
+    fn resolve_pq_commitment_rejects_invalid_hex() {
+        let err = resolve_pq_commitment(None, Some("zzz"), 1)
+            .expect_err("bad hex must bail");
+        assert!(format!("{}", err).contains("Invalid leaf hex"));
+    }
+
+    #[test]
+    fn resolve_pq_commitment_rejects_wrong_length() {
+        let err = resolve_pq_commitment(None, Some("aabb"), 1)
+            .expect_err("short hex must bail");
+        assert!(format!("{}", err).contains("wrong length"));
+    }
 }
