@@ -210,8 +210,12 @@ impl P2pNode {
                     .mesh_n_high(12)      // Prune if too many mesh connections
                     .mesh_outbound_min(2) // Min outbound for partition resistance
                     .gossip_lazy(6)       // IHAVE/IWANT backup for nodes outside mesh
-                    .history_length(10)   // Keep 10 heartbeats of message history
-                    .history_gossip(3)    // Announce last 3 heartbeats via gossip
+                    // v2.3.0 propagation fix: extend retention so v2 txs survive
+                    // long enough to reach miners that join the mesh later.
+                    // 600 heartbeats × 700 ms = 7 min message retention.
+                    // 60 heartbeats × 700 ms = ~42 s IHAVE announcement window.
+                    .history_length(600)
+                    .history_gossip(60)
                     .fanout_ttl(Duration::from_secs(60))
                     .build()
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -598,8 +602,20 @@ async fn p2p_event_loop(
                                 let rest = &addr_str[ip_start + 5..];
                                 if let Some(ip_end) = rest.find('/') {
                                     let ip = &rest[..ip_end];
-                                    // Skip private/local IPs for public peers
+                                    // Skip loopback, wildcard, and RFC1918 private ranges.
+                                    // Private IPs in a peer's listen_addrs are LAN-only and
+                                    // unreachable from public nodes; adding them to state.peers
+                                    // just produces doomed HTTP relays. v2.3.0 propagation fix.
                                     if ip == "127.0.0.1" || ip == "0.0.0.0" { continue; }
+                                    if ip.starts_with("10.") { continue; }
+                                    if ip.starts_with("192.168.") { continue; }
+                                    if let Some(second) = ip.strip_prefix("172.") {
+                                        if let Some(octet_end) = second.find('.') {
+                                            if let Ok(octet) = second[..octet_end].parse::<u8>() {
+                                                if (16..=31).contains(&octet) { continue; }
+                                            }
+                                        }
+                                    }
                                     // P2P port is typically API port + 1 (9334 → 9333)
                                     if let Some(tcp_idx) = rest.find("/tcp/") {
                                         let port_str = &rest[tcp_idx + 5..];
