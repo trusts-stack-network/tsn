@@ -3054,6 +3054,12 @@ async fn cmd_node(
             let dial_seeds = seeds_to_bootstrap(&seed_urls, p2p_port);
             info!("P2P: dialing {} seed nodes on port {}", dial_seeds.len(), p2p_port);
 
+            // v2.3.0 Phase 2.3: startup-time height hint for the Identify
+            // agent_version field. Peers parse this as "h=<number>" and seed
+            // their peer-height cache without an HTTP /chain/info call.
+            // The hint is frozen at startup; live updates continue via the
+            // existing tip broadcast loop.
+            let startup_height = state.blockchain.read().unwrap().height();
             let p2p_config = P2pConfig {
                 listen_port: p2p_port,
                 bootstrap_peers: Vec::new(),
@@ -3064,6 +3070,7 @@ async fn cmd_node(
                     if miner_info.is_some() && node_role == NodeRole::Miner { "miner" }
                     else if node_role == NodeRole::LightClient { "light" }
                     else { "relay" }),
+                agent_version: format!("h={}", startup_height),
             };
 
             let p2p = P2pNode::start(p2p_config).await

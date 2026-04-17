@@ -43,6 +43,12 @@ pub struct P2pConfig {
     pub relay_server: bool,
     /// Network name for protocol identification
     pub protocol_version: String,
+    /// v2.3.0 Phase 2.3: free-form agent_version string exchanged via Identify.
+    /// Used to carry a startup-time height hint (format "h=<number>") so peers
+    /// can cache our height at connection without an HTTP round-trip.
+    /// Backward-compatible: peers that don't parse this simply ignore it.
+    /// Empty string disables the hint.
+    pub agent_version: String,
 }
 
 impl Default for P2pConfig {
@@ -53,8 +59,28 @@ impl Default for P2pConfig {
             dial_seeds: Vec::new(),
             relay_server: false,
             protocol_version: format!("tsn/{}", env!("CARGO_PKG_VERSION")),
+            agent_version: String::new(),
         }
     }
+}
+
+/// v2.3.0 Phase 2.3: extract a height hint from a libp2p Identify agent_version
+/// field. Accepts `h=<u64>` as a whitespace-delimited token anywhere in the
+/// string; returns `None` if no such token is present or the value cannot be
+/// parsed. Case-sensitive (`H=...` is ignored).
+///
+/// Backward-compatible: peers with an empty or unrelated `agent_version`
+/// produce `None` and are handled by the usual fallback paths (tip gossip,
+/// HTTP `/chain/info`).
+pub fn parse_agent_version_height(agent_version: &str) -> Option<u64> {
+    for token in agent_version.split_whitespace() {
+        if let Some(num) = token.strip_prefix("h=") {
+            if let Ok(h) = num.parse::<u64>() {
+                return Some(h);
+            }
+        }
+    }
+    None
 }
 
 /// Events emitted by the P2P layer to the application
@@ -209,14 +235,18 @@ impl P2pNode {
                 kademlia.set_mode(Some(kad::Mode::Server));
 
                 // Identify protocol
-                let identify = identify::Behaviour::new(
-                    identify::Config::new(
-                        config.protocol_version.clone(),
-                        key.public(),
-                    )
-                    .with_push_listen_addr_updates(true)
-                    .with_interval(Duration::from_secs(60)),
-                );
+                let mut identify_cfg = identify::Config::new(
+                    config.protocol_version.clone(),
+                    key.public(),
+                )
+                .with_push_listen_addr_updates(true)
+                .with_interval(Duration::from_secs(60));
+                // v2.3.0 Phase 2.3: ship startup-time height hint via agent_version.
+                // Set only if the caller provided one; empty string leaves libp2p default.
+                if !config.agent_version.is_empty() {
+                    identify_cfg = identify_cfg.with_agent_version(config.agent_version.clone());
+                }
+                let identify = identify::Behaviour::new(identify_cfg);
 
                 // AutoNAT
                 let autonat = autonat::Behaviour::new(
@@ -538,6 +568,22 @@ async fn p2p_event_loop(
                             }
                             // Store peer version
                             peer_versions.insert(peer_id, info.protocol_version.clone());
+                            // v2.3.0 Phase 2.3: extract startup height hint from agent_version
+                            // if present. Peers without a parseable hint are silently ignored
+                            // (backward-compatible). Gossip tip broadcasts override stale hints
+                            // within ~10s.
+                            if let Some(hint_h) = parse_agent_version_height(&info.agent_version) {
+                                let prev = peer_heights.get(&peer_id).copied().unwrap_or(0);
+                                if hint_h > prev {
+                                    let now_secs = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    peer_heights.insert(peer_id, hint_h);
+                                    peer_height_times.insert(peer_id, now_secs);
+                                    refresh_shared_peers!();
+                                }
+                            }
                         }
                         // Add discovered addresses to Kademlia
                         for addr in &info.listen_addrs {
@@ -697,4 +743,64 @@ pub fn seeds_to_bootstrap(seed_urls: &[String], _local_p2p_port: u16) -> Vec<Mul
         let addr: Multiaddr = format!("/ip4/{}/tcp/{}", ip, seed_p2p_port).parse().ok()?;
         Some(addr)
     }).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_agent_version_height;
+
+    #[test]
+    fn parse_agent_version_empty_returns_none() {
+        assert_eq!(parse_agent_version_height(""), None);
+    }
+
+    #[test]
+    fn parse_agent_version_legacy_no_hint() {
+        // Backward-compat: peers still sending a plain version string like
+        // "tsn/2.3.0" must be handled without error.
+        assert_eq!(parse_agent_version_height("tsn/2.3.0"), None);
+        assert_eq!(parse_agent_version_height("rust-libp2p/0.54.0"), None);
+    }
+
+    #[test]
+    fn parse_agent_version_simple_hint() {
+        assert_eq!(parse_agent_version_height("h=4944"), Some(4944));
+        assert_eq!(parse_agent_version_height("h=0"), Some(0));
+    }
+
+    #[test]
+    fn parse_agent_version_hint_with_surrounding_tokens() {
+        assert_eq!(parse_agent_version_height("tsn/2.3.0 h=1000"), Some(1000));
+        assert_eq!(parse_agent_version_height("h=42 foo bar"), Some(42));
+        assert_eq!(parse_agent_version_height("a b h=99 c d"), Some(99));
+    }
+
+    #[test]
+    fn parse_agent_version_malformed_returns_none() {
+        assert_eq!(parse_agent_version_height("h="), None);
+        assert_eq!(parse_agent_version_height("h=abc"), None);
+        assert_eq!(parse_agent_version_height("h=-5"), None);
+        assert_eq!(parse_agent_version_height("H=100"), None); // case-sensitive
+        assert_eq!(parse_agent_version_height("height=100"), None);
+    }
+
+    #[test]
+    fn parse_agent_version_first_valid_wins() {
+        // If multiple h= tokens are present, the first parseable one wins.
+        assert_eq!(
+            parse_agent_version_height("h=1 h=2"),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn parse_agent_version_skip_malformed_then_parse_valid() {
+        assert_eq!(parse_agent_version_height("h=abc h=42"), Some(42));
+    }
+
+    #[test]
+    fn parse_agent_version_max_u64() {
+        let s = format!("h={}", u64::MAX);
+        assert_eq!(parse_agent_version_height(&s), Some(u64::MAX));
+    }
 }
