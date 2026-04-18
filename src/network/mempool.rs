@@ -157,7 +157,12 @@ impl Mempool {
     /// fee is too low, or mempool is full and can't evict.
     pub fn add_v2(&mut self, tx: Transaction) -> bool {
         let hash = tx.hash();
-        if self.v1_transactions.contains_key(&hash) || self.v2_transactions.contains_key(&hash) {
+        if self.v1_transactions.contains_key(&hash) {
+            warn!("Mempool: rejected v2 tx {} — hash already in v1 mempool", hex::encode(&hash[..8]));
+            return false;
+        }
+        if self.v2_transactions.contains_key(&hash) {
+            warn!("Mempool: rejected v2 tx {} — hash already in v2 mempool (duplicate submit)", hex::encode(&hash[..8]));
             return false;
         }
 
@@ -165,13 +170,18 @@ impl Mempool {
 
         // Enforce minimum fee
         if fee < MIN_TX_FEE {
-            warn!("Mempool: rejected v2 tx {} — fee {} < min {}", hex::encode(&hash[..4]), fee, MIN_TX_FEE);
+            warn!("Mempool: rejected v2 tx {} — fee {} < min {}", hex::encode(&hash[..8]), fee, MIN_TX_FEE);
             return false;
         }
 
         // Check for nullifier conflicts
         for nullifier in tx.nullifiers() {
             if self.pending_nullifiers.contains(&nullifier) {
+                warn!(
+                    "Mempool: rejected v2 tx {} — nullifier {} conflicts with pending tx",
+                    hex::encode(&hash[..8]),
+                    hex::encode(&nullifier[..8]),
+                );
                 return false; // Double-spend attempt
             }
         }

@@ -1452,43 +1452,514 @@ async fn cmd_balance(wallet_path: &str, node_url: &str) -> anyhow::Result<()> {
 /// is equivalent in trust to the merkle path we already consume from the same
 /// response: a lying node only fails the spend downstream, it cannot alter
 /// funds.
+/// Marker substring used in the error message so callers can detect an orphan
+/// note mismatch via `err.to_string().contains(ORPHANED_NOTE_MARKER)` and skip
+/// the note instead of aborting the whole send.
+const ORPHANED_NOTE_MARKER: &str = "ORPHANED_NOTE";
+
 fn resolve_pq_commitment(
     stored: Option<[u8; 32]>,
     server_leaf_hex: Option<&str>,
     position: u64,
 ) -> anyhow::Result<[u8; 32]> {
-    if let Some(cm) = stored {
-        return Ok(cm);
-    }
-    let leaf_hex = server_leaf_hex.unwrap_or("").trim();
-    if leaf_hex.is_empty() {
-        anyhow::bail!(
+    // v2.3.1: resolve the commitment used for Merkle witness construction AND
+    // for the STARK circuit's spend check. Both sides must agree on the same
+    // value — stored in the wallet AND recorded on-chain at this position.
+    //
+    // Truth table:
+    //   stored  server-leaf        → outcome
+    //   --------------------------------
+    //   None    None               → bail (nothing to use)
+    //   None    placeholder (00..) → bail (no usable value)
+    //   None    real               → Ok(leaf)           legacy/migrated wallet
+    //   Some(s) None               → Ok(s)              server has no leaf path (rare)
+    //   Some(s) placeholder (00..) → Ok(s)              fast-sync blind zone, trust wallet
+    //   Some(s) real, s == leaf    → Ok(s)              normal happy path
+    //   Some(s) real, s != leaf    → bail ORPHANED_NOTE the block that minted this note
+    //                                                   was reorg'd out; wallet still
+    //                                                   holds stale metadata. Caller is
+    //                                                   expected to skip this note.
+    let server_leaf = match server_leaf_hex {
+        Some(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                let bytes = hex::decode(trimmed).map_err(|_| {
+                    anyhow::anyhow!("Invalid leaf hex from node for position {}", position)
+                })?;
+                if bytes.len() != 32 {
+                    anyhow::bail!(
+                        "Leaf from node has wrong length {} for position {}",
+                        bytes.len(),
+                        position
+                    );
+                }
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                Some(arr)
+            }
+        }
+        None => None,
+    };
+
+    let server_is_placeholder = matches!(server_leaf, Some(l) if l == [0u8; 32]);
+
+    match (stored, server_leaf) {
+        // Explicit orphan: wallet and chain disagree on a real leaf.
+        (Some(s), Some(leaf)) if !server_is_placeholder && s != leaf => {
+            anyhow::bail!(
+                "{}: note at position {} has stored commitment {}... but server leaf {}... — \
+                 the block that produced this note was reorg'd out. Skip this note and rescan.",
+                ORPHANED_NOTE_MARKER,
+                position,
+                hex::encode(&s[..8]),
+                hex::encode(&leaf[..8])
+            );
+        }
+        // Happy path or fast-sync blind zone or missing server leaf: trust stored.
+        (Some(s), _) => Ok(s),
+        // Legacy wallet with no stored commitment: use server's real leaf.
+        (None, Some(leaf)) if !server_is_placeholder => Ok(leaf),
+        // Nothing usable.
+        (None, _) => anyhow::bail!(
             "Note at position {} has no pq_commitment and the node did not return \
-             a leaf. Please upgrade the node binary or rescan the wallet.",
+             a usable leaf. Please upgrade the node binary or rescan the wallet.",
             position
-        );
+        ),
     }
-    let bytes = hex::decode(leaf_hex)
-        .map_err(|_| anyhow::anyhow!("Invalid leaf hex from node for position {}", position))?;
-    if bytes.len() != 32 {
-        anyhow::bail!(
-            "Leaf from node has wrong length {} for position {}",
-            bytes.len(),
-            position
-        );
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    Ok(arr)
 }
 
-async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee: f64) -> anyhow::Result<()> {
+/// v2.3.0 auto-consolidation: maximum number of spends per transaction that
+/// the STARK prover can handle (mirrors MAX_SPENDS in circuit_pq.rs). The
+/// consolidation loop uses MAX_SPENDS_PER_TX - 1 as batch size to keep one
+/// slot free for flexibility at the final tx.
+pub const MAX_SPENDS_PER_TX: usize = 10;
+pub const CONSOLIDATION_BATCH: usize = MAX_SPENDS_PER_TX - 1;
+
+/// v2.3.1: GET with exponential backoff on HTTP 429 (Too Many Requests).
+/// Delay doubles each retry: 1s, 2s, 4s, 8s, 16s, 32s, then bails.
+/// All other HTTP statuses (including 5xx) are returned to the caller as-is.
+async fn get_with_429_backoff(
+    client: &reqwest::Client,
+    url: &str,
+    label: &str,
+) -> anyhow::Result<reqwest::Response> {
+    let mut delay_ms: u64 = 1000;
+    loop {
+        let resp = client.get(url).send().await?;
+        if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Ok(resp);
+        }
+        if delay_ms > 32000 {
+            anyhow::bail!("{}: HTTP 429 rate limit, gave up after backoff cap (~63s)", label);
+        }
+        eprintln!("    ⏳ {}: 429 rate limit, backoff {}ms...", label, delay_ms);
+        tracing::warn!("{}: HTTP 429 backoff {}ms", label, delay_ms);
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        delay_ms *= 2;
+    }
+}
+
+/// v2.3.1: POST JSON with exponential backoff on HTTP 429. Same schedule as
+/// `get_with_429_backoff`. The body is serialized once and cloned (as JSON)
+/// for each retry.
+async fn post_json_with_429_backoff<B: serde::Serialize + ?Sized>(
+    client: &reqwest::Client,
+    url: &str,
+    body: &B,
+    label: &str,
+) -> anyhow::Result<reqwest::Response> {
+    let mut delay_ms: u64 = 1000;
+    loop {
+        let resp = client.post(url).json(body).send().await?;
+        if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Ok(resp);
+        }
+        if delay_ms > 32000 {
+            anyhow::bail!("{}: HTTP 429 rate limit, gave up after backoff cap (~63s)", label);
+        }
+        eprintln!("    ⏳ {}: 429 rate limit, backoff {}ms...", label, delay_ms);
+        tracing::warn!("{}: HTTP 429 backoff {}ms", label, delay_ms);
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        delay_ms *= 2;
+    }
+}
+
+/// v2.3.1: parse an `ORPHANED_NOTE_POSITIONS=p1,p2,p3:...` marker out of an
+/// error message. Returns the list of positions, or empty if the error is
+/// not an orphan-note error.
+fn parse_orphan_positions(err_msg: &str) -> Vec<u64> {
+    let needle = "ORPHANED_NOTE_POSITIONS=";
+    let Some(start) = err_msg.find(needle) else { return Vec::new() };
+    let after = &err_msg[start + needle.len()..];
+    let end = after.find(':').unwrap_or(after.len());
+    after[..end]
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u64>().ok())
+        .collect()
+}
+
+/// Build, prove, sign and submit one ShieldedTransactionV2. Reused by both
+/// the final cmd_send tx and each auto-consolidation round. Returns the
+/// tx hash and the list of nullifier hex strings, so the caller can poll
+/// /nullifiers/check to detect mining confirmation.
+async fn send_single_tx(
+    selected_notes: &[tsn::wallet::WalletNote],
+    amount_base: u64,
+    fee_base: u64,
+    recipient_pk_hash: [u8; 32],
+    wallet: &tsn::wallet::ShieldedWallet,
+    node_url: &str,
+    client: &reqwest::Client,
+) -> anyhow::Result<(String, Vec<String>)> {
     use tsn::crypto::pq::commitment_pq::NoteCommitmentPQ;
     use tsn::crypto::pq::proof_pq::{SpendWitnessPQ, OutputWitnessPQ, TransactionProver};
     use tsn::crypto::note::encrypt_note_pq;
     use tsn::core::{SpendDescriptionV2, OutputDescriptionV2, ShieldedTransactionV2};
     use rand::RngCore;
 
+    let selected_total: u64 = selected_notes.iter().map(|n| n.note.value).sum();
+    let total_needed = amount_base + fee_base;
+    if selected_total < total_needed {
+        anyhow::bail!(
+            "Insufficient selected notes: have {}, need {}",
+            selected_total, total_needed
+        );
+    }
+    let change = selected_total - total_needed;
+
+    let nullifier_key = wallet.nullifier_key_bytes();
+    let pk_hash = wallet.pk_hash();
+    let keypair = wallet.keypair();
+
+    // Fetch Merkle witnesses from the node (one per selected note).
+    // v2.3.1: collect orphan positions from resolve_pq_commitment and bail
+    // once at the end with a machine-parseable list. The caller retries with
+    // these positions excluded.
+    let mut spend_witnesses = Vec::new();
+    let mut orphan_positions: Vec<u64> = Vec::new();
+    for note in selected_notes {
+        let pos = note.position;
+        let url = format!("{}/witness/v2/position/{}", node_url, pos);
+        let resp = get_with_429_backoff(
+            client, &url, &format!("witness pos {}", pos)
+        ).await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("Failed to get witness for position {}: HTTP {}", pos, resp.status());
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let root_hex = v["root"].as_str().unwrap_or("");
+        let mut root = [0u8; 32];
+        if let Ok(bytes) = hex::decode(root_hex) {
+            if bytes.len() == 32 { root.copy_from_slice(&bytes); }
+        }
+        let empty = vec![];
+        let path_arr = v["path"].as_array().unwrap_or(&empty);
+        let indices_arr = v["indices"].as_array().unwrap_or(&empty);
+        let siblings: Vec<[u8; 32]> = path_arr.iter().filter_map(|s| {
+            let h = s.as_str()?;
+            let b = hex::decode(h).ok()?;
+            if b.len() == 32 { let mut a = [0u8;32]; a.copy_from_slice(&b); Some(a) } else { None }
+        }).collect();
+        let indices: Vec<u8> = indices_arr.iter().filter_map(|i| i.as_u64().map(|n| n as u8)).collect();
+
+        let witness = tsn::crypto::pq::merkle_pq::MerkleWitnessPQ {
+            path: tsn::crypto::pq::merkle_pq::MerklePathPQ { siblings, indices },
+            position: pos,
+            root,
+        };
+
+        let randomness = match note.pq_randomness {
+            Some(r) => r,
+            None => {
+                let mut r = [0u8; 32];
+                use ark_serialize::CanonicalSerialize;
+                note.note.randomness.serialize_compressed(&mut r[..]).ok();
+                r
+            }
+        };
+
+        // v2.3.1: resolve commitment from wallet + server. Orphans are
+        // collected and reported together; happy-path notes go straight into
+        // the spend witness list.
+        let server_leaf_hex = v["leaf"].as_str();
+        let stored_pq_cm = match resolve_pq_commitment(note.pq_commitment, server_leaf_hex, pos) {
+            Ok(c) => c,
+            Err(e) if e.to_string().contains(ORPHANED_NOTE_MARKER) => {
+                orphan_positions.push(pos);
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        if !witness.verify(&NoteCommitmentPQ(stored_pq_cm)) {
+            anyhow::bail!(
+                "Merkle witness verification failed for note at position {}. \
+                 The commitment in your wallet does not match the merkle tree. \
+                 Try rescanning your wallet.",
+                pos
+            );
+        }
+
+        spend_witnesses.push(SpendWitnessPQ {
+            value: note.note.value,
+            recipient_pk_hash: note.note.recipient_pk_hash,
+            randomness,
+            nullifier_key,
+            position: pos,
+            merkle_witness: witness,
+        });
+    }
+
+    // v2.3.1: if any selected notes turned out to be orphans, bail with a
+    // structured error. The caller parses the positions and retries with a
+    // fresh selection that excludes them.
+    if !orphan_positions.is_empty() {
+        let csv = orphan_positions.iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        anyhow::bail!(
+            "{}_POSITIONS={}: selection contains {} orphan note(s); retry with a different selection",
+            ORPHANED_NOTE_MARKER,
+            csv,
+            orphan_positions.len()
+        );
+    }
+
+    // Build output witnesses (recipient + optional change)
+    let mut rng = rand::thread_rng();
+    let mut output_witnesses = Vec::new();
+    let mut recipient_randomness = [0u8; 32];
+    rng.fill_bytes(&mut recipient_randomness);
+    output_witnesses.push(OutputWitnessPQ {
+        value: amount_base,
+        recipient_pk_hash,
+        randomness: recipient_randomness,
+    });
+    let mut change_randomness = None;
+    if change > 0 {
+        let mut cr = [0u8; 32];
+        rng.fill_bytes(&mut cr);
+        output_witnesses.push(OutputWitnessPQ {
+            value: change,
+            recipient_pk_hash: pk_hash,
+            randomness: cr,
+        });
+        change_randomness = Some(cr);
+    }
+
+    // Generate STARK proof
+    let prover = TransactionProver::new();
+    let proof = prover.prove(&spend_witnesses, &output_witnesses, fee_base)
+        .map_err(|e| anyhow::anyhow!("Proof generation failed: {}", e))?;
+
+    // Build spend descriptions (sign each nullifier with ML-DSA-65)
+    let mut spends = Vec::new();
+    let mut nullifiers_hex = Vec::new();
+    for sw in &spend_witnesses {
+        let nullifier = sw.nullifier();
+        nullifiers_hex.push(hex::encode(nullifier));
+        let anchor = sw.merkle_witness.root;
+        let signature = tsn::crypto::sign(&nullifier, keypair);
+        spends.push(SpendDescriptionV2 {
+            anchor,
+            nullifier,
+            signature,
+            public_key: keypair.public_key_bytes().to_vec(),
+        });
+    }
+
+    // Build output descriptions
+    let mut outputs = Vec::new();
+    let rc = NoteCommitmentPQ::commit(amount_base, &recipient_pk_hash, &recipient_randomness);
+    let re = encrypt_note_pq(amount_base, &recipient_pk_hash, &recipient_randomness);
+    outputs.push(OutputDescriptionV2 {
+        note_commitment: rc.to_bytes(),
+        encrypted_note: re,
+    });
+    if let Some(cr) = change_randomness {
+        let cc = NoteCommitmentPQ::commit(change, &pk_hash, &cr);
+        let ce = encrypt_note_pq(change, &pk_hash, &cr);
+        outputs.push(OutputDescriptionV2 {
+            note_commitment: cc.to_bytes(),
+            encrypted_note: ce,
+        });
+    }
+
+    // Assemble + submit
+    let tx = ShieldedTransactionV2::new(spends, outputs, fee_base, proof);
+    let tx_hash = hex::encode(tx.hash());
+    let submit_body = serde_json::json!({ "transaction": tx });
+    let resp = post_json_with_429_backoff(
+        client,
+        &format!("{}/tx/v2", node_url),
+        &submit_body,
+        &format!("submit tx {}", &tx_hash[..16]),
+    ).await?;
+    if !resp.status().is_success() {
+        let err = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Transaction rejected: {}", err);
+    }
+
+    // Relay directly to seeds for faster propagation
+    let seeds = config::get_seed_nodes();
+    let tx_json = serde_json::json!({ "transaction": tx });
+    for seed in &seeds {
+        let url = format!("{}/tx/v2", seed);
+        let _ = client.post(&url).json(&tx_json).send().await;
+    }
+
+    Ok((tx_hash, nullifiers_hex))
+}
+
+/// Poll /nullifiers/check until all given nullifiers appear as spent on the
+/// chain's nullifier_set (= tx has been mined into a block). Blocks up to
+/// `timeout`. Errors on timeout.
+async fn wait_nullifiers_mined(
+    nullifiers_hex: &[String],
+    node_url: &str,
+    client: &reqwest::Client,
+    timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    let check_url = format!("{}/nullifiers/check", node_url);
+    let deadline = std::time::Instant::now() + timeout;
+    let nf_set: std::collections::HashSet<&str> =
+        nullifiers_hex.iter().map(|s| s.as_str()).collect();
+    while std::time::Instant::now() < deadline {
+        let resp = client.post(&check_url)
+            .json(&serde_json::json!({"nullifiers": nullifiers_hex}))
+            .timeout(std::time::Duration::from_secs(10))
+            .send().await;
+        if let Ok(resp) = resp {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    if let Some(spent_arr) = body["spent"].as_array() {
+                        let spent: std::collections::HashSet<&str> = spent_arr.iter()
+                            .filter_map(|s| s.as_str())
+                            .collect();
+                        if nf_set.iter().all(|n| spent.contains(n)) {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
+    anyhow::bail!("Timeout waiting for tx confirmation ({}s)", timeout.as_secs())
+}
+
+/// Auto-consolidate small notes into larger ones until the greedy selection
+/// for `total_needed` fits within CONSOLIDATION_BATCH (9) spends. Each round
+/// is a self-send that takes the 9 smallest unspent notes and folds them into
+/// one bigger note. Waits for confirmation and rescans between rounds.
+async fn auto_consolidate(
+    wallet: &mut tsn::wallet::ShieldedWallet,
+    wallet_path: &str,
+    node_url: &str,
+    fee_base: u64,
+    total_needed: u64,
+    client: &reqwest::Client,
+) -> anyhow::Result<usize> {
+    let cyan = "\x1b[1;36m";
+    let reset = "\x1b[0m";
+    let multiplier = 10u64.pow(config::COIN_DECIMALS);
+    let self_pk = wallet.pk_hash();
+    let max_rounds = 200usize;
+    let mut round = 0usize;
+    // v2.3.1: positions of orphan notes discovered during a send attempt.
+    // These notes are filtered out of all subsequent batch selections.
+    let mut bad_positions: std::collections::HashSet<u64> =
+        std::collections::HashSet::new();
+
+    loop {
+        // Count notes needed for the final send (greedy), excluding orphans.
+        let (count, _) = {
+            let unspent = wallet.unspent_notes();
+            let mut sorted: Vec<&tsn::wallet::WalletNote> = unspent.iter()
+                .copied()
+                .filter(|n| !bad_positions.contains(&n.position))
+                .collect();
+            sorted.sort_by(|a, b| b.note.value.cmp(&a.note.value));
+            let mut acc = 0u64;
+            let mut c = 0usize;
+            for n in &sorted {
+                if acc >= total_needed { break; }
+                acc += n.note.value;
+                c += 1;
+            }
+            (c, acc)
+        };
+        if count <= CONSOLIDATION_BATCH {
+            return Ok(round);
+        }
+
+        // Take the CONSOLIDATION_BATCH smallest unspent notes, excluding orphans.
+        let batch: Vec<tsn::wallet::WalletNote> = {
+            let unspent = wallet.unspent_notes();
+            let mut sorted: Vec<tsn::wallet::WalletNote> = unspent.iter()
+                .filter(|n| !bad_positions.contains(&n.position))
+                .map(|n| (*n).clone())
+                .collect();
+            sorted.sort_by(|a, b| a.note.value.cmp(&b.note.value));
+            sorted.into_iter().take(CONSOLIDATION_BATCH).collect()
+        };
+        if batch.len() < 2 {
+            anyhow::bail!("Not enough unspent notes to consolidate (have {}, need ≥ 2).", batch.len());
+        }
+        let batch_sum: u64 = batch.iter().map(|n| n.note.value).sum();
+        if batch_sum <= fee_base {
+            anyhow::bail!(
+                "Consolidation batch value {} is not larger than fee {}.",
+                batch_sum, fee_base
+            );
+        }
+        let consolidation_amount = batch_sum - fee_base;
+
+        println!(
+            "  {}Consolidation {}{}: {} notes ({:.4} TSN) → 1 note ({:.4} TSN)",
+            cyan, round + 1, reset, batch.len(),
+            batch_sum as f64 / multiplier as f64,
+            consolidation_amount as f64 / multiplier as f64,
+        );
+        eprint!("    proving + submitting... ");
+        let (tx_hash, nullifiers) = match send_single_tx(
+            &batch, consolidation_amount, fee_base, self_pk, wallet, node_url, client,
+        ).await {
+            Ok(r) => r,
+            Err(e) => {
+                let orphans = parse_orphan_positions(&e.to_string());
+                if !orphans.is_empty() {
+                    eprintln!("orphan notes detected, retrying without them");
+                    for p in &orphans {
+                        bad_positions.insert(*p);
+                        eprintln!("    ⚠ excluding orphan note at position {}", p);
+                    }
+                    continue;
+                }
+                return Err(e);
+            }
+        };
+        eprintln!("tx {} submitted", &tx_hash[..16]);
+        eprint!("    waiting for mining... ");
+        wait_nullifiers_mined(
+            &nullifiers, node_url, client,
+            std::time::Duration::from_secs(180),
+        ).await?;
+        eprintln!("confirmed");
+
+        // Rescan to ingest the new big note (and mark consumed notes as spent).
+        try_scan_via_api(wallet, node_url, wallet_path).await;
+
+        round += 1;
+        if round >= max_rounds {
+            anyhow::bail!("Too many consolidation rounds ({}); aborting to avoid loop.", round);
+        }
+    }
+}
+
+async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee: f64) -> anyhow::Result<()> {
     let green = "\x1b[1;32m";
     let cyan = "\x1b[1;36m";
     let reset = "\x1b[0m";
@@ -1507,8 +1978,7 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
     let fee_base = (fee * multiplier as f64) as u64;
     let total_needed = amount_base + fee_base;
 
-    // Load and scan wallet
-    // Acquire exclusive lock to prevent race with mining process
+    // Load and scan wallet (exclusive lock vs mining)
     let _lock = WalletLock::acquire(wallet_path)?;
     let mut wallet = ShieldedWallet::open(wallet_path)
         .or_else(|_| ShieldedWallet::load(wallet_path))?;
@@ -1520,7 +1990,6 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
     println!("  Balance:   {}{:.4} TSN{}", green, balance as f64 / multiplier as f64, reset);
     println!("  Sending:   {}{:.4} TSN{} to {}...{}", cyan, amount, reset, &to[..8], &to[56..]);
     println!("  Fee:       {:.4} TSN", fee);
-
     if balance < total_needed {
         anyhow::bail!("Insufficient balance: have {:.4} TSN, need {:.4} TSN",
             balance as f64 / multiplier as f64,
@@ -1528,7 +1997,11 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         );
     }
 
-    // Check PQ nullifiers against the node to filter already-spent notes
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    // Filter already-spent notes by checking nullifiers against the node
     {
         let nk_bytes = wallet.nullifier_key_bytes();
         let mut nullifier_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1547,9 +2020,6 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
             }
         }
         if !nullifier_hexes.is_empty() {
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()?;
             let check_url = format!("{}/nullifiers/check", node_url);
             if let Ok(resp) = client.post(&check_url)
                 .json(&serde_json::json!({"nullifiers": nullifier_hexes}))
@@ -1579,202 +2049,131 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         }
     }
 
-    // Select notes (greedy: largest first)
-    let unspent = wallet.unspent_notes();
-    let mut selected = Vec::new();
-    let mut selected_total = 0u64;
+    // Count notes required for the final send. If > CONSOLIDATION_BATCH,
+    // auto-consolidate first so the user only sees one recipient-facing tx.
+    let needed_count: usize = {
+        let unspent = wallet.unspent_notes();
+        let mut sorted: Vec<&tsn::wallet::WalletNote> = unspent.iter().copied().collect();
+        sorted.sort_by(|a, b| b.note.value.cmp(&a.note.value));
+        let mut acc = 0u64;
+        let mut c = 0usize;
+        for n in &sorted {
+            if acc >= total_needed { break; }
+            acc += n.note.value;
+            c += 1;
+        }
+        c
+    };
 
-    let mut sorted: Vec<_> = unspent.iter().collect();
-    sorted.sort_by(|a, b| b.note.value.cmp(&a.note.value));
-
-    for note in sorted {
-        if selected_total >= total_needed { break; }
-        selected.push(note);
-        selected_total += note.note.value;
+    if needed_count > CONSOLIDATION_BATCH {
+        println!();
+        println!(
+            "  {}Auto-consolidation required{}: {} notes needed, max {} per tx.",
+            cyan, reset, needed_count, CONSOLIDATION_BATCH
+        );
+        let rounds = auto_consolidate(
+            &mut wallet, wallet_path, node_url, fee_base, total_needed, &client,
+        ).await?;
+        println!("  Consolidation complete ({} rounds).", rounds);
+        println!();
     }
 
-    let change = selected_total - total_needed;
-    println!("  Notes:     {} selected ({:.4} TSN, change: {:.4} TSN)",
-        selected.len(),
-        selected_total as f64 / multiplier as f64,
-        change as f64 / multiplier as f64
-    );
-
-    // Get merkle witnesses from node
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-
-    let nullifier_key = wallet.nullifier_key_bytes();
-    let pk_hash = wallet.pk_hash();
-    let keypair = wallet.keypair();
-
-    let mut spend_witnesses = Vec::new();
-    for note in &selected {
-        let pos = note.position;
-        let url = format!("{}/witness/v2/position/{}", node_url, pos);
-        let resp = client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            anyhow::bail!("Failed to get witness for position {}: HTTP {}", pos, resp.status());
-        }
-
-        // Parse witness manually (API returns hex strings, not raw bytes)
-        let v: serde_json::Value = resp.json().await?;
-        let root_hex = v["root"].as_str().unwrap_or("");
-        let mut root = [0u8; 32];
-        if let Ok(bytes) = hex::decode(root_hex) {
-            if bytes.len() == 32 { root.copy_from_slice(&bytes); }
-        }
-        let empty = vec![];
-        let path_arr = v["path"].as_array().unwrap_or(&empty);
-        let indices_arr = v["indices"].as_array().unwrap_or(&empty);
-        let siblings: Vec<[u8; 32]> = path_arr.iter().filter_map(|s| {
-            let h = s.as_str()?;
-            let b = hex::decode(h).ok()?;
-            if b.len() == 32 { let mut a = [0u8;32]; a.copy_from_slice(&b); Some(a) } else { None }
-        }).collect();
-        let indices: Vec<u8> = indices_arr.iter().filter_map(|i| i.as_u64().map(|n| n as u8)).collect();
-
-        let witness = tsn::crypto::pq::merkle_pq::MerkleWitnessPQ {
-            path: tsn::crypto::pq::merkle_pq::MerklePathPQ { siblings, indices },
-            position: pos,
-            root,
-        };
-
-        // Get PQ randomness (required for V2 spending)
-        let randomness = match note.pq_randomness {
-            Some(r) => r,
-            None => {
-                // Fallback: try to derive from Fr randomness (may not work)
-                let mut r = [0u8; 32];
-                use ark_serialize::CanonicalSerialize;
-                note.note.randomness.serialize_compressed(&mut r[..]).ok();
-                r
-            }
-        };
-
-        // v2.3.0 wallet fix: resolve the PQ commitment with a server-provided
-        // fallback. Old wallets (pre-v2 JSON, V1 tx outputs, or legacy scan
-        // paths) may have `pq_commitment = None` which makes the witness
-        // verification impossible. The node already returns the actual leaf
-        // in the witness response; trust it exactly as we trust the merkle
-        // path (failure downstream if the node lies, no funds at risk).
-        let server_leaf_hex = v["leaf"].as_str();
-        let stored_pq_cm = resolve_pq_commitment(note.pq_commitment, server_leaf_hex, pos)?;
-        if !witness.verify(&tsn::crypto::pq::commitment_pq::NoteCommitmentPQ(stored_pq_cm)) {
+    // Final greedy-select after any consolidation. v2.3.1: retry loop that
+    // excludes orphan notes discovered mid-proof if the final selection still
+    // happens to contain one.
+    let mut final_bad_positions: std::collections::HashSet<u64> =
+        std::collections::HashSet::new();
+    let max_final_retries = 20usize;
+    let mut final_attempt = 0usize;
+    let (tx_hash, _nullifiers, selected_total) = loop {
+        final_attempt += 1;
+        if final_attempt > max_final_retries {
             anyhow::bail!(
-                "Merkle witness verification failed for note at position {}. \
-                 The commitment in your wallet does not match the merkle tree. \
-                 Try rescanning your wallet (delete notes and set last_scanned_height to 0).",
-                pos
+                "Final send aborted after {} retries with orphan notes — \
+                 wallet state is deeply inconsistent, please rescan.",
+                max_final_retries
             );
         }
 
-        spend_witnesses.push(SpendWitnessPQ {
-            value: note.note.value,
-            recipient_pk_hash: note.note.recipient_pk_hash,
-            randomness,
-            nullifier_key,
-            position: pos,
-            merkle_witness: witness,
-        });
-    }
+        let selected: Vec<tsn::wallet::WalletNote> = {
+            let unspent = wallet.unspent_notes();
+            let mut sorted: Vec<&tsn::wallet::WalletNote> = unspent.iter()
+                .copied()
+                .filter(|n| !final_bad_positions.contains(&n.position))
+                .collect();
+            sorted.sort_by(|a, b| b.note.value.cmp(&a.note.value));
+            let mut out: Vec<tsn::wallet::WalletNote> = Vec::new();
+            let mut acc = 0u64;
+            for n in &sorted {
+                if acc >= total_needed { break; }
+                out.push((*n).clone());
+                acc += n.note.value;
+            }
+            out
+        };
+        if selected.len() > CONSOLIDATION_BATCH {
+            anyhow::bail!(
+                "After consolidation, still need {} notes (max {}). Unexpected.",
+                selected.len(), CONSOLIDATION_BATCH
+            );
+        }
+        let selected_total: u64 = selected.iter().map(|n| n.note.value).sum();
+        if selected_total < total_needed {
+            anyhow::bail!(
+                "Insufficient spendable notes after excluding orphans: have {} TSN, need {} TSN",
+                selected_total as f64 / multiplier as f64,
+                total_needed as f64 / multiplier as f64
+            );
+        }
+        let change = selected_total - total_needed;
+        if final_attempt == 1 {
+            println!(
+                "  Notes:     {} selected ({:.4} TSN, change: {:.4} TSN)",
+                selected.len(),
+                selected_total as f64 / multiplier as f64,
+                change as f64 / multiplier as f64
+            );
+        } else {
+            println!(
+                "  Notes:     {} re-selected attempt {} ({:.4} TSN, change: {:.4} TSN)",
+                selected.len(), final_attempt,
+                selected_total as f64 / multiplier as f64,
+                change as f64 / multiplier as f64
+            );
+        }
 
-    // Build output witnesses
-    let mut rng = rand::thread_rng();
-    let mut output_witnesses = Vec::new();
-
-    let mut recipient_randomness = [0u8; 32];
-    rng.fill_bytes(&mut recipient_randomness);
-    output_witnesses.push(OutputWitnessPQ {
-        value: amount_base,
-        recipient_pk_hash,
-        randomness: recipient_randomness,
-    });
-
-    let mut change_randomness = None;
-    if change > 0 {
-        let mut cr = [0u8; 32];
-        rng.fill_bytes(&mut cr);
-        output_witnesses.push(OutputWitnessPQ {
-            value: change,
-            recipient_pk_hash: pk_hash,
-            randomness: cr,
-        });
-        change_randomness = Some(cr);
-    }
-
-    // Generate Plonky2 proof
-    eprint!("  Proof:     generating...");
-    let prover = TransactionProver::new();
-    let proof = prover.prove(&spend_witnesses, &output_witnesses, fee_base)
-        .map_err(|e| anyhow::anyhow!("Proof generation failed: {}", e))?;
-    eprintln!(" done ({} bytes)", proof.size());
-
-    // Build spend descriptions (sign with ML-DSA-65)
-    let mut spends = Vec::new();
-    for sw in &spend_witnesses {
-        let nullifier = sw.nullifier();
-        let anchor = sw.merkle_witness.root;
-        let signature = tsn::crypto::sign(&nullifier, keypair);
-        spends.push(SpendDescriptionV2 {
-            anchor,
-            nullifier,
-            signature,
-            public_key: keypair.public_key_bytes().to_vec(),
-        });
-    }
-
-    // Build output descriptions
-    let mut outputs = Vec::new();
-    let rc = NoteCommitmentPQ::commit(amount_base, &recipient_pk_hash, &recipient_randomness);
-    let re = encrypt_note_pq(amount_base, &recipient_pk_hash, &recipient_randomness);
-    outputs.push(OutputDescriptionV2 {
-        note_commitment: rc.to_bytes(),
-        encrypted_note: re,
-    });
-
-    if let Some(cr) = change_randomness {
-        let cc = NoteCommitmentPQ::commit(change, &pk_hash, &cr);
-        let ce = encrypt_note_pq(change, &pk_hash, &cr);
-        outputs.push(OutputDescriptionV2 {
-            note_commitment: cc.to_bytes(),
-            encrypted_note: ce,
-        });
-    }
-
-    // Assemble and submit transaction
-    let tx = ShieldedTransactionV2::new(spends, outputs, fee_base, proof);
-    let tx_hash = hex::encode(tx.hash());
-
-    eprint!("  Submit:    sending...");
-
-    // Submit to local node
-    let resp = client.post(&format!("{}/tx/v2", node_url))
-        .json(&serde_json::json!({ "transaction": tx }))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let err = resp.text().await.unwrap_or_default();
-        eprintln!(" FAILED");
-        anyhow::bail!("Transaction rejected: {}", err);
-    }
-
-    // Also relay directly to seed nodes for faster propagation
-    let seeds = config::get_seed_nodes();
-    let tx_json = serde_json::json!({ "transaction": tx });
-    for seed in &seeds {
-        let url = format!("{}/tx/v2", seed);
-        let _ = client.post(&url).json(&tx_json).send().await;
-    }
-
-    eprintln!(" {}confirmed!{} (relayed to {} seeds)", green, reset, seeds.len());
+        eprint!("  Proof:     generating... ");
+        match send_single_tx(
+            &selected, amount_base, fee_base, recipient_pk_hash, &wallet, node_url, &client,
+        ).await {
+            Ok((tx_hash, nullifiers)) => {
+                break (tx_hash, nullifiers, selected_total);
+            }
+            Err(e) => {
+                let orphans = parse_orphan_positions(&e.to_string());
+                if !orphans.is_empty() {
+                    eprintln!("orphan notes detected, retrying without them");
+                    for p in &orphans {
+                        final_bad_positions.insert(*p);
+                        eprintln!("  ⚠ excluding orphan note at position {}", p);
+                    }
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    };
+    let _ = selected_total;
+    eprintln!("done");
+    let seeds_n = config::get_seed_nodes().len();
+    eprintln!(
+        "  Submit:    {}confirmed!{} (relayed to {} seeds)",
+        green, reset, seeds_n
+    );
     println!();
     println!("  {}TX: {}{}", green, tx_hash, reset);
     println!();
 
-    // Record TX in wallet history
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1785,7 +2184,7 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         amount: amount_base,
         fee: fee_base,
         counterparty: to.to_string(),
-        height: 0, // will be updated when mined
+        height: 0,
         timestamp: now,
     });
     if let Err(e) = wallet.save(wallet_path) {
@@ -4366,12 +4765,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_pq_commitment_uses_stored_when_present() {
+    fn resolve_pq_commitment_returns_stored_when_server_agrees() {
+        // Happy path: stored and server report the same real commitment.
+        let shared = [7u8; 32];
+        let got = resolve_pq_commitment(Some(shared), Some(&hex::encode(shared)), 42)
+            .expect("agreeing values should succeed");
+        assert_eq!(got, shared);
+    }
+
+    #[test]
+    fn resolve_pq_commitment_bails_orphan_when_stored_and_server_differ() {
+        // v2.3.1 orphan detection: wallet and chain disagree on a real leaf
+        // at this position. The wallet's note is stale (the block that minted
+        // it was reorg'd out). Callers must detect ORPHANED_NOTE in the error
+        // string and skip the note from their spend selection.
         let stored = [7u8; 32];
-        // Server leaf is intentionally different: stored value must win.
-        let got = resolve_pq_commitment(Some(stored), Some("ff".repeat(32).as_str()), 42)
-            .expect("stored value should be returned");
+        let server_leaf = [0xffu8; 32];
+        let err = resolve_pq_commitment(Some(stored), Some(&hex::encode(server_leaf)), 2956)
+            .expect_err("mismatch must bail as orphan");
+        let msg = format!("{}", err);
+        assert!(msg.contains(ORPHANED_NOTE_MARKER), "error must carry the orphan marker: {msg}");
+        assert!(msg.contains("position 2956"), "error must identify the position: {msg}");
+    }
+
+    #[test]
+    fn resolve_pq_commitment_trusts_stored_when_server_returns_placeholder() {
+        // v2.3.1: fast-sync blind zone returns an all-zeros placeholder. Trust
+        // the wallet's stored value — the STARK circuit will cross-check that
+        // the note data actually hashes to it at spend time.
+        let stored = [7u8; 32];
+        let placeholder = "0".repeat(64);
+        let got = resolve_pq_commitment(Some(stored), Some(&placeholder), 42)
+            .expect("stored should be used when server leaf is placeholder");
         assert_eq!(got, stored);
+    }
+
+    #[test]
+    fn resolve_pq_commitment_trusts_stored_when_server_has_no_leaf() {
+        // Old node binary that does not return a "leaf" field at all. Trust
+        // the wallet's stored value.
+        let stored = [0xabu8; 32];
+        let got = resolve_pq_commitment(Some(stored), None, 7)
+            .expect("stored should be used when server leaf is absent");
+        assert_eq!(got, stored);
+    }
+
+    #[test]
+    fn resolve_pq_commitment_bails_when_both_placeholder_and_stored_missing() {
+        // If the server leaf is a placeholder and the wallet has no stored
+        // value, there is nothing usable to build the witness — bail.
+        let placeholder = "0".repeat(64);
+        let err = resolve_pq_commitment(None, Some(&placeholder), 99)
+            .expect_err("placeholder + no stored must bail");
+        let msg = format!("{}", err);
+        assert!(msg.contains("position 99"));
     }
 
     #[test]

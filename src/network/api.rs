@@ -292,6 +292,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let admin_routes = Router::new()
         .route("/admin/force-resync", post(admin_force_resync))
         .route("/admin/config", get(get_admin_config).post(set_admin_config))
+        .route("/admin/mempool/purge", post(admin_mempool_purge))
         .with_state(state.clone());
 
     // Write + sensitive routes — rate limited to prevent DoS
@@ -3340,6 +3341,69 @@ async fn set_admin_config(
         }
     }
     Ok(Json(serde_json::json!({"error": "Invalid config. Use auto_heal_mode: 'validation' or 'automatic'"})))
+}
+
+/// POST /admin/mempool/purge — Remove a stuck v2 transaction from the mempool.
+/// Also drops the tx from v1 mempool (as fallback) and clears associated
+/// pending_nullifiers so the wallet that produced it can resubmit.
+///
+/// SECURITY: strict loopback only (ConnectInfo, not spoofable x-forwarded-for).
+/// Body: {"hash": "<64 hex chars>"}
+async fn admin_mempool_purge(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if !addr.ip().is_loopback() {
+        return Err((StatusCode::FORBIDDEN, "Endpoint is loopback-only".to_string()));
+    }
+
+    let hash_hex = body.get("hash")
+        .and_then(|v| v.as_str())
+        .ok_or((StatusCode::BAD_REQUEST, "Missing 'hash' field".to_string()))?;
+
+    let mut hash = [0u8; 32];
+    hex::decode_to_slice(hash_hex, &mut hash)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid hash — must be 64 hex chars".to_string()))?;
+
+    let mut mempool = state.mempool.write().unwrap_or_else(|e| e.into_inner());
+    let count_before = mempool.len();
+
+    tracing::warn!(
+        "ADMIN: /admin/mempool/purge called for tx {} — mempool count before: {}",
+        &hash_hex[..16], count_before
+    );
+
+    let (variant, nullifier_count) = if let Some(tx) = mempool.remove_v2(&hash) {
+        ("v2", tx.nullifiers().len())
+    } else if let Some(tx) = mempool.remove(&hash) {
+        ("v1", tx.nullifiers().len())
+    } else {
+        tracing::warn!("ADMIN: /admin/mempool/purge — tx {} not found in mempool", &hash_hex[..16]);
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "removed": false,
+            "reason": "not_in_mempool",
+            "hash": hash_hex,
+            "mempool_count": count_before,
+        })));
+    };
+
+    let count_after = mempool.len();
+    tracing::warn!(
+        "ADMIN: purged {} tx {} — {} nullifiers cleared from pending set — mempool count: {} -> {}",
+        variant, &hash_hex[..16], nullifier_count, count_before, count_after
+    );
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "removed": true,
+        "variant": variant,
+        "hash": hash_hex,
+        "nullifiers_cleared": nullifier_count,
+        "mempool_count_before": count_before,
+        "mempool_count_after": count_after,
+    })))
 }
 
 /// Check if an IP is localhost or private network (for admin endpoint protection)
