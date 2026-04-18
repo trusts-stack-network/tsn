@@ -1813,6 +1813,93 @@ async fn send_single_tx(
     Ok((tx_hash, nullifiers_hex))
 }
 
+/// v2.3.3: pre-validate the wallet's unspent notes against the node's Merkle
+/// tree. Returns the positions of notes whose stored `pq_commitment` no longer
+/// matches the server's leaf at that position — i.e. notes that were
+/// orphaned by a chain reorg since the last wallet scan.
+///
+/// Called at the top of `cmd_send` to seed the `bad_positions` set, so
+/// auto-consolidation and the final send both skip orphan notes from their
+/// first batch instead of wasting a full proof attempt discovering them.
+///
+/// The check is sequential and goes through `get_with_429_backoff` to respect
+/// node rate limiting. For very large wallets (hundreds of notes) it can take
+/// tens of seconds — acceptable because without it every send would hit the
+/// same per-round orphan discovery anyway.
+async fn pre_validate_orphan_positions(
+    wallet: &tsn::wallet::ShieldedWallet,
+    node_url: &str,
+    client: &reqwest::Client,
+) -> std::collections::HashSet<u64> {
+    let placeholder = "0".repeat(64);
+    let candidates: Vec<(u64, [u8; 32])> = wallet
+        .notes()
+        .iter()
+        .filter(|n| !n.is_spent)
+        .filter_map(|n| n.pq_commitment.map(|c| (n.position, c)))
+        .collect();
+
+    if candidates.is_empty() {
+        return std::collections::HashSet::new();
+    }
+
+    eprint!("  Validating {} note witness(es)... ", candidates.len());
+    let mut orphans = std::collections::HashSet::new();
+    let mut checked = 0usize;
+    for (pos, stored) in candidates {
+        let url = format!("{}/witness/v2/position/{}", node_url, pos);
+        let resp = match get_with_429_backoff(
+            client,
+            &url,
+            &format!("validate pos {}", pos),
+        ).await {
+            Ok(r) => r,
+            Err(_) => {
+                // If we cannot reach the node for this note, be conservative
+                // and do not flag it as orphan — the normal send path will
+                // catch genuine mismatches later via resolve_pq_commitment.
+                continue;
+            }
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let body: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let leaf_hex = match body["leaf"].as_str() {
+            Some(s) => s.trim().to_string(),
+            None => continue,
+        };
+        if leaf_hex.is_empty() || leaf_hex == placeholder {
+            // Placeholder leaf (fast-sync blind zone) — trust the wallet's
+            // stored value, not an orphan.
+            continue;
+        }
+        let leaf_bytes = match hex::decode(&leaf_hex) {
+            Ok(b) if b.len() == 32 => b,
+            _ => continue,
+        };
+        let mut leaf_arr = [0u8; 32];
+        leaf_arr.copy_from_slice(&leaf_bytes);
+        if leaf_arr != stored {
+            orphans.insert(pos);
+        }
+        checked += 1;
+    }
+
+    if orphans.is_empty() {
+        eprintln!("done ({} checked, all valid)", checked);
+    } else {
+        eprintln!(
+            "done ({} checked, {} orphan(s) detected)",
+            checked, orphans.len()
+        );
+    }
+    orphans
+}
+
 /// Poll /nullifiers/check until all given nullifiers appear as spent on the
 /// chain's nullifier_set (= tx has been mined into a block). Blocks up to
 /// `timeout`. Errors on timeout.
@@ -1861,6 +1948,7 @@ async fn auto_consolidate(
     fee_base: u64,
     total_needed: u64,
     client: &reqwest::Client,
+    initial_bad_positions: std::collections::HashSet<u64>,
 ) -> anyhow::Result<usize> {
     let cyan = "\x1b[1;36m";
     let reset = "\x1b[0m";
@@ -1870,8 +1958,9 @@ async fn auto_consolidate(
     let mut round = 0usize;
     // v2.3.1: positions of orphan notes discovered during a send attempt.
     // These notes are filtered out of all subsequent batch selections.
-    let mut bad_positions: std::collections::HashSet<u64> =
-        std::collections::HashSet::new();
+    // v2.3.3: seed with positions flagged by pre_validate_orphan_positions
+    // so the very first batch already excludes them.
+    let mut bad_positions: std::collections::HashSet<u64> = initial_bad_positions;
 
     loop {
         // Count notes needed for the final send (greedy), excluding orphans.
@@ -2061,11 +2150,50 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         }
     }
 
-    // Count notes required for the final send. If > CONSOLIDATION_BATCH,
-    // auto-consolidate first so the user only sees one recipient-facing tx.
+    // v2.3.3: pre-validate unspent note witnesses against the node. Flags
+    // notes that were orphaned by chain reorgs since the last scan, so both
+    // auto_consolidate and the final send skip them from their first batch
+    // instead of wasting a proof attempt discovering them round by round.
+    let pre_orphan_positions = pre_validate_orphan_positions(&wallet, node_url, &client).await;
+
+    // Spendable balance check, after subtracting pre-detected orphans. This
+    // is informational; the actual selection re-checks in both auto_consolidate
+    // and the final send loop.
+    if !pre_orphan_positions.is_empty() {
+        let orphan_value: u64 = wallet.notes().iter()
+            .filter(|n| !n.is_spent && pre_orphan_positions.contains(&n.position))
+            .map(|n| n.note.value)
+            .sum();
+        let spendable = balance.saturating_sub(orphan_value);
+        println!(
+            "  Spendable: {}{:.4} TSN{} ({} orphan note(s) excluded, {:.4} TSN stuck)",
+            green,
+            spendable as f64 / multiplier as f64,
+            reset,
+            pre_orphan_positions.len(),
+            orphan_value as f64 / multiplier as f64,
+        );
+        if spendable < total_needed {
+            anyhow::bail!(
+                "Insufficient spendable balance after excluding {} orphan note(s): \
+                 have {:.4} TSN, need {:.4} TSN. Run `./tsn` menu 4 (Rescan wallet) \
+                 to refresh the wallet state.",
+                pre_orphan_positions.len(),
+                spendable as f64 / multiplier as f64,
+                total_needed as f64 / multiplier as f64,
+            );
+        }
+    }
+
+    // Count notes required for the final send, excluding pre-detected orphans.
+    // If > CONSOLIDATION_BATCH, auto-consolidate first so the user only sees
+    // one recipient-facing tx.
     let needed_count: usize = {
         let unspent = wallet.unspent_notes();
-        let mut sorted: Vec<&tsn::wallet::WalletNote> = unspent.iter().copied().collect();
+        let mut sorted: Vec<&tsn::wallet::WalletNote> = unspent.iter()
+            .copied()
+            .filter(|n| !pre_orphan_positions.contains(&n.position))
+            .collect();
         sorted.sort_by(|a, b| b.note.value.cmp(&a.note.value));
         let mut acc = 0u64;
         let mut c = 0usize;
@@ -2085,6 +2213,7 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         );
         let rounds = auto_consolidate(
             &mut wallet, wallet_path, node_url, fee_base, total_needed, &client,
+            pre_orphan_positions.clone(),
         ).await?;
         println!("  Consolidation complete ({} rounds).", rounds);
         println!();
@@ -2092,9 +2221,9 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
 
     // Final greedy-select after any consolidation. v2.3.1: retry loop that
     // excludes orphan notes discovered mid-proof if the final selection still
-    // happens to contain one.
-    let mut final_bad_positions: std::collections::HashSet<u64> =
-        std::collections::HashSet::new();
+    // happens to contain one. v2.3.3: seed the exclusion set with positions
+    // already flagged by pre_validate_orphan_positions above.
+    let mut final_bad_positions: std::collections::HashSet<u64> = pre_orphan_positions;
     let max_final_retries = 20usize;
     let mut final_attempt = 0usize;
     let (tx_hash, _nullifiers, selected_total) = loop {
