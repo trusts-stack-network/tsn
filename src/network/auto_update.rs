@@ -936,21 +936,21 @@ mod tests {
 
         assert!(get_latest_peer_version().is_none());
 
-        // Same version as LOCAL_VERSION is NOT stored (not strictly newer)
-        notify_peer_version("2.2.0");
+        // Versions <= LOCAL_VERSION are NOT stored (not strictly newer)
+        notify_peer_version("0.0.1");
         assert_eq!(get_latest_peer_version(), None);
 
         // Only versions strictly newer than LOCAL_VERSION are stored
-        notify_peer_version("2.3.0");
-        assert_eq!(get_latest_peer_version(), Some("2.3.0".to_string()));
+        notify_peer_version("99.0.0");
+        assert_eq!(get_latest_peer_version(), Some("99.0.0".to_string()));
 
         // Higher version replaces
-        notify_peer_version("3.0.0");
-        assert_eq!(get_latest_peer_version(), Some("3.0.0".to_string()));
+        notify_peer_version("99.1.0");
+        assert_eq!(get_latest_peer_version(), Some("99.1.0".to_string()));
 
-        // Lower version does NOT replace
-        notify_peer_version("2.5.0");
-        assert_eq!(get_latest_peer_version(), Some("3.0.0".to_string()));
+        // Lower (but still > LOCAL_VERSION) does NOT replace current latest
+        notify_peer_version("99.0.5");
+        assert_eq!(get_latest_peer_version(), Some("99.1.0".to_string()));
     }
 
     #[test]

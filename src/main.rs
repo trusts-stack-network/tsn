@@ -1418,16 +1418,50 @@ async fn cmd_balance(wallet_path: &str, node_url: &str) -> anyhow::Result<()> {
     let balance_coins = balance_raw as f64 / divisor as f64;
     let green = "\x1b[1;32m";
     let cyan = "\x1b[1;36m";
+    let yellow = "\x1b[1;33m";
     let reset = "\x1b[0m";
 
-    println!();
-    println!("  Address:  {}", hex::encode(wallet.pk_hash()));
-    if balance_raw > 0 {
-        println!("  Balance:  {}{:.4} TSN{} ({} notes)", green, balance_coins, reset, wallet.note_count());
+    // v2.3.4: pre-validate unspent note witnesses against the node's Merkle
+    // tree so orphan (reorg'd-out) notes are surfaced here as Stuck instead
+    // of only being discovered at send-time. Best-effort: if the node is
+    // unreachable we fall back to the legacy single-line display.
+    let orphan_positions = if api_ok {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default();
+        pre_validate_orphan_positions(&wallet, node_url, &client).await
     } else {
-        println!("  Balance:  0 TSN");
+        std::collections::HashSet::new()
+    };
+
+    let (stuck_raw, spendable_raw) = if orphan_positions.is_empty() {
+        (0u64, balance_raw)
+    } else {
+        let stuck: u64 = wallet
+            .notes()
+            .iter()
+            .filter(|n| !n.is_spent && orphan_positions.contains(&n.position))
+            .map(|n| n.note.value)
+            .sum();
+        (stuck, balance_raw.saturating_sub(stuck))
+    };
+
+    println!();
+    println!("  Address:   {}", hex::encode(wallet.pk_hash()));
+    if balance_raw > 0 {
+        let total_coins = balance_coins;
+        let spendable_coins = spendable_raw as f64 / divisor as f64;
+        let stuck_coins = stuck_raw as f64 / divisor as f64;
+        println!("  Total:     {}{:.4} TSN{} ({} notes)", green, total_coins, reset, wallet.note_count());
+        if stuck_raw > 0 {
+            println!("  Spendable: {}{:.4} TSN{}", green, spendable_coins, reset);
+            println!("  Stuck:     {}{:.4} TSN{} ({} orphan note(s) from chain reorg)", yellow, stuck_coins, reset, orphan_positions.len());
+        }
+    } else {
+        println!("  Balance:   0 TSN");
     }
-    println!("  Scanned:  height {}", wallet.last_scanned_height());
+    println!("  Scanned:   height {}", wallet.last_scanned_height());
 
     if new_notes > 0 {
         println!("  {}+{} new notes found{} (from {})", cyan, new_notes, reset, scan_source);
@@ -2716,6 +2750,13 @@ async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>) {
         manifest.height, &manifest.snapshot_sha256[..16], manifest.snapshot_size_bytes / 1024
     );
 
+    // v2.3.4: Persist snapshot + manifest to disk so they survive process restarts.
+    // Retention: 24h (~2880 blocks @ 30s). Older snapshots are pruned by mtime.
+    {
+        let data_dir = std::path::PathBuf::from(tsn::config::get_data_dir());
+        persist_snapshot_to_disk(&data_dir, height, &compressed, &manifest).await;
+    }
+
     // Store in snapshot cache for coherent /snapshot/download
     {
         let cache_hash = manifest.block_hash.clone();
@@ -2780,6 +2821,83 @@ async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>) {
         .iter().find(|m| m.height == manifest.height)
         .map(|m| m.valid_confirmation_count()).unwrap_or(0);
     info!("Auto snapshot complete: height={}, {} confirmations", manifest.height, final_confs);
+}
+
+/// Persist a signed snapshot and its manifest to `<data_dir>/snapshots/`.
+/// Applies a 24h retention policy by mtime. Errors are logged but non-fatal
+/// (cache in RAM remains authoritative for `/snapshot/download`).
+async fn persist_snapshot_to_disk(
+    data_dir: &std::path::Path,
+    height: u64,
+    compressed: &[u8],
+    manifest: &tsn::network::snapshot_manifest::SnapshotManifest,
+) {
+    use tracing::{info, warn};
+    let dir = data_dir.join("snapshots");
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        warn!("Snapshot persistence: failed to create {:?}: {}", dir, e);
+        return;
+    }
+
+    let snap_path = dir.join(format!("snapshot-{}.json.gz", height));
+    let manifest_path = dir.join(format!("snapshot-{}.manifest.json", height));
+
+    if let Err(e) = tokio::fs::write(&snap_path, compressed).await {
+        warn!("Snapshot persistence: failed to write {:?}: {}", snap_path, e);
+        return;
+    }
+    let manifest_bytes = match serde_json::to_vec_pretty(manifest) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("Snapshot persistence: failed to serialize manifest for height {}: {}", height, e);
+            return;
+        }
+    };
+    if let Err(e) = tokio::fs::write(&manifest_path, &manifest_bytes).await {
+        warn!("Snapshot persistence: failed to write {:?}: {}", manifest_path, e);
+        return;
+    }
+    info!(
+        "Snapshot persisted: height={}, path={}, size={}KB",
+        height, snap_path.display(), compressed.len() / 1024
+    );
+
+    // Retention: prune files older than 24h (by mtime).
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(86400));
+    let cutoff = match cutoff {
+        Some(c) => c,
+        None => return,
+    };
+    let mut entries = match tokio::fs::read_dir(&dir).await {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if !name.starts_with("snapshot-") {
+            continue;
+        }
+        let meta = match entry.metadata().await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let modified = match meta.modified() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if modified < cutoff {
+            if let Err(e) = tokio::fs::remove_file(&path).await {
+                warn!("Snapshot retention: failed to delete {:?}: {}", path, e);
+            } else {
+                info!("Snapshot retention: pruned {}", name);
+            }
+        }
+    }
 }
 
 async fn cmd_node(
@@ -3755,6 +3873,24 @@ async fn cmd_node(
                                         }
                                         cache.put(block_hash.clone(), now_secs);
                                     }
+                                    // v2.3.4: capture confirmed tx hashes + nullifiers BEFORE
+                                    // the block is moved into try_add_block, so we can clean
+                                    // the mempool when the block is accepted. Previously the
+                                    // P2P path never cleaned the mempool (only HTTP and the
+                                    // local miner did), which caused miners to keep re-picking
+                                    // already-confirmed V2 txs into block templates and hitting
+                                    // "Nullifier already spent" on every subsequent mine attempt.
+                                    let mut confirmed_tx_hashes: Vec<[u8; 32]> =
+                                        block.transactions.iter().map(|tx| tx.hash()).collect();
+                                    confirmed_tx_hashes.extend(
+                                        block.transactions_v2.iter().map(|tx| tx.hash())
+                                    );
+                                    let mut confirmed_nullifiers: Vec<[u8; 32]> =
+                                        block.nullifiers().iter().map(|n| n.0).collect();
+                                    confirmed_nullifiers.extend(
+                                        block.transactions_v2.iter()
+                                            .flat_map(|tx| tx.spends.iter().map(|s| s.nullifier))
+                                    );
                                     let result = {
                                         // v2.0.9: Take reorg_lock to prevent race with miner
                                         let _reorg_guard = p2p_blockchain.reorg_lock.read().await;
@@ -3764,6 +3900,23 @@ async fn cmd_node(
                                     match result {
                                         Ok(true) => {
                                             info!("P2P: new block #{} accepted", height);
+                                            // v2.3.4: clean mempool of txs now confirmed on-chain.
+                                            // Mirrors the HTTP receive_block + local miner cleanup.
+                                            {
+                                                let mut mempool = p2p_blockchain.mempool
+                                                    .write().unwrap_or_else(|e| e.into_inner());
+                                                mempool.remove_confirmed(&confirmed_tx_hashes);
+                                                mempool.remove_spent_nullifiers(&confirmed_nullifiers);
+                                                let chain_ro = p2p_blockchain.blockchain.read()
+                                                    .unwrap_or_else(|e| e.into_inner());
+                                                let removed = mempool.revalidate(chain_ro.state());
+                                                if removed > 0 {
+                                                    info!(
+                                                        "P2P: removed {} invalid transactions from mempool after block #{}",
+                                                        removed, height
+                                                    );
+                                                }
+                                            }
                                             // Signal miner to cancel and restart on new tip
                                             p2p_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                             // v2.1.3: Broadcast tip immediately after accepting a block.
@@ -5030,5 +5183,83 @@ mod tests {
         let err = resolve_pq_commitment(None, Some("aabb"), 1)
             .expect_err("short hex must bail");
         assert!(format!("{}", err).contains("wrong length"));
+    }
+
+    /// v2.3.4 — `persist_snapshot_to_disk` must write both the compressed
+    /// snapshot and a signed manifest into `<data_dir>/snapshots/` and the
+    /// manifest on disk must round-trip back to an equal object.
+    fn sample_manifest(height: u64) -> tsn::network::snapshot_manifest::SnapshotManifest {
+        tsn::network::snapshot_manifest::SnapshotManifest {
+            version: 1,
+            chain_id: "tsn-mainnet".to_string(),
+            height,
+            block_hash: "aa".repeat(32),
+            state_root: "bb".repeat(32),
+            snapshot_sha256: "cc".repeat(32),
+            snapshot_size_bytes: 0,
+            format: "json-gzip".to_string(),
+            binary_version: env!("CARGO_PKG_VERSION").to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            producer: tsn::network::snapshot_manifest::SeedIdentity {
+                seed_name: "unit-test".to_string(),
+                peer_id: "peer".to_string(),
+                public_key: "dd".repeat(32),
+            },
+            signature: "deadbeef".to_string(),
+            confirmations: Vec::new(),
+        }
+    }
+
+    /// v2.3.4 — `persist_snapshot_to_disk` must write both the compressed
+    /// snapshot and a signed manifest into `<data_dir>/snapshots/` and the
+    /// manifest on disk must round-trip back to an equal object.
+    #[tokio::test]
+    async fn persist_snapshot_to_disk_writes_files_and_round_trips_manifest() {
+        let tmp = tempfile::tempdir().expect("create temp data dir");
+        let compressed = b"fake-compressed-snapshot-payload".to_vec();
+        let manifest = sample_manifest(12345);
+
+        persist_snapshot_to_disk(tmp.path(), 12345, &compressed, &manifest).await;
+
+        let snap_path = tmp.path().join("snapshots").join("snapshot-12345.json.gz");
+        let manifest_path = tmp.path().join("snapshots").join("snapshot-12345.manifest.json");
+        assert!(snap_path.exists(), "snapshot file must be written");
+        assert!(manifest_path.exists(), "manifest file must be written");
+
+        let snap_bytes = tokio::fs::read(&snap_path).await.expect("read snapshot");
+        assert_eq!(snap_bytes, compressed, "snapshot bytes must match input");
+
+        let manifest_bytes = tokio::fs::read(&manifest_path).await.expect("read manifest");
+        let loaded: tsn::network::snapshot_manifest::SnapshotManifest =
+            serde_json::from_slice(&manifest_bytes).expect("manifest must deserialize");
+        assert_eq!(loaded.height, manifest.height);
+        assert_eq!(loaded.block_hash, manifest.block_hash);
+        assert_eq!(loaded.signature, manifest.signature);
+        assert_eq!(loaded.producer.public_key, manifest.producer.public_key);
+    }
+
+    /// v2.3.4 — writing multiple snapshots keeps them all (retention by mtime,
+    /// not count, so freshly-written files must survive).
+    #[tokio::test]
+    async fn persist_snapshot_to_disk_keeps_recent_files_under_retention() {
+        let tmp = tempfile::tempdir().expect("create temp data dir");
+        let compressed = vec![1u8, 2, 3, 4];
+        let manifest = sample_manifest(1);
+
+        persist_snapshot_to_disk(tmp.path(), 1, &compressed, &manifest).await;
+        persist_snapshot_to_disk(tmp.path(), 2, &compressed, &manifest).await;
+
+        let snap_dir = tmp.path().join("snapshots");
+        let mut names: Vec<String> = Vec::new();
+        let mut entries = tokio::fs::read_dir(&snap_dir).await.expect("read_dir");
+        while let Ok(Some(e)) = entries.next_entry().await {
+            if let Some(n) = e.file_name().to_str() {
+                names.push(n.to_string());
+            }
+        }
+        assert!(names.iter().any(|n| n == "snapshot-1.json.gz"));
+        assert!(names.iter().any(|n| n == "snapshot-2.json.gz"));
+        assert!(names.iter().any(|n| n == "snapshot-1.manifest.json"));
+        assert!(names.iter().any(|n| n == "snapshot-2.manifest.json"));
     }
 }
