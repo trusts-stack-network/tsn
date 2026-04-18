@@ -1978,8 +1978,20 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
     let fee_base = (fee * multiplier as f64) as u64;
     let total_needed = amount_base + fee_base;
 
-    // Load and scan wallet (exclusive lock vs mining)
-    let _lock = WalletLock::acquire(wallet_path)?;
+    // Load and scan wallet (exclusive lock vs mining). v2.3.2: switch to
+    // non-blocking try_acquire so the user gets an actionable error instead
+    // of a process that silently waits forever when their own miner is
+    // currently holding the lock.
+    let _lock = match WalletLock::try_acquire(wallet_path)? {
+        Some(l) => l,
+        None => anyhow::bail!(
+            "Wallet is locked by another process (typically a running miner on the \
+             same wallet file). Either stop that process, or run the miner against \
+             a dedicated wallet — e.g. `./tsn new-wallet --output miner-wallet.json` \
+             and start the miner with `--wallet miner-wallet.json`, keeping the \
+             current wallet for sends only."
+        ),
+    };
     let mut wallet = ShieldedWallet::open(wallet_path)
         .or_else(|_| ShieldedWallet::load(wallet_path))?;
     try_scan_via_api(&mut wallet, node_url, wallet_path).await;
@@ -3195,16 +3207,38 @@ async fn cmd_node(
         }
     });
 
-    // Start Prometheus metrics server on port 9090
+    // Start Prometheus metrics server. v2.3.2: auto-fallback 9090..=9099 so
+    // running a miner and a relay on the same host (common for local testing)
+    // no longer fails noisily on "Address already in use". Metrics is a
+    // side-channel — if all ports are taken, skip silently with a warn instead
+    // of crashing or spamming an error on every startup.
     {
-        let config = tsn::metrics::http_endpoint::MetricsServerConfig {
-            port: 9090,
-            bind_address: "0.0.0.0".to_string(),
-            enable_cors: true,
-        };
-        match tsn::metrics::http_endpoint::start_metrics_server(config).await {
-            Ok(_handle) => println!("Metrics server:  http://0.0.0.0:9090/metrics"),
-            Err(e) => tracing::error!("Failed to start metrics server: {}", e),
+        let mut started = false;
+        for port in 9090u16..=9099 {
+            let config = tsn::metrics::http_endpoint::MetricsServerConfig {
+                port,
+                bind_address: "0.0.0.0".to_string(),
+                enable_cors: true,
+            };
+            match tsn::metrics::http_endpoint::start_metrics_server(config).await {
+                Ok(_handle) => {
+                    println!("Metrics server:  http://0.0.0.0:{}/metrics", port);
+                    started = true;
+                    break;
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("Address already in use") || msg.contains("address in use") {
+                        // Port taken — try the next one silently.
+                        continue;
+                    }
+                    tracing::error!("Failed to start metrics server on port {}: {}", port, e);
+                    break;
+                }
+            }
+        }
+        if !started {
+            tracing::warn!("Metrics server disabled: no free port in 9090..=9099");
         }
     }
 

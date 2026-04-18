@@ -438,9 +438,22 @@ impl ShieldedWallet {
     }
 
     /// Clear all notes (for rescanning from scratch).
+    ///
+    /// v2.3.2: also DELETE rows from the SQLite backend if one is attached.
+    /// Previously this only cleared the in-memory `notes` Vec and reset the
+    /// scan height; a subsequent `save()` would call `insert_notes_batch`
+    /// with an empty slice which does NOT remove existing rows, so the DB
+    /// kept all the stale notes. The interactive "Rescan wallet" menu and
+    /// the `POST /wallet/rescan` HTTP endpoint both looked like they
+    /// worked but left the database unchanged.
     pub fn clear_notes(&mut self) {
         self.notes.clear();
         self.last_scanned_height = 0;
+        if let Some(ref db) = self.db {
+            if let Err(e) = db.clear_notes() {
+                tracing::error!("clear_notes: failed to clear notes in DB: {}", e);
+            }
+        }
     }
 
     /// Add a transaction to the wallet history.
