@@ -59,7 +59,7 @@ pub fn is_ip_whitelisted(ip: &str) -> bool {
 }
 
 /// Network name for identification
-pub const NETWORK_NAME: &str = "tsn-testnet-v4";
+pub const NETWORK_NAME: &str = "tsn-testnet-v5";
 
 /// Hardcoded checkpoints for fast-sync verification.
 /// After downloading blocks in trusted mode, the node verifies that these
@@ -300,4 +300,8 @@ pub const HARDCODED_CHECKPOINTS: &[(u64, &str)] = &[];
 /// Previous value: "9055172503147d90..." (testnet-v2)
 /// v2.2.0: New genesis for testnet-v4 reset (wallet rewrite, April 16, 2026).
 /// Previous value: "" (testnet-v3, unlocked)
-pub const EXPECTED_GENESIS_HASH: &str = "bf18bbaad9d19045abb926425f652dffb84a9bf010a9555cd863d7b1e08ca539";
+/// v2.3.5: New genesis for testnet-v5 reset (chain fork recovery, April 19, 2026).
+/// Previous value: "bf18bbaad9d19045abb926425f652dffb84a9bf010a9555cd863d7b1e08ca539"
+/// Deterministic hash computed from (NETWORK_NAME, GENESIS_DIFFICULTY, BLOCK_REWARD).
+/// See `print_genesis_hash` test in `src/main.rs` to recompute after any bump.
+pub const EXPECTED_GENESIS_HASH: &str = "dadfa2a3f3690038b8efc3bc4e6b647719081393b100a106101c8e11864ed4b1";

@@ -1430,7 +1430,8 @@ async fn cmd_balance(wallet_path: &str, node_url: &str) -> anyhow::Result<()> {
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_default();
-        pre_validate_orphan_positions(&wallet, node_url, &client).await
+        // cmd_balance is nice-to-have; bail early on repeated 429.
+        pre_validate_orphan_positions(&wallet, node_url, &client, true).await
     } else {
         std::collections::HashSet::new()
     };
@@ -1856,14 +1857,21 @@ async fn send_single_tx(
 /// auto-consolidation and the final send both skip orphan notes from their
 /// first batch instead of wasting a full proof attempt discovering them.
 ///
-/// The check is sequential and goes through `get_with_429_backoff` to respect
-/// node rate limiting. For very large wallets (hundreds of notes) it can take
-/// tens of seconds — acceptable because without it every send would hit the
-/// same per-round orphan discovery anyway.
+/// `best_effort` controls behaviour when the node pushes back with 429 rate
+/// limiting: when true, the function bails after two consecutive 429 and
+/// returns whatever orphans it has detected so far (used by `cmd_balance`
+/// where an exact answer is nice-to-have, not correctness-critical). When
+/// false, every note is validated even if the node makes us back off for
+/// minutes (used by `cmd_send` where skipping an orphan would cost a full
+/// proof round-trip).
+///
+/// A 100ms pacing delay is inserted between requests to respect the node's
+/// sync rate limiter (200 rps / burst 400 in `api.rs`).
 async fn pre_validate_orphan_positions(
     wallet: &tsn::wallet::ShieldedWallet,
     node_url: &str,
     client: &reqwest::Client,
+    best_effort: bool,
 ) -> std::collections::HashSet<u64> {
     let placeholder = "0".repeat(64);
     let candidates: Vec<(u64, [u8; 32])> = wallet
@@ -1880,7 +1888,15 @@ async fn pre_validate_orphan_positions(
     eprint!("  Validating {} note witness(es)... ", candidates.len());
     let mut orphans = std::collections::HashSet::new();
     let mut checked = 0usize;
+    let mut consecutive_429: u32 = 0;
+    let mut bailed_best_effort = false;
     for (pos, stored) in candidates {
+        // v2.3.5: pace requests so we never trip the server's sync rate
+        // limiter (200 rps / burst 400 in `api.rs`). 100ms per request caps
+        // the effective rate at 10 rps from a single wallet, well under the
+        // threshold even if other peers are also polling.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
         let url = format!("{}/witness/v2/position/{}", node_url, pos);
         let resp = match get_with_429_backoff(
             client,
@@ -1888,13 +1904,24 @@ async fn pre_validate_orphan_positions(
             &format!("validate pos {}", pos),
         ).await {
             Ok(r) => r,
-            Err(_) => {
-                // If we cannot reach the node for this note, be conservative
-                // and do not flag it as orphan — the normal send path will
-                // catch genuine mismatches later via resolve_pq_commitment.
+            Err(e) => {
+                // v2.3.5: when the node keeps pushing back with 429, short-
+                // circuit best-effort callers (cmd_balance) instead of
+                // burning their time. cmd_send stays strict.
+                let is_429 = format!("{}", e).contains("429");
+                if is_429 {
+                    consecutive_429 += 1;
+                } else {
+                    consecutive_429 = 0;
+                }
+                if best_effort && consecutive_429 >= 2 {
+                    bailed_best_effort = true;
+                    break;
+                }
                 continue;
             }
         };
+        consecutive_429 = 0;
         if !resp.status().is_success() {
             continue;
         }
@@ -1923,7 +1950,12 @@ async fn pre_validate_orphan_positions(
         checked += 1;
     }
 
-    if orphans.is_empty() {
+    if bailed_best_effort {
+        eprintln!(
+            "partial ({} checked, {} orphan(s) so far; node rate-limited, stopping early)",
+            checked, orphans.len()
+        );
+    } else if orphans.is_empty() {
         eprintln!("done ({} checked, all valid)", checked);
     } else {
         eprintln!(
@@ -2188,7 +2220,8 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
     // notes that were orphaned by chain reorgs since the last scan, so both
     // auto_consolidate and the final send skip them from their first batch
     // instead of wasting a proof attempt discovering them round by round.
-    let pre_orphan_positions = pre_validate_orphan_positions(&wallet, node_url, &client).await;
+    // cmd_send needs every orphan caught up-front, so best_effort = false.
+    let pre_orphan_positions = pre_validate_orphan_positions(&wallet, node_url, &client, false).await;
 
     // Spendable balance check, after subtracting pre-detected orphans. This
     // is informational; the actual selection re-checks in both auto_consolidate
@@ -2724,7 +2757,7 @@ async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>) {
     let public_key_hex = hex::encode(signing_key.verifying_key().to_bytes());
     let mut manifest = tsn::network::snapshot_manifest::SnapshotManifest {
         version: 1,
-        chain_id: "tsn-mainnet".to_string(),
+        chain_id: tsn::config::NETWORK_NAME.to_string(),
         height,
         block_hash,
         state_root,
@@ -2755,6 +2788,20 @@ async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>) {
     {
         let data_dir = std::path::PathBuf::from(tsn::config::get_data_dir());
         persist_snapshot_to_disk(&data_dir, height, &compressed, &manifest).await;
+    }
+
+    // v2.3.5: publish the signed snapshot to the public tsn-snapshots GitHub
+    // repo so community light clients and miners can fast-sync from a durable
+    // mirror (seeds may be NAT'd, behind rate limits, or offline). The token
+    // is read from env TSN_SNAPSHOT_GH_TOKEN; if absent, publishing is
+    // skipped silently (not every seed is configured as a publisher).
+    {
+        let client = state.http_client.clone();
+        let compressed_for_gh = compressed.clone();
+        let manifest_for_gh = manifest.clone();
+        tokio::spawn(async move {
+            publish_snapshot_to_github(&client, &manifest_for_gh, &compressed_for_gh).await;
+        });
     }
 
     // Store in snapshot cache for coherent /snapshot/download
@@ -2900,6 +2947,240 @@ async fn persist_snapshot_to_disk(
     }
 }
 
+/// v2.3.5: publish a signed snapshot to the public tsn-snapshots GitHub repo.
+/// Requires the `TSN_SNAPSHOT_GH_TOKEN` env var to be set on the seed running
+/// this binary; without it, publishing is a silent no-op (non-publisher seeds
+/// keep running normally). Errors at any HTTP step are logged at WARN and the
+/// function returns — the local snapshot cache is still authoritative for
+/// `/snapshot/download`, so failure to publish does not block chain operation.
+///
+/// Release naming: `snapshot-<height>`. Tag the release with `snapshot-<height>`
+/// so consumers can download `https://github.com/trusts-stack-network/tsn-snapshots/releases/download/snapshot-<height>/snapshot.tar.gz`.
+/// Retention: the function prunes releases older than the 10 most recent so the
+/// repo does not grow unbounded.
+async fn publish_snapshot_to_github(
+    client: &reqwest::Client,
+    manifest: &tsn::network::snapshot_manifest::SnapshotManifest,
+    compressed: &[u8],
+) {
+    use tracing::{info, warn};
+    let token = match std::env::var("TSN_SNAPSHOT_GH_TOKEN") {
+        Ok(t) if !t.is_empty() => t,
+        _ => return,
+    };
+
+    let owner_repo = "trusts-stack-network/tsn-snapshots";
+    let tag = format!("snapshot-{}", manifest.height);
+
+    let create_url = format!("https://api.github.com/repos/{}/releases", owner_repo);
+    let body = serde_json::json!({
+        "tag_name": tag,
+        "name": format!("Snapshot height={} ({})", manifest.height, manifest.chain_id),
+        "body": format!(
+            "Signed snapshot for chain {} at height {}.\n\n\
+             - block_hash: `{}`\n\
+             - state_root: `{}`\n\
+             - snapshot_sha256: `{}`\n\
+             - size: {} bytes (compressed)\n\
+             - producer: `{}`\n\
+             - confirmations: {}\n\n\
+             Verify with the public release signing key (see auto_update.rs \
+             `RELEASE_SIGNING_PUBKEY`) against `snapshot.tar.gz`'s sha256 and \
+             `manifest.json`'s `signature` field.",
+            manifest.chain_id,
+            manifest.height,
+            manifest.block_hash,
+            manifest.state_root,
+            manifest.snapshot_sha256,
+            manifest.snapshot_size_bytes,
+            manifest.producer.seed_name,
+            manifest.confirmations.len(),
+        ),
+        "draft": false,
+        "prerelease": false,
+    });
+
+    let resp = match client
+        .post(&create_url)
+        .bearer_auth(&token)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Snapshot GitHub publish: create release failed: {}", e);
+            return;
+        }
+    };
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        // 422 = tag already exists — treat as idempotent success, don't spam warns.
+        if status.as_u16() == 422 {
+            info!("Snapshot GitHub publish: tag {} already exists, skipping upload", tag);
+            return;
+        }
+        warn!(
+            "Snapshot GitHub publish: create release returned {} — {}",
+            status,
+            text.chars().take(200).collect::<String>()
+        );
+        return;
+    }
+
+    let release: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Snapshot GitHub publish: parse create response failed: {}", e);
+            return;
+        }
+    };
+
+    let upload_url_template = match release["upload_url"].as_str() {
+        Some(s) => s.to_string(),
+        None => {
+            warn!("Snapshot GitHub publish: no upload_url in response");
+            return;
+        }
+    };
+    // upload_url template looks like "...{?name,label}" — strip the suffix.
+    let upload_base = upload_url_template
+        .split_once('{')
+        .map(|(head, _)| head.to_string())
+        .unwrap_or(upload_url_template);
+
+    // Upload the compressed snapshot as `snapshot.tar.gz`.
+    let snap_url = format!("{}?name=snapshot.tar.gz", upload_base);
+    match client
+        .post(&snap_url)
+        .bearer_auth(&token)
+        .header("Content-Type", "application/gzip")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+        .body(compressed.to_vec())
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {}
+        Ok(r) => {
+            warn!(
+                "Snapshot GitHub publish: asset upload returned {}",
+                r.status()
+            );
+            return;
+        }
+        Err(e) => {
+            warn!("Snapshot GitHub publish: asset upload failed: {}", e);
+            return;
+        }
+    }
+
+    // Upload the signed manifest as `manifest.json`.
+    let manifest_json = match serde_json::to_vec_pretty(manifest) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let manifest_url = format!("{}?name=manifest.json", upload_base);
+    if let Err(e) = client
+        .post(&manifest_url)
+        .bearer_auth(&token)
+        .header("Content-Type", "application/json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+        .body(manifest_json)
+        .send()
+        .await
+    {
+        warn!("Snapshot GitHub publish: manifest upload failed: {}", e);
+        return;
+    }
+
+    info!(
+        "Snapshot GitHub publish: tag={}, size={}KB",
+        tag, compressed.len() / 1024
+    );
+
+    // Retention: prune releases older than the 10 most recent.
+    prune_github_snapshot_releases(client, &token, owner_repo, 10).await;
+}
+
+/// Keep only the `keep` most recent snapshot- releases on the tsn-snapshots
+/// repo. Older releases are deleted along with their git tags. Silent on
+/// errors — retention is best-effort.
+async fn prune_github_snapshot_releases(
+    client: &reqwest::Client,
+    token: &str,
+    owner_repo: &str,
+    keep: usize,
+) {
+    use tracing::{info, warn};
+    let list_url = format!("https://api.github.com/repos/{}/releases?per_page=100", owner_repo);
+    let resp = match client
+        .get(&list_url)
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Snapshot retention: list releases failed: {}", e);
+            return;
+        }
+    };
+    if !resp.status().is_success() {
+        return;
+    }
+    let releases: Vec<serde_json::Value> = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut snapshots: Vec<(i64, u64, String)> = releases
+        .iter()
+        .filter_map(|r| {
+            let tag = r["tag_name"].as_str()?.to_string();
+            if !tag.starts_with("snapshot-") {
+                return None;
+            }
+            let height: u64 = tag.trim_start_matches("snapshot-").parse().ok()?;
+            let id = r["id"].as_i64()?;
+            Some((id, height, tag))
+        })
+        .collect();
+    // Sort descending by height, keep the first `keep`.
+    snapshots.sort_by(|a, b| b.1.cmp(&a.1));
+    if snapshots.len() <= keep {
+        return;
+    }
+    for (id, height, tag) in snapshots.into_iter().skip(keep) {
+        let rel_url = format!("https://api.github.com/repos/{}/releases/{}", owner_repo, id);
+        let _ = client
+            .delete(&rel_url)
+            .bearer_auth(token)
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+            .send()
+            .await;
+        let tag_url = format!("https://api.github.com/repos/{}/git/refs/tags/{}", owner_repo, tag);
+        let _ = client
+            .delete(&tag_url)
+            .bearer_auth(token)
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+            .send()
+            .await;
+        info!("Snapshot retention: pruned GitHub release {} (height {})", tag, height);
+    }
+}
+
 async fn cmd_node(
     port: u16,
     peers: Vec<String>,
@@ -2998,7 +3279,32 @@ async fn cmd_node(
 
     // Initialize blockchain with persistence
     let db_path = format!("{}/blockchain", data_dir);
-    let mut blockchain = ShieldedBlockchain::open(&db_path, GENESIS_DIFFICULTY)?;
+
+    // v2.3.5: auto-wipe obsolete chain data on testnet reset. When the on-disk
+    // genesis does not match EXPECTED_GENESIS_HASH (because we bumped the
+    // network name / coinbase tag), the previous data is from an older testnet
+    // and must be discarded. The blockchain DB itself refuses to open with a
+    // mismatched genesis; catch that one specific error, wipe blockchain +
+    // snapshots, and retry. Wallet DB is left alone — the wallet code handles
+    // its own obsolescence via a network_name field.
+    let mut blockchain = match ShieldedBlockchain::open(&db_path, GENESIS_DIFFICULTY) {
+        Ok(bc) => bc,
+        Err(e) => {
+            let msg = format!("{}", e);
+            if msg.contains("Genesis hash mismatch") {
+                tracing::warn!(
+                    "v2.3.5 auto-wipe: obsolete chain data detected ({}). Wiping {} and {}/snapshots to boot on the current testnet.",
+                    msg, db_path, data_dir
+                );
+                let snap_path = format!("{}/snapshots", data_dir);
+                let _ = std::fs::remove_dir_all(&db_path);
+                let _ = std::fs::remove_dir_all(&snap_path);
+                ShieldedBlockchain::open(&db_path, GENESIS_DIFFICULTY)?
+            } else {
+                return Err(e.into());
+            }
+        }
+    };
 
     // NOTE: Startup fork detection was removed in v1.3.4 — it caused false positives
     // when deploying to multiple nodes simultaneously (peers not yet ready → cumulative_work
@@ -3045,6 +3351,44 @@ async fn cmd_node(
             .map(|(url, h)| (url.clone(), *h));
 
         if let Some((peer_url, peer_height)) = best_peer {
+            // v2.3.5: verify the peer is on the same testnet before syncing
+            // from them. testnet-v5 seeds advertise a specific genesis hash;
+            // a peer claiming a different one (or still running the v2.3.4
+            // "tsn-mainnet" chain_id) is on an incompatible network, and
+            // importing its snapshot would re-adopt the obsolete chain the
+            // reset was meant to leave behind.
+            {
+                let info_url = format!("{}/chain/info", peer_url);
+                let peer_genesis = client
+                    .get(&info_url)
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send()
+                    .await
+                    .ok()
+                    .and_then(|r| r.error_for_status().ok())
+                    .map(|r| async move { r.json::<serde_json::Value>().await.ok() });
+                let peer_genesis = match peer_genesis {
+                    Some(fut) => fut.await,
+                    None => None,
+                };
+                if let Some(info) = peer_genesis {
+                    let their_genesis = info["genesis_hash"].as_str().unwrap_or("");
+                    let expected = tsn::config::EXPECTED_GENESIS_HASH;
+                    let placeholder = "0".repeat(64);
+                    if !expected.is_empty()
+                        && !their_genesis.is_empty()
+                        && their_genesis != placeholder
+                        && their_genesis != expected
+                    {
+                        tracing::warn!(
+                            "Fast sync: peer {} advertises genesis {} (expected {}) — different testnet, skipping",
+                            peer_url, their_genesis, expected
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+
             let behind = peer_height - local_height;
             let start_time = std::time::Instant::now();
 
@@ -3900,23 +4244,36 @@ async fn cmd_node(
                                     match result {
                                         Ok(true) => {
                                             info!("P2P: new block #{} accepted", height);
-                                            // v2.3.4: clean mempool of txs now confirmed on-chain.
-                                            // Mirrors the HTTP receive_block + local miner cleanup.
-                                            {
-                                                let mut mempool = p2p_blockchain.mempool
+                                            // v2.3.5: clean mempool on a spawned task so the P2P
+                                            // event loop returns to receive the next gossip event
+                                            // immediately, and skip the expensive revalidate+
+                                            // blockchain.read() path entirely when the mempool is
+                                            // empty (common case on seeds). Holding mempool.write()
+                                            // + blockchain.read() on the hot path in v2.3.4 was
+                                            // contending with /tip readers and caused axum accept-
+                                            // queue starvation under external polling load.
+                                            let cleanup_state = p2p_blockchain.clone();
+                                            let cleanup_hashes = confirmed_tx_hashes.clone();
+                                            let cleanup_nullifiers = confirmed_nullifiers.clone();
+                                            let cleanup_height = height;
+                                            tokio::task::spawn_blocking(move || {
+                                                let mut mempool = cleanup_state.mempool
                                                     .write().unwrap_or_else(|e| e.into_inner());
-                                                mempool.remove_confirmed(&confirmed_tx_hashes);
-                                                mempool.remove_spent_nullifiers(&confirmed_nullifiers);
-                                                let chain_ro = p2p_blockchain.blockchain.read()
+                                                mempool.remove_confirmed(&cleanup_hashes);
+                                                mempool.remove_spent_nullifiers(&cleanup_nullifiers);
+                                                if mempool.is_empty() {
+                                                    return;
+                                                }
+                                                let chain_ro = cleanup_state.blockchain.read()
                                                     .unwrap_or_else(|e| e.into_inner());
                                                 let removed = mempool.revalidate(chain_ro.state());
                                                 if removed > 0 {
                                                     info!(
                                                         "P2P: removed {} invalid transactions from mempool after block #{}",
-                                                        removed, height
+                                                        removed, cleanup_height
                                                     );
                                                 }
-                                            }
+                                            });
                                             // Signal miner to cancel and restart on new tip
                                             p2p_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                             // v2.1.3: Broadcast tip immediately after accepting a block.
@@ -5183,6 +5540,38 @@ mod tests {
         let err = resolve_pq_commitment(None, Some("aabb"), 1)
             .expect_err("short hex must bail");
         assert!(format!("{}", err).contains("wrong length"));
+    }
+
+    /// v2.3.5 — print the genesis hash produced by this binary so the release
+    /// engineer can paste it into `EXPECTED_GENESIS_HASH`. Run with:
+    ///   cargo test --release --bin tsn print_genesis_hash -- --nocapture --ignored
+    /// Marked #[ignore] so it never runs as part of the normal suite.
+    #[test]
+    #[ignore]
+    fn print_genesis_hash() {
+        use tsn::core::{CoinbaseTransaction, ShieldedBlock};
+        use tsn::crypto::{NoteCommitment, EncryptedNote};
+
+        let genesis_coinbase = CoinbaseTransaction::new(
+            NoteCommitment([0u8; 32]),
+            [0u8; 32],
+            EncryptedNote {
+                ciphertext: vec![0; 64],
+                ephemeral_pk: vec![0; 32],
+            },
+            tsn::config::BLOCK_REWARD,
+            0,
+        );
+
+        let genesis = ShieldedBlock::genesis(
+            tsn::config::GENESIS_DIFFICULTY,
+            genesis_coinbase,
+        );
+        let hash = hex::encode(genesis.hash());
+        println!("NETWORK_NAME        = {}", tsn::config::NETWORK_NAME);
+        println!("GENESIS_DIFFICULTY  = {}", tsn::config::GENESIS_DIFFICULTY);
+        println!("BLOCK_REWARD        = {}", tsn::config::BLOCK_REWARD);
+        println!("EXPECTED_GENESIS_HASH = {}", hash);
     }
 
     /// v2.3.4 — `persist_snapshot_to_disk` must write both the compressed

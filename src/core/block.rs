@@ -308,14 +308,37 @@ impl ShieldedBlock {
     pub fn genesis(difficulty: u64, coinbase: CoinbaseTransaction) -> Self {
         let commitment_root = crate::crypto::merkle_tree::CommitmentTree::empty_root();
 
+        // v2.3.5: bind the genesis block to NETWORK_NAME via the timestamp
+        // field. Each testnet rename produces a distinct genesis hash
+        // automatically, which prevents a node's obsolete blockchain/ from
+        // being "replayed" onto the new network just because every other
+        // header field is still zero. timestamp is part of the PoW header
+        // hash (unlike state_root), so this is the minimal-surface change
+        // that actually shows up in `genesis.hash()`.
+        //
+        // We derive a small u16 from sha256(NETWORK_NAME) (range 0..65535,
+        // always year 1970), rather than a large u64, so that subsequent
+        // mined blocks — whose real wall-clock timestamps are ~1.7e9 —
+        // remain monotonic relative to genesis. A large genesis timestamp
+        // would make every real miner's timestamp "earlier than genesis"
+        // and fail the `block.timestamp > prev.timestamp` check. Keeping
+        // it in the past of all real chain operation keeps us safe.
+        let genesis_timestamp: u64 = {
+            use sha2::Digest;
+            let digest = sha2::Sha256::digest(crate::config::NETWORK_NAME.as_bytes());
+            let mut bytes = [0u8; 2];
+            bytes.copy_from_slice(&digest[..2]);
+            u16::from_be_bytes(bytes) as u64
+        };
+
         let header = BlockHeader {
             version: 3,
             prev_hash: [0u8; BLOCK_HASH_SIZE],
             merkle_root: coinbase.hash(),
             commitment_root,
             nullifier_root: [0u8; BLOCK_HASH_SIZE], // Empty nullifier set
-            state_root: [0u8; BLOCK_HASH_SIZE],      // Genesis has no state_root
-            timestamp: 0, // The beginning of time
+            state_root: [0u8; BLOCK_HASH_SIZE],
+            timestamp: genesis_timestamp,
             difficulty,
             nonce: [0u8; 64],
         };

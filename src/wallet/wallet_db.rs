@@ -132,6 +132,31 @@ impl WalletDb {
             INSERT OR IGNORE INTO scan_state (id, last_scanned_height) VALUES (1, 0);"
         ).map_err(|e| WalletError::DbError(format!("Failed to create schema: {}", e)))?;
 
+        // v2.3.5 schema v2: add network_name to scan_state so a wallet created
+        // on an older testnet can be detected on open and its obsolete notes
+        // archived. We use ALTER TABLE + default "" so existing DBs upgrade in
+        // place without losing data; the caller (ShieldedWallet::open) then
+        // decides what to do with a mismatch.
+        let has_network_name: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('scan_state') WHERE name = 'network_name'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_network_name {
+            self.conn
+                .execute(
+                    "ALTER TABLE scan_state ADD COLUMN network_name TEXT NOT NULL DEFAULT ''",
+                    [],
+                )
+                .map_err(|e| WalletError::DbError(format!("Failed to add network_name column: {}", e)))?;
+        }
+        self.conn
+            .execute("INSERT OR IGNORE INTO schema_version VALUES (2)", [])
+            .map_err(|e| WalletError::DbError(format!("Failed to record schema v2: {}", e)))?;
+
         Ok(())
     }
 
@@ -443,6 +468,55 @@ impl WalletDb {
             "UPDATE scan_state SET last_scanned_height = ?1 WHERE id = 1",
             params![height as i64],
         ).map_err(|e| WalletError::DbError(format!("Failed to set scan height: {}", e)))?;
+        Ok(())
+    }
+
+    /// v2.3.5: return the network this wallet was last synced against.
+    /// Empty string for pre-v2.3.5 wallets that predate the network field.
+    pub fn network_name(&self) -> Result<String, WalletError> {
+        let name: String = self
+            .conn
+            .query_row(
+                "SELECT network_name FROM scan_state WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| WalletError::DbError(format!("Failed to get network_name: {}", e)))?;
+        Ok(name)
+    }
+
+    /// v2.3.5: record which network this wallet is synced against.
+    pub fn set_network_name(&self, name: &str) -> Result<(), WalletError> {
+        self.conn
+            .execute(
+                "UPDATE scan_state SET network_name = ?1 WHERE id = 1",
+                params![name],
+            )
+            .map_err(|e| WalletError::DbError(format!("Failed to set network_name: {}", e)))?;
+        Ok(())
+    }
+
+    /// v2.3.5: drop all notes and tx_history and reset the scan cursor. Keys
+    /// are preserved. Called when the wallet's recorded network does not
+    /// match the binary's current `config::NETWORK_NAME`: the old testnet's
+    /// notes are unspendable on the new chain, so carrying them forward just
+    /// produces confusing balances.
+    pub fn archive_for_network_reset(&self, new_network: &str) -> Result<(), WalletError> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| WalletError::DbError(format!("Failed to begin archive tx: {}", e)))?;
+        tx.execute("DELETE FROM notes", [])
+            .map_err(|e| WalletError::DbError(format!("Failed to archive notes: {}", e)))?;
+        tx.execute("DELETE FROM tx_history", [])
+            .map_err(|e| WalletError::DbError(format!("Failed to archive tx_history: {}", e)))?;
+        tx.execute(
+            "UPDATE scan_state SET last_scanned_height = 0, network_name = ?1 WHERE id = 1",
+            params![new_network],
+        )
+        .map_err(|e| WalletError::DbError(format!("Failed to reset scan_state: {}", e)))?;
+        tx.commit()
+            .map_err(|e| WalletError::DbError(format!("Failed to commit archive: {}", e)))?;
         Ok(())
     }
 

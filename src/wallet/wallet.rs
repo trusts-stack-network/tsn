@@ -224,6 +224,31 @@ impl ShieldedWallet {
         let json_opt = if json_path.exists() { Some(json_path.as_path()) } else { None };
         let db = super::wallet_db::WalletDb::open_or_migrate(&db_path, json_opt)?;
 
+        // v2.3.5: detect wallets from an older testnet and archive their
+        // obsolete notes before loading. Previous testnets' notes are
+        // unspendable on the current chain (different genesis, different
+        // commitment tree) — carrying them forward would just display a
+        // confusing "fake balance" that the user cannot actually send.
+        // Keys are preserved; only the note set + tx history are cleared
+        // and the scan cursor is reset to 0.
+        {
+            let current = crate::config::NETWORK_NAME;
+            let stored = db.network_name().unwrap_or_default();
+            if stored.is_empty() {
+                // Pre-v2.3.5 wallet: record the current network but do not
+                // archive (notes pre-reset are already lost on the chain
+                // side; nothing to do here on this first-touch path).
+                let _ = db.set_network_name(current);
+            } else if stored != current {
+                tracing::warn!(
+                    "Wallet network mismatch: recorded '{}', current '{}'. Archiving old notes and tx history.",
+                    stored,
+                    current
+                );
+                db.archive_for_network_reset(current)?;
+            }
+        }
+
         // Load keys from database
         let (_, public_key, secret_key, pk_hash) = db.load_keys()
             .and_then(|opt| opt.ok_or(WalletError::InvalidKey))?;
@@ -289,6 +314,8 @@ impl ShieldedWallet {
             &wallet.keypair.secret_key_bytes(),
             &wallet.pk_hash,
         )?;
+        // v2.3.5: tag the fresh wallet with the current network.
+        db.set_network_name(crate::config::NETWORK_NAME)?;
         wallet.db = Some(db);
         Ok(wallet)
     }

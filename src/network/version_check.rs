@@ -30,7 +30,7 @@ pub const LOCAL_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Minimum version this node requires from peers.
 /// Updated at each release to match the network.
 /// Nodes below this version are rejected during sync and disconnected via P2P.
-pub const MINIMUM_VERSION: &str = "2.2.0";
+pub const MINIMUM_VERSION: &str = "2.3.5";
 
 /// Global flag: true = node is allowed to mine and sync. false = node is outdated.
 static NODE_VERSION_OK: AtomicBool = AtomicBool::new(true);
@@ -184,13 +184,13 @@ mod tests {
     #[test]
     fn test_version_meets_minimum() {
         assert!(version_meets_minimum(MINIMUM_VERSION));
-        assert!(version_meets_minimum("2.2.0"));
-        assert!(version_meets_minimum("2.2.1"));
-        assert!(version_meets_minimum("2.3.0"));
+        assert!(version_meets_minimum("2.3.5"));
+        assert!(version_meets_minimum("2.4.0"));
         assert!(version_meets_minimum("3.0.0"));
+        assert!(!version_meets_minimum("2.3.4"));
+        assert!(!version_meets_minimum("2.3.0"));
+        assert!(!version_meets_minimum("2.2.0"));
         assert!(!version_meets_minimum("2.1.6"));
-        assert!(!version_meets_minimum("2.1.5"));
-        assert!(!version_meets_minimum("2.1.0"));
         assert!(!version_meets_minimum("2.0.0"));
         assert!(!version_meets_minimum("1.9.0"));
         assert!(!version_meets_minimum("0.6.0"));

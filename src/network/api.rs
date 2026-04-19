@@ -3534,7 +3534,7 @@ async fn snapshot_trigger_export(
     let public_key_hex = hex::encode(signing_key.verifying_key().to_bytes());
     let mut manifest = super::snapshot_manifest::SnapshotManifest {
         version: 1,
-        chain_id: "tsn-mainnet".to_string(),
+        chain_id: crate::config::NETWORK_NAME.to_string(),
         height,
         block_hash,
         state_root,
