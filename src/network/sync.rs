@@ -357,12 +357,19 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 if let Err(e) = chain.rollback_to_height(ancestor) {
                     let err_msg = format!("{}", e);
                     if err_msg.contains("below finalized height") {
-                        // Finalization prevents rollback — reset completely and fast-sync
-                        warn!("Rollback blocked by finalization (ancestor={}, error={}). Wiping chain for fresh sync.", ancestor, err_msg);
-                        chain.reset_for_snapshot_resync();
+                        // v2.3.6 — Do NOT wipe our canonical chain. A finalization block is
+                        // permanent by design; if a peer proposes a fork that would require
+                        // rolling past it, the peer is wrong, not us. Reject the peer path
+                        // and let the normal sync retry with another peer.
+                        warn!(
+                            "Peer proposes fork below our finalization (ancestor={}): rejecting peer sync, NOT wiping local chain. err={}",
+                            ancestor, err_msg
+                        );
                         drop(chain);
-                        // Re-sync from this peer via snapshot
-                        return Ok(0); // Return 0 — the sync_loop will retry and fast-sync
+                        return Err(SyncError::HttpError(format!(
+                            "Peer diverges below finalization at h={}",
+                            ancestor
+                        )));
                     }
                     warn!("Rollback to height {} failed: {}", ancestor, e);
                     return Err(SyncError::HttpError(format!("Rollback failed: {}", e)));
@@ -1300,7 +1307,9 @@ pub async fn broadcast_block_with_id(block: &ShieldedBlock, peers: &[String], cl
         handles.push(tokio::spawn(async move {
             let mut req = client
                 .post(&url)
-                .header("X-TSN-Version", env!("CARGO_PKG_VERSION"));
+                .header("X-TSN-Version", env!("CARGO_PKG_VERSION"))
+                .header("X-TSN-Network", crate::config::NETWORK_NAME)
+                .header("X-TSN-Genesis", crate::config::EXPECTED_GENESIS_HASH);
             if let Some(ref id) = pid {
                 req = req.header("X-TSN-PeerID", id.as_str());
             }

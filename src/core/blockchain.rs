@@ -1650,6 +1650,15 @@ impl ShieldedBlockchain {
     /// cleaned entries above the ancestor), walk back through the block chain
     /// (LRU + DB) accumulating difficulties until we find an ancestor with known work.
     /// This prevents fork blocks from being rejected with fork_work ≈ 0 after rollback.
+    ///
+    /// v2.3.6 — Walk-incomplete fallback (fixes fork-rejection apocalypse):
+    /// When the walk ends without hitting a known-work ancestor (missing block in
+    /// LRU+DB), the previous version returned `accumulated_difficulty` alone, which
+    /// grossly under-estimated the fork work and caused valid longer chains to be
+    /// rejected with REJECT LESS_WORK. We now add a bounded prefix estimate drawn
+    /// from our own chain at a plausible fork_base height, but only when the fork
+    /// tip is inside MAX_REORG_DEPTH of our tip (so long-range attacks are still
+    /// rejected conservatively).
     fn calculate_chain_work(&self, block: &ShieldedBlock) -> u128 {
         let block_work = block.header.difficulty as u128;
         let parent_height = if block.coinbase.height > 0 {
@@ -1673,13 +1682,9 @@ impl ShieldedBlockchain {
         // v2.0.9: Increased from 200 to 500 to handle deep forks after rollback
         const MAX_WALK: u32 = 500;
 
-        loop {
+        let walk_incomplete_reason = loop {
             if depth >= MAX_WALK {
-                tracing::warn!(
-                    "SYNC_DEBUG: calculate_chain_work walked {} blocks without finding known work, using accumulated={}",
-                    depth, accumulated_difficulty
-                );
-                break;
+                break Some("max-walk");
             }
 
             // Try to get this ancestor's work from DB by looking up its height
@@ -1690,7 +1695,7 @@ impl ShieldedBlockchain {
                 if let Some(known_work) = self.db.as_ref()
                     .and_then(|db| db.get_cumulative_work(ancestor_h).ok().flatten())
                 {
-                    tracing::warn!(
+                    tracing::debug!(
                         "SYNC_DEBUG: calculate_chain_work found known work={} at height={} after walking {} blocks",
                         known_work, ancestor_h, depth
                     );
@@ -1703,14 +1708,36 @@ impl ShieldedBlockchain {
                 depth += 1;
             } else {
                 // Can't find the block — stop walking
+                break Some("block-missing");
+            }
+        };
+
+        // Walk did not reach a known-work ancestor. Try a bounded prefix estimate
+        // drawn from our local chain, as long as the fork remains plausible (fork
+        // tip within MAX_REORG_DEPTH of our tip). Outside this bound we fall back
+        // to accumulated-only (conservative anti-long-range behavior).
+        let fork_tip_h = block.coinbase.height;
+        let local_tip_h = self.height();
+        let tip_delta = fork_tip_h.max(local_tip_h).saturating_sub(fork_tip_h.min(local_tip_h));
+
+        if tip_delta <= crate::config::MAX_REORG_DEPTH {
+            let est_base_h = fork_tip_h.saturating_sub(depth as u64).saturating_sub(1);
+            if let Some(prefix_work) = self.db.as_ref()
+                .and_then(|db| db.get_cumulative_work(est_base_h).ok().flatten())
+            {
+                let est_total = prefix_work + accumulated_difficulty;
                 tracing::warn!(
-                    "SYNC_DEBUG: calculate_chain_work block not found at depth={}, using accumulated={}",
-                    depth, accumulated_difficulty
+                    "SYNC_DEBUG: calculate_chain_work walk incomplete ({:?}) at depth={}, prefix_estimate={}@h={}, total={}",
+                    walk_incomplete_reason, depth, prefix_work, est_base_h, est_total
                 );
-                break;
+                return est_total;
             }
         }
 
+        tracing::warn!(
+            "SYNC_DEBUG: calculate_chain_work walk incomplete ({:?}) at depth={}, no prefix estimate (tip_delta={} > MAX_REORG_DEPTH={}), using accumulated={}",
+            walk_incomplete_reason, depth, tip_delta, crate::config::MAX_REORG_DEPTH, accumulated_difficulty
+        );
         accumulated_difficulty
     }
 

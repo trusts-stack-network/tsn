@@ -2680,14 +2680,18 @@ fn check_snapshot_auto_trigger(state: &std::sync::Arc<tsn::network::AppState>, t
     use std::sync::atomic::Ordering;
     let interval = tsn::config::SNAPSHOT_MANIFEST_INTERVAL;
     let max_reorg = tsn::config::MAX_REORG_DEPTH;
-    if tip_h <= max_reorg + interval {
+    // v2.3.6 — fix: was `<=` which caused the first interval (tip=max_reorg+interval,
+    // e.g. 1100) to return early. Also removed the `prev_eligible` crossing check:
+    // it only fired exactly at the tip transition, so a node that restarted above
+    // the interval (or caught up via fast-sync) never triggered its first snapshot
+    // until the NEXT interval. The atomic `last_snapshot_auto_trigger` below is the
+    // correct single-fire guard on its own.
+    if tip_h < max_reorg + interval {
         return;
     }
     let finalized = tip_h - max_reorg;
     let latest_eligible = (finalized / interval) * interval;
-    let prev_finalized = (tip_h - 1).saturating_sub(max_reorg);
-    let prev_eligible = (prev_finalized / interval) * interval;
-    if latest_eligible <= prev_eligible {
+    if latest_eligible == 0 {
         return;
     }
     let last = state.last_snapshot_auto_trigger.load(Ordering::Relaxed);
@@ -3718,6 +3722,7 @@ async fn cmd_node(
         )),
         fork_recovery_cooldown: std::sync::Mutex::new(std::collections::HashMap::new()),
         last_snapshot_auto_trigger: std::sync::atomic::AtomicU64::new(0),
+        version_bans: std::sync::RwLock::new(std::collections::HashMap::new()),
     });
 
     // ========================================================================
@@ -3902,21 +3907,20 @@ async fn cmd_node(
                         if let Some(since) = stuck_since {
                             if since.elapsed() > std::time::Duration::from_secs(300) {
                                 let msg = format!("Height stuck at {} for 5+ min", current_height);
-                                tracing::warn!("WATCHDOG: {}. Triggering snapshot re-sync.", msg);
+                                // v2.3.6 — Never auto-wipe. A stuck height is almost always
+                                // either a valid temporary stall (peers catching up, reorg)
+                                // or a real consensus bug that requires manual investigation.
+                                // Wiping silently destroys data and re-imports whatever vintage
+                                // snapshot a peer happens to serve. Log only; operator decides.
+                                tracing::warn!(
+                                    "WATCHDOG: {}. Auto-wipe DISABLED (v2.3.6). Use /admin/force-resync if needed.",
+                                    msg
+                                );
                                 tsn::network::log_node_error(&watchdog_state, "stuck_height", &msg);
-                                if is_auto {
-                                    // v2.0.9: Take reorg_lock to prevent race with miner
-                                    let _reorg_guard = watchdog_state.reorg_lock.write().await;
-                                    let mut chain = watchdog_state.blockchain.write().unwrap();
-                                    chain.reset_for_snapshot_resync();
-                                    drop(chain);
-                                    drop(_reorg_guard);
-                                } else {
-                                    tracing::info!("WATCHDOG: Mode validation — action proposed, en attente d'approbation via /admin/force-resync");
-                                }
+                                let _ = is_auto; // kept for future reintroduction
                                 stuck_since = None;
                                 resync_count += 1;
-                                last_height = 0;
+                                last_height = current_height;
                             }
                         }
                     }
@@ -3948,19 +3952,15 @@ async fn cmd_node(
                     let peers_at_max = verified_heights.iter().filter(|(h, _)| *h >= max_peer_h.saturating_sub(5)).count();
                     let gap = max_peer_h.saturating_sub(current_height);
                     if gap > 100 && max_peer_h > 100 && current_height > 0 && peers_at_max >= 2 {
-                        if is_auto {
-                            tracing::warn!("WATCHDOG: Peers far ahead — {} peers at ~{} but local at {} (gap={}). Auto wipe + resync.", peers_at_max, max_peer_h, current_height, gap);
-                            // v2.0.9: Take reorg_lock to prevent race with miner
-                            let _reorg_guard = watchdog_state.reorg_lock.write().await;
-                            let mut chain = watchdog_state.blockchain.write().unwrap();
-                            chain.reset_for_snapshot_resync();
-                            drop(chain);
-                            drop(_reorg_guard);
-                            stuck_since = None;
-                            last_height = 0;
-                        } else {
-                            tracing::info!("WATCHDOG: Mode validation — peers far ahead (gap={}), action proposed via /admin/force-resync", gap);
-                        }
+                        // v2.3.6 — Never auto-wipe. A "gap" can be caused by a transient
+                        // P2P sync pause, a peer serving a stale snapshot, or a real fork.
+                        // In each case, blind auto-wipe is worse than waiting: it destroys
+                        // the canonical chain and re-imports from an arbitrary peer.
+                        tracing::warn!(
+                            "WATCHDOG: Peers far ahead — {} peers at ~{} but local at {} (gap={}). Auto-wipe DISABLED (v2.3.6). Investigate manually.",
+                            peers_at_max, max_peer_h, current_height, gap
+                        );
+                        let _ = is_auto;
                     }
                 }
 
@@ -3986,11 +3986,14 @@ async fn cmd_node(
                         let max_peer = *verified_peer_heights.iter().max().unwrap_or(&0);
                         let ahead_gap = current_height.saturating_sub(max_peer);
                         if ahead_gap > 100 {
+                            // v2.3.6 — Never auto-wipe. Solo-fork detection can misfire
+                            // when peers transiently show stale tips (RW race, restart).
+                            // Operator decides via /admin/force-resync.
                             tracing::warn!(
-                                "WATCHDOG: SOLO FORK — local at {} but all {} peers are at max {}. Gap={}. Auto wipe + resync.",
+                                "WATCHDOG: SOLO FORK — local at {} but all {} peers are at max {}. Gap={}. Auto-wipe DISABLED (v2.3.6). Investigate manually.",
                                 current_height, verified_peer_heights.len(), max_peer, ahead_gap
                             );
-                            if is_auto {
+                            if false { // dead-branch retained for minimal diff
                                 let _reorg_guard = watchdog_state.reorg_lock.write().await;
                                 let mut chain = watchdog_state.blockchain.write().unwrap();
                                 chain.reset_for_snapshot_resync();
@@ -4008,9 +4011,9 @@ async fn cmd_node(
                 // Check 3: Too many resyncs in short window → wipe completely
                 if resync_count >= 3 {
                     let msg = format!("{} resyncs in 5 min — chain is unstable", resync_count);
-                    tracing::error!("WATCHDOG: {}.", msg);
+                    tracing::error!("WATCHDOG: {}. Auto-wipe DISABLED (v2.3.6). Investigate manually.", msg);
                     tsn::network::log_node_error(&watchdog_state, "resync_loop", &msg);
-                    if is_auto {
+                    if false { // v2.3.6: dead-branch, full wipe disabled
                         tracing::warn!("WATCHDOG: Auto mode — full wipe + fresh sync.");
                         // v2.0.9: Take reorg_lock to prevent race with miner
                         let _reorg_guard = watchdog_state.reorg_lock.write().await;
@@ -4467,7 +4470,11 @@ async fn cmd_node(
                 for peer in &peers {
                     let url = format!("{}/tip", peer);
                     let body = serde_json::json!({ "height": height, "hash": hash });
-                    match client.post(&url).header("X-TSN-Version", env!("CARGO_PKG_VERSION")).json(&body).send().await {
+                    match client.post(&url)
+                        .header("X-TSN-Version", env!("CARGO_PKG_VERSION"))
+                        .header("X-TSN-Network", tsn::config::NETWORK_NAME)
+                        .header("X-TSN-Genesis", tsn::config::EXPECTED_GENESIS_HASH)
+                        .json(&body).send().await {
                         Ok(resp) => {
                             if let Ok(tip_resp) = resp.json::<serde_json::Value>().await {
                                 // Update sync gate with peer's tip

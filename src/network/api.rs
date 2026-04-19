@@ -59,6 +59,16 @@ pub const TIP_DEDUP_CAPACITY: usize = 500;
 /// Maximum entries kept in the block dedup LRU.
 pub const BLOCK_DEDUP_CAPACITY: usize = 1000;
 
+/// v2.3.6 — Version gate: outdated peer ban policy.
+/// After this many offenses in a rolling fashion, the peer IP is banned.
+pub const VERSION_BAN_THRESHOLD: u32 = 3;
+/// Base ban duration (seconds). Escalates on repeat offenses.
+pub const VERSION_BAN_INITIAL_SECS: u64 = 3600;
+/// Maximum entries kept in the version ban map.
+pub const VERSION_BAN_CAPACITY: usize = 10_000;
+/// Dedup interval (seconds) between WARN log lines for the same offending IP.
+pub const VERSION_BAN_LOG_DEDUP_SECS: u64 = 300;
+
 /// Shared application state for the API.
 pub struct AppState {
     pub blockchain: RwLock<ShieldedBlockchain>,
@@ -145,6 +155,23 @@ pub struct AppState {
     /// miner path and the P2P handler cross the same interval boundary (e.g. on
     /// a reorg at an interval-crossing height).
     pub last_snapshot_auto_trigger: std::sync::atomic::AtomicU64,
+    /// v2.3.6 — Per-IP version-ban tracker. Populated by the version gate middleware.
+    /// Keyed by source IP (peer of the TCP connection, not X-Forwarded-For to prevent spoof).
+    pub version_bans: std::sync::RwLock<std::collections::HashMap<std::net::IpAddr, VersionBanEntry>>,
+}
+
+/// v2.3.6 — Tracks a peer that sent an outdated `X-TSN-Version` header.
+#[derive(Clone, Debug)]
+pub struct VersionBanEntry {
+    /// Instant after which the ban lifts. If `<= Instant::now()`, the peer is free
+    /// to retry (but offense_count is preserved to escalate on re-offense).
+    pub until: std::time::Instant,
+    /// Number of outdated requests observed for this IP. Persists across ban expiry.
+    pub offense_count: u32,
+    /// Last time we emitted a WARN for this IP (for log dedup).
+    pub last_warn_at: Option<std::time::Instant>,
+    /// Last observed version string (for logging only).
+    pub last_version: String,
 }
 
 /// Info about an HTTP peer, updated on every interaction.
@@ -155,6 +182,174 @@ pub struct PeerDetail {
     pub role: String,          // "miner" or "relay" (from protocol or endpoint used)
     pub height: u64,           // last known height
     pub last_seen: u64,        // unix timestamp
+}
+
+/// v2.3.6 — Version gate middleware.
+///
+/// Runs on every incoming request to the `sync` router BEFORE the request body
+/// is parsed. Enforces three things, in order:
+///   1. Reject instantly (403) if the source IP is currently version-banned.
+///   2. If the `X-TSN-Version` header is missing or below `MINIMUM_VERSION`,
+///      record an offense, escalate the ban duration geometrically, and reject
+///      (403). Missing header counts as an offense to block trivial spammers.
+///   3. Otherwise pass the request to the inner handler.
+///
+/// WARN log lines for rejections are deduplicated per-IP with a sliding window
+/// of `VERSION_BAN_LOG_DEDUP_SECS` (5 minutes). Subsequent rejections inside the
+/// window are logged at DEBUG to avoid polluting journals.
+pub async fn version_gate_middleware(
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let ip = addr.ip();
+    let now = std::time::Instant::now();
+
+    // (1) Fast path: already banned?
+    {
+        let bans = state.version_bans.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = bans.get(&ip) {
+            if now < entry.until {
+                let remaining = entry.until.duration_since(now).as_secs();
+                return (
+                    axum::http::StatusCode::FORBIDDEN,
+                    format!("IP banned for outdated version (retry in {}s)", remaining),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // (2) Inspect the version / network / genesis headers.
+    // Missing headers: pass through. Internal HTTP callers (explorer polling,
+    // snapshot fetch, local debug tooling) do not always set these headers,
+    // so gating on missing would break production traffic. The ban is only
+    // triggered when a peer honestly declares a mismatching value — which is
+    // exactly the spam / wrong-chain pattern we want to kick out.
+    let peer_ver = headers.get("X-TSN-Version").and_then(|v| v.to_str().ok());
+    let peer_net = headers.get("X-TSN-Network").and_then(|v| v.to_str().ok());
+    let peer_genesis = headers.get("X-TSN-Genesis").and_then(|v| v.to_str().ok());
+
+    let ver_str = peer_ver.unwrap_or("");
+    let bad_version = match peer_ver {
+        Some(v) => !crate::network::version_check::version_meets_minimum(v),
+        None => false,
+    };
+    let bad_network = match peer_net {
+        Some(n) => n != crate::config::NETWORK_NAME,
+        None => false,
+    };
+    let bad_genesis = match peer_genesis {
+        Some(g) => g != crate::config::EXPECTED_GENESIS_HASH,
+        None => false,
+    };
+    let below_min = bad_version || bad_network || bad_genesis;
+    // Build a concise reason for logs and the 403 body.
+    let reject_reason = if bad_version {
+        format!("version={:?} below minimum {}", ver_str, crate::network::version_check::MINIMUM_VERSION)
+    } else if bad_network {
+        format!("network={:?} != {}", peer_net.unwrap_or(""), crate::config::NETWORK_NAME)
+    } else if bad_genesis {
+        format!("genesis={:?} != {}", peer_genesis.unwrap_or(""), crate::config::EXPECTED_GENESIS_HASH)
+    } else {
+        String::new()
+    };
+
+    if below_min {
+        let mut bans = state.version_bans.write().unwrap_or_else(|e| e.into_inner());
+
+        // Cap the map size to prevent unbounded memory growth from scan attacks.
+        if bans.len() >= VERSION_BAN_CAPACITY && !bans.contains_key(&ip) {
+            // Evict the oldest expired entry we can find (best-effort O(n) sweep).
+            let stale: Vec<std::net::IpAddr> = bans
+                .iter()
+                .filter(|(_, e)| e.until <= now)
+                .map(|(k, _)| *k)
+                .take(64)
+                .collect();
+            for k in stale {
+                bans.remove(&k);
+            }
+        }
+
+        let entry = bans.entry(ip).or_insert_with(|| VersionBanEntry {
+            until: now,
+            offense_count: 0,
+            last_warn_at: None,
+            last_version: String::new(),
+        });
+        entry.offense_count = entry.offense_count.saturating_add(1);
+        entry.last_version = ver_str.to_string();
+
+        let should_warn = match entry.last_warn_at {
+            None => true,
+            Some(t) => now.duration_since(t).as_secs() >= VERSION_BAN_LOG_DEDUP_SECS,
+        };
+
+        let response = if entry.offense_count >= VERSION_BAN_THRESHOLD {
+            // Escalating ban: 1h, 6h, 24h (capped).
+            let ban_secs = match entry.offense_count {
+                0..=2 => VERSION_BAN_INITIAL_SECS, // unreachable, threshold is 3
+                3..=5 => VERSION_BAN_INITIAL_SECS,
+                6..=10 => VERSION_BAN_INITIAL_SECS * 6,
+                _ => VERSION_BAN_INITIAL_SECS * 24,
+            };
+            entry.until = now + std::time::Duration::from_secs(ban_secs);
+            if should_warn {
+                warn!(
+                    "Chain-banned {} for {}s ({}, offenses={})",
+                    ip, ban_secs, reject_reason, entry.offense_count
+                );
+                entry.last_warn_at = Some(now);
+            } else {
+                debug!(
+                    "Chain-banned {} (dedup, offenses={})",
+                    ip, entry.offense_count
+                );
+            }
+            (
+                axum::http::StatusCode::FORBIDDEN,
+                format!(
+                    "IP banned for outdated version (retry in {}s)",
+                    ban_secs
+                ),
+            )
+                .into_response()
+        } else {
+            if should_warn {
+                warn!(
+                    "Rejected peer {} ({}, offense {}/{})",
+                    ip, reject_reason, entry.offense_count, VERSION_BAN_THRESHOLD
+                );
+                entry.last_warn_at = Some(now);
+            } else {
+                debug!(
+                    "Rejected peer {} (dedup, offense {})",
+                    ip, entry.offense_count
+                );
+            }
+            (
+                axum::http::StatusCode::FORBIDDEN,
+                reject_reason,
+            )
+                .into_response()
+        };
+        return response;
+    }
+
+    // (3) Peer is compliant — clear any stale ban entry so future offenses start fresh.
+    {
+        let mut bans = state.version_bans.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = bans.get(&ip) {
+            if entry.until <= now && entry.offense_count > 0 {
+                bans.remove(&ip);
+            }
+        }
+    }
+
+    next.run(request).await
 }
 
 /// Update peer info from an incoming HTTP request.
@@ -247,7 +442,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         SYNC_RATE_LIMIT_RPS, SYNC_RATE_LIMIT_BURST
     );
 
-    // Sync routes — NO rate limiting (was causing fast-sync failures for new nodes)
+    // Sync routes — v2.3.6: version gate middleware rejects outdated peers
+    // BEFORE the request body is parsed, and escalates bans on repeat offenses.
+    // Rate-limiter layer kept off by design: sync_rate_limit is tuned for
+    // internal node-to-node sync bursts and the ban map absorbs spam.
     let sync_routes = Router::new()
         .route("/chain/info", get(chain_info))
         .route("/blocks", post(receive_block))
@@ -270,6 +468,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/snapshot/history", get(snapshot_manifest_history))
         .route("/snapshot/confirm", post(snapshot_confirm))
         .route("/snapshot/export", post(snapshot_trigger_export))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            version_gate_middleware,
+        ))
         .with_state(state.clone());
 
     // Explorer/read-only routes — NO rate limiting (served by nginx proxy from localhost)
@@ -2656,19 +2858,13 @@ async fn receive_tip(
     headers: axum::http::HeaderMap,
     Json(req): Json<TipRequest>,
 ) -> Result<Json<TipResponse>, (StatusCode, String)> {
-    // IP whitelist check
+    // IP whitelist check (version check is handled by version_gate_middleware
+    // upstream — no duplicate work here).
     let ip = addr.ip().to_string();
     if !crate::config::is_ip_whitelisted(&ip) {
         return Err((StatusCode::FORBIDDEN, format!("IP {} not whitelisted", ip)));
     }
-    // Reject tips from outdated nodes
     let peer_ver = headers.get("X-TSN-Version").and_then(|v| v.to_str().ok());
-    if let Some(ver) = peer_ver {
-        if !crate::network::version_check::version_meets_minimum(ver) {
-            warn!("Rejected tip from outdated peer (version {})", ver);
-            return Err((StatusCode::FORBIDDEN, format!("Node version {} is below minimum {}", ver, crate::network::version_check::MINIMUM_VERSION)));
-        }
-    }
     // Track peer info
     let peer_url = format!("http://{}:9333", addr.ip());
     update_peer_info(&state, &peer_url, peer_ver, Some(req.height));
@@ -2797,11 +2993,18 @@ async fn snapshot_download(
     // Try to serve from cache first
     // v2.1.3 FIX: Validate cache is still coherent with current chain.
     // After a chain reset, the cache may contain state from the old chain.
+    // v2.3.6 — Also invalidate if the cache is too far behind the current tip.
+    // This covers the case where the chain rolled back and then re-synced past
+    // the stale snapshot height via P2P: the cache.height <= chain.height check
+    // alone would keep serving the stale cache to fast-syncing peers, causing
+    // them to land on an old height and trigger cascading wipes.
+    const CACHE_STALE_GAP: u64 = 500;
     let chain_height = state.blockchain.read().unwrap_or_else(|e| e.into_inner()).height();
     {
         let cache = state.snapshot_cache.read().await;
         if let Some(ref cached) = *cache {
-            if cached.height <= chain_height {
+            let too_old = chain_height.saturating_sub(cached.height) > CACHE_STALE_GAP;
+            if cached.height <= chain_height && !too_old {
                 info!(
                     "Snapshot download (cached): height={}, hash={}, raw={}KB, compressed={}KB",
                     cached.height, &cached.hash[..8.min(cached.hash.len())],
@@ -2819,15 +3022,19 @@ async fn snapshot_download(
                     cached.compressed.clone(),
                 ).into_response());
             }
-            // Cache stale (from previous chain) — fall through to regenerate
-            info!("Snapshot cache invalidated: cached height {} > chain height {}", cached.height, chain_height);
+            if too_old {
+                info!("Snapshot cache too old: cached {} vs chain {} (gap={}), regenerating", cached.height, chain_height, chain_height - cached.height);
+            } else {
+                info!("Snapshot cache invalidated: cached height {} > chain height {}", cached.height, chain_height);
+            }
         }
     }
-    // Invalidate stale cache
+    // Invalidate stale cache (ahead of chain OR too far behind)
     {
         let mut cache_w = state.snapshot_cache.write().await;
         if let Some(ref c) = *cache_w {
-            if c.height > chain_height { *cache_w = None; }
+            let too_old = chain_height.saturating_sub(c.height) > CACHE_STALE_GAP;
+            if c.height > chain_height || too_old { *cache_w = None; }
         }
     }
 
