@@ -1232,10 +1232,25 @@ async fn attempt_snapshot_sync(
         }
     }
 
+    // v2.3.9 — Before taking the blockchain write lock, fetch the LWMA seed
+    // headers from the same peer so the freshly fast-synced node can compute
+    // next_difficulty() locally (otherwise the snapshot's frozen difficulty
+    // is reused and full-sync validators reject the miner's blocks with
+    // `Invalid difficulty`). An empty result is acceptable — the node then
+    // falls back to the previous behaviour.
+    let lwma_seed = fetch_pre_snapshot_lwma_headers(&client, peer_url, snap_height).await;
+
     // Import the snapshot
     let mut chain = state.blockchain.write()
         .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
     chain.import_snapshot_at_height(snapshot, snap_height, block_hash, diff, next_diff, snap_work);
+    if !lwma_seed.is_empty() {
+        info!(
+            "pre_snapshot_lwma: seeded {} headers from peer {} for post-fast-sync LWMA",
+            lwma_seed.len(), peer_id(peer_url)
+        );
+        chain.set_pre_snapshot_lwma(lwma_seed);
+    }
 
     // 4. Post-import: verify state_root if manifest provided one
     if let Some(expected_root) = manifest_state_root {
@@ -1479,6 +1494,73 @@ struct CompactHeaderResponse {
     difficulty: u64,
     timestamp: u64,
     cumulative_work: u128,
+}
+
+/// v2.3.9 — Fetch the last `LWMA_WINDOW + 1` compact headers that sit right
+/// below `snap_height` from the peer, so the freshly fast-synced node can run
+/// LWMA locally and match what full-sync validators compute. Returns an empty
+/// vec if the peer is unreachable, the response is malformed, or the peer does
+/// not hold those headers (e.g. it fast-synced too recently itself). In that
+/// case `next_difficulty()` falls back to the frozen snapshot difficulty as
+/// before — no worse than the pre-fix behaviour.
+pub async fn fetch_pre_snapshot_lwma_headers(
+    client: &reqwest::Client,
+    peer_url: &str,
+    snap_height: u64,
+) -> Vec<(u64, u64, u64)> {
+    use crate::consensus::LWMA_WINDOW;
+
+    // We need the block that sits one step BEFORE the LWMA window starts
+    // (LWMA needs the pre-window timestamp to compute the first solvetime).
+    let needed = LWMA_WINDOW + 1;
+    let since = snap_height.saturating_sub(needed + 1);
+    let url = format!("{}/headers/since/{}?limit={}", peer_url, since, needed + 2);
+    let resp = match client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            debug!(
+                "pre_snapshot_lwma: peer {} returned {} for {}",
+                peer_id(peer_url),
+                r.status(),
+                url
+            );
+            return Vec::new();
+        }
+        Err(e) => {
+            debug!(
+                "pre_snapshot_lwma: peer {} unreachable for /headers/since: {}",
+                peer_id(peer_url),
+                sanitize_error(&e)
+            );
+            return Vec::new();
+        }
+    };
+    let headers: Vec<CompactHeaderResponse> = match resp.json().await {
+        Ok(h) => h,
+        Err(e) => {
+            debug!(
+                "pre_snapshot_lwma: peer {} sent malformed header json: {}",
+                peer_id(peer_url),
+                e
+            );
+            return Vec::new();
+        }
+    };
+    // Keep only heights strictly below snap_height (the snapshot's own header
+    // is handled by `import_snapshot_at_height`), in ascending height order.
+    let mut triples: Vec<(u64, u64, u64)> = headers
+        .into_iter()
+        .filter(|h| h.height < snap_height)
+        .map(|h| (h.height, h.difficulty, h.timestamp))
+        .collect();
+    triples.sort_by_key(|(h, _, _)| *h);
+    triples.dedup_by_key(|(h, _, _)| *h);
+    triples
 }
 
 #[derive(Debug, thiserror::Error)]

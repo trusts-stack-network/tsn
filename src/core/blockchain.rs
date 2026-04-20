@@ -73,6 +73,19 @@ pub struct ShieldedBlockchain {
     /// can never be reorg'd. Computed as max(last_checkpoint_height, tip - MAX_REORG_DEPTH).
     /// Inspired by Quantus deterministic finalization at fixed depth.
     finalized_height: u64,
+    /// v2.3.9 — LWMA seed data for post-fast-sync difficulty calculation.
+    /// Fast-sync drops the blocks before `fast_sync_base_height`, so the LWMA
+    /// sliding window cannot be rebuilt locally until we mine LWMA_WINDOW new
+    /// blocks. Without this, `next_difficulty()` fell back to the snapshot's
+    /// frozen difficulty and miners produced blocks that full-sync validators
+    /// rejected as `Invalid difficulty` (12% gap vs their recomputed LWMA).
+    ///
+    /// The fast-sync call sites now also fetch the last `LWMA_WINDOW + 1`
+    /// `(height, difficulty, timestamp)` triples from the seed peer and store
+    /// them here. `next_difficulty()` consults this buffer whenever the local
+    /// window crosses the fast-sync boundary. Once enough locally-mined blocks
+    /// accumulate, the buffer becomes unnecessary and is naturally unused.
+    pre_snapshot_lwma: Vec<(u64, u64, u64)>,
 }
 
 impl ShieldedBlockchain {
@@ -113,6 +126,7 @@ impl ShieldedBlockchain {
             prev_block_states: std::collections::VecDeque::new(),
             canonical_height: 0,
             finalized_height: 0,
+            pre_snapshot_lwma: Vec::new(),
         }
     }
 
@@ -421,6 +435,7 @@ impl ShieldedBlockchain {
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
 
+            let pre_snapshot_lwma = load_pre_snapshot_lwma(&db);
             Ok(Self {
                 blocks,
                 height_index,
@@ -438,6 +453,7 @@ impl ShieldedBlockchain {
                 prev_block_states: std::collections::VecDeque::new(),
                 canonical_height: height,
                 finalized_height: height.saturating_sub(crate::config::MAX_REORG_DEPTH).max(cp_height),
+                pre_snapshot_lwma,
             })
         } else {
             // Create a fresh chain with a dummy genesis
@@ -511,6 +527,7 @@ impl ShieldedBlockchain {
                 prev_block_states: std::collections::VecDeque::new(),
                 canonical_height: 0,
                 finalized_height: 0,
+                pre_snapshot_lwma: Vec::new(),
             })
         }
     }
@@ -563,11 +580,15 @@ impl ShieldedBlockchain {
         self.finalized_height = 0; // Reset finalization for fresh sync
         self.last_checkpoint_height = 0;
         self.prev_block_states.clear();
+        // v2.3.9 — the pre-snapshot LWMA buffer belongs to the previous fast-sync.
+        // A fresh sync will repopulate it.
+        self.pre_snapshot_lwma.clear();
         self.state = ShieldedState::new();
         if let Some(ref db) = self.db {
             let _ = db.set_metadata("height", "0");
             let _ = db.set_metadata("cumulative_work", "0");
             let _ = db.set_metadata("fast_sync_base_height", "0");
+            let _ = db.set_metadata("pre_snapshot_lwma", "");
             let _ = db.clear_state_snapshot();
             // v2.1.5b: Clear stale blocks from DB to prevent poisoned work calculations.
             // Without this, old fork blocks remain and calculate_chain_work() uses their
@@ -936,34 +957,81 @@ impl ShieldedBlockchain {
             return self.difficulty.max(MIN_DIFFICULTY);
         }
 
-        // After fast-sync, blocks before the snapshot don't exist.
         let window_start = height.saturating_sub(LWMA_WINDOW);
-        if self.fast_sync_base_height > 0 && window_start < self.fast_sync_base_height {
-            return self.difficulty.max(MIN_DIFFICULTY);
-        }
 
-        // Collect N difficulties and N+1 timestamps for the LWMA window
+        // Collect N difficulties and N+1 timestamps for the LWMA window.
         let mut difficulties = Vec::with_capacity(LWMA_WINDOW as usize);
         let mut timestamps = Vec::with_capacity(LWMA_WINDOW as usize + 1);
 
+        // v2.3.9 — helper that fetches `(difficulty, timestamp)` for a given
+        // height from either a locally-stored block or the pre-snapshot LWMA
+        // buffer populated at fast-sync time. The buffer is only consulted
+        // when the regular block lookup fails (i.e. the height is below
+        // `fast_sync_base_height`).
+        let lookup_at = |h: u64| -> Option<(u64, u64)> {
+            if let Some(block) = self.get_block_by_height(h) {
+                return Some((block.header.difficulty, block.header.timestamp));
+            }
+            self.pre_snapshot_lwma
+                .iter()
+                .find(|(hh, _, _)| *hh == h)
+                .map(|(_, d, t)| (*d, *t))
+        };
+
         // We need the timestamp of the block BEFORE the window (for solvetime of first block)
-        if let Some(pre_block) = self.get_block_by_height(window_start) {
-            timestamps.push(pre_block.header.timestamp);
-        } else {
-            return self.difficulty.max(MIN_DIFFICULTY);
-        }
+        let (_pre_diff, pre_ts) = match lookup_at(window_start) {
+            Some(pair) => pair,
+            None => return self.difficulty.max(MIN_DIFFICULTY),
+        };
+        timestamps.push(pre_ts);
 
         for h in (window_start + 1)..=height {
-            if let Some(block) = self.get_block_by_height(h) {
-                difficulties.push(block.header.difficulty);
-                timestamps.push(block.header.timestamp);
-            } else {
-                // Missing block in window — fallback
-                return self.difficulty.max(MIN_DIFFICULTY);
+            match lookup_at(h) {
+                Some((diff, ts)) => {
+                    difficulties.push(diff);
+                    timestamps.push(ts);
+                }
+                None => {
+                    // Missing point in window — fallback to the stored difficulty
+                    // rather than producing a block that peers would reject.
+                    return self.difficulty.max(MIN_DIFFICULTY);
+                }
             }
         }
 
         calculate_next_difficulty_lwma(&difficulties, &timestamps)
+    }
+
+    /// v2.3.9 — Populate the pre-snapshot LWMA buffer after a fast-sync.
+    /// Callers pass the `(height, difficulty, timestamp)` triples they fetched
+    /// from the seed peer; the buffer is persisted in the metadata tree so the
+    /// fix survives a restart. Data above `fast_sync_base_height` is dropped
+    /// because it is already represented by locally-stored blocks.
+    pub fn set_pre_snapshot_lwma(&mut self, mut data: Vec<(u64, u64, u64)>) {
+        data.retain(|(h, _, _)| *h < self.fast_sync_base_height);
+        data.sort_by_key(|(h, _, _)| *h);
+        data.dedup_by_key(|(h, _, _)| *h);
+        self.pre_snapshot_lwma = data;
+        self.persist_pre_snapshot_lwma();
+    }
+
+    fn persist_pre_snapshot_lwma(&self) {
+        if let Some(db) = &self.db {
+            // Persist as CSV (height,difficulty,timestamp per line) to avoid
+            // pulling serde_json just for metadata.
+            let encoded: String = self
+                .pre_snapshot_lwma
+                .iter()
+                .map(|(h, d, t)| format!("{},{},{}", h, d, t))
+                .collect::<Vec<_>>()
+                .join(";");
+            let _ = db.set_metadata("pre_snapshot_lwma", &encoded);
+        }
+    }
+
+    /// Read-only accessor used by tests and by diagnostics endpoints.
+    pub fn pre_snapshot_lwma_len(&self) -> usize {
+        self.pre_snapshot_lwma.len()
     }
 
     /// Get timestamps of recent blocks.
@@ -2496,6 +2564,34 @@ impl ShieldedBlockchain {
             height, self.state.commitment_count(), self.state.nullifier_count()
         );
     }
+}
+
+/// v2.3.9 — Load the pre-snapshot LWMA buffer from the sled metadata tree.
+/// The buffer is stored as a semicolon-separated list of `height,difficulty,timestamp`
+/// triples. Returns an empty vec on first boot, after a manual reset, or on any
+/// parse error (in which case `next_difficulty()` will fall back to the frozen
+/// snapshot difficulty as before).
+fn load_pre_snapshot_lwma(db: &Arc<Database>) -> Vec<(u64, u64, u64)> {
+    let raw = match db.get_metadata("pre_snapshot_lwma") {
+        Ok(Some(s)) => s,
+        _ => return Vec::new(),
+    };
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for entry in raw.split(';') {
+        let mut parts = entry.split(',');
+        let h = parts.next().and_then(|s| s.parse::<u64>().ok());
+        let d = parts.next().and_then(|s| s.parse::<u64>().ok());
+        let t = parts.next().and_then(|s| s.parse::<u64>().ok());
+        if let (Some(h), Some(d), Some(t)) = (h, d, t) {
+            out.push((h, d, t));
+        }
+    }
+    out.sort_by_key(|(h, _, _)| *h);
+    out.dedup_by_key(|(h, _, _)| *h);
+    out
 }
 
 /// Summary information about the chain.

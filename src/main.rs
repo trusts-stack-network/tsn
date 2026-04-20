@@ -3558,8 +3558,18 @@ async fn cmd_node(
                                                 (GENESIS_DIFFICULTY, GENESIS_DIFFICULTY, 0u128)
                                             };
 
+                                            // v2.3.9 — seed LWMA headers before taking the blockchain lock
+                                            // so the freshly fast-synced node can compute next_difficulty()
+                                            // the same way full-sync validators do. Empty on peer error; in
+                                            // that case we simply fall back to the legacy behaviour.
+                                            let lwma_seed = tsn::network::sync::fetch_pre_snapshot_lwma_headers(&client, &peer_url, snap_height).await;
+
                                             // Import snapshot — sets chain state instantly
                                             blockchain.import_snapshot_at_height(snapshot, snap_height, block_hash, difficulty, next_diff, peer_work);
+                                            if !lwma_seed.is_empty() {
+                                                tracing::info!("pre_snapshot_lwma: seeded {} headers from {}", lwma_seed.len(), peer_url);
+                                                blockchain.set_pre_snapshot_lwma(lwma_seed);
+                                            }
 
                                             // Now sync only recent blocks (from snapshot height onward)
                                             println!("  Syncing recent blocks...");
@@ -4989,8 +4999,14 @@ async fn cmd_node(
                                                                         (d, nd, w as u128)
                                                                     } else { (1000, 1000, 0u128) };
 
+                                                                    // v2.3.9 — fetch LWMA seed headers before taking the lock.
+                                                                    let lwma_seed = tsn::network::sync::fetch_pre_snapshot_lwma_headers(&sync_client, &peer_url, snap_height).await;
                                                                     let mut chain = mine_state.blockchain.write().unwrap();
                                                                     chain.import_snapshot_at_height(snapshot, snap_height, block_hash, diff, next_diff, peer_work);
+                                                                    if !lwma_seed.is_empty() {
+                                                                        tracing::info!("pre_snapshot_lwma: seeded {} headers from {}", lwma_seed.len(), peer_url);
+                                                                        chain.set_pre_snapshot_lwma(lwma_seed);
+                                                                    }
                                                                     println!("Re-synced to height {} from network.", snap_height);
                                                                     resync_attempts = 0;
                                                                 }
@@ -5111,8 +5127,14 @@ async fn cmd_node(
                                                                         (d, nd, w as u128)
                                                                     } else { (1000, 1000, 0u128) };
 
+                                                                    // v2.3.9 — fetch LWMA seed headers before taking the lock.
+                                                                    let lwma_seed = tsn::network::sync::fetch_pre_snapshot_lwma_headers(&sync_client, &peer_url, snap_height).await;
                                                                     let mut chain = mine_state.blockchain.write().unwrap();
                                                                     chain.import_snapshot_at_height(snapshot, snap_height, block_hash, diff, next_diff, peer_work);
+                                                                    if !lwma_seed.is_empty() {
+                                                                        tracing::info!("pre_snapshot_lwma: seeded {} headers from {}", lwma_seed.len(), peer_id(&peer_url));
+                                                                        chain.set_pre_snapshot_lwma(lwma_seed);
+                                                                    }
                                                                     tracing::info!("Auto-resync complete: jumped to height {} from peer {}", snap_height, peer_id(&peer_url));
                                                                 }
                                                             }
