@@ -1535,15 +1535,18 @@ async fn get_blocks_since(
         }
     }
 
-    // v2.3.9 — explorer telemetry: record the sync request.
-    super::activity::record(
-        &state.activity,
-        &state.activity_bus,
-        super::activity::ActivityKind::Sync,
-        Some(since_height),
-        None,
-        None,
-    );
+    // v2.3.9 — explorer telemetry: only count sync requests whose since_height
+    // is strictly greater than the last one we counted, so identical polling
+    // from a healthy peer does not repeatedly pulse a sync particle on screen.
+    if state.activity.bump_unique_sync(since_height) {
+        state.activity_bus.publish(super::activity::ActivityEvent {
+            kind: super::activity::ActivityKind::Sync,
+            at_unix: super::activity::now_secs(),
+            height: Some(since_height),
+            from_peer: None,
+            bytes: None,
+        });
+    }
 
     Json(blocks)
 }
@@ -1635,7 +1638,7 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
     // Fetch real height from each seed node via HTTP (server-side, 2s timeout)
     let client = &state.http_client;
     let mut seeds = Vec::new();
-    let seed_names = ["node-1", "seed-1", "seed-2", "seed-3", "seed-4"];
+    let seed_names = ["nexus", "seed-1", "seed-2", "seed-3", "seed-4"];
     for (i, seed_url) in crate::config::SEED_NODES.iter().enumerate() {
         let name = seed_names.get(i).unwrap_or(&"seed");
         let ip = seed_url.trim_start_matches("http://").split(':').next().unwrap_or("?");
@@ -3009,15 +3012,18 @@ async fn receive_tip(
     state.sync_gate.update_tip(&peer_id, req.height, hash_bytes);
 
     info!("Received tip announcement: height={}, hash={}...", req.height, &req.hash[..16]);
-    // v2.3.9 — explorer telemetry.
-    super::activity::record(
-        &state.activity,
-        &state.activity_bus,
-        super::activity::ActivityKind::Tip,
-        Some(req.height),
-        Some(super::peer_id(&peer_url)),
-        None,
-    );
+    // v2.3.9 — explorer telemetry. Only count the *first* announcement at a
+    // given height so the graph animates real network progress, not the echo
+    // chamber of five relays forwarding the same tip.
+    if state.activity.bump_unique_tip(req.height) {
+        state.activity_bus.publish(super::activity::ActivityEvent {
+            kind: super::activity::ActivityKind::Tip,
+            at_unix: super::activity::now_secs(),
+            height: Some(req.height),
+            from_peer: Some(super::peer_id(&peer_url)),
+            bytes: None,
+        });
+    }
 
     // Return our own tip info
     let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());

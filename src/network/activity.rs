@@ -39,6 +39,12 @@ pub enum ActivityKind {
 
 /// Cumulative counter per activity kind.
 /// Counters never reset; the explorer computes deltas between polls.
+///
+/// v2.3.9 — `last_unique_tip_height` / `last_unique_sync_height` are used by
+/// `ActivityCounters::bump_unique_*` to filter out the noise from multiple
+/// peers re-announcing the same logical event. Without this, a fresh block at
+/// height N produces 5 `Tip` particles (one per relay that fans the
+/// announcement) even though only one real thing happened on the network.
 #[derive(Debug, Default)]
 pub struct ActivityCounters {
     pub tip: AtomicU64,
@@ -48,6 +54,11 @@ pub struct ActivityCounters {
     pub snapshot: AtomicU64,
     pub peer: AtomicU64,
     pub reject: AtomicU64,
+    /// Highest tip-height already counted. Incoming tips with a height
+    /// less-than-or-equal to this value are noise and do not bump `tip`.
+    pub last_unique_tip_height: AtomicU64,
+    /// Highest `since_height` already counted for sync requests. Same idea.
+    pub last_unique_sync_height: AtomicU64,
 }
 
 impl ActivityCounters {
@@ -62,6 +73,44 @@ impl ActivityCounters {
             ActivityKind::Reject => &self.reject,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// v2.3.9 — Only bump `tip` for a height strictly greater than the last
+    /// counted one. Every relay on the network forwards the same tip, so the
+    /// first announcement at height N is real; the next 4..5 announcements at
+    /// the same N are noise. Returns true if the bump happened.
+    pub fn bump_unique_tip(&self, height: u64) -> bool {
+        let mut last = self.last_unique_tip_height.load(Ordering::Relaxed);
+        while height > last {
+            match self.last_unique_tip_height.compare_exchange_weak(
+                last, height, Ordering::Relaxed, Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.tip.fetch_add(1, Ordering::Relaxed);
+                    return true;
+                }
+                Err(now) => last = now,
+            }
+        }
+        false
+    }
+
+    /// v2.3.9 — Same idea for `sync`. Only count a request for a since-height
+    /// we have not seen before (sliding forward).
+    pub fn bump_unique_sync(&self, since: u64) -> bool {
+        let mut last = self.last_unique_sync_height.load(Ordering::Relaxed);
+        while since > last {
+            match self.last_unique_sync_height.compare_exchange_weak(
+                last, since, Ordering::Relaxed, Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.sync.fetch_add(1, Ordering::Relaxed);
+                    return true;
+                }
+                Err(now) => last = now,
+            }
+        }
+        false
     }
 
     pub fn snapshot_view(&self) -> ActivitySnapshot {
