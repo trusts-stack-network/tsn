@@ -2464,37 +2464,46 @@ async fn try_scan_via_api(wallet: &mut ShieldedWallet, node_url: &str, wallet_pa
     };
 
     let scanned_height = wallet.last_scanned_height();
-    if chain_height <= scanned_height {
-        return (true, 0); // already up to date
-    }
+    // v2.3.9 — even when there is no new block to scan, we still need to run the
+    // nullifier/spent check below so that notes spent between two scans (e.g. by
+    // another wallet sharing the same seed, a send that completed while the CLI
+    // was not watching, or a previous scan whose /nullifiers/check network call
+    // failed) are eventually marked spent. Previously this early-return left
+    // stale `is_spent=false` entries in the SQLite wallet, which is what the
+    // `−1058 TSN` rescan-delta incident surfaced.
+    let up_to_date = chain_height <= scanned_height;
 
-    let blocks_to_scan = chain_height - scanned_height;
+    let blocks_to_scan = chain_height.saturating_sub(scanned_height);
     if blocks_to_scan > 50 {
         eprint!("  Scanning {} blocks via outputs API...", blocks_to_scan);
     }
 
     // Use /outputs/since/ API — returns each output with its CORRECT position
     // from the server's merkle tree. This avoids position mismatch after fast-sync.
-    let url = format!("{}/outputs/since/{}", node_url, scanned_height);
-    let resp = match client.get(&url).send().await {
-        Ok(r) if r.status().is_success() => {
-            match r.json::<serde_json::Value>().await {
-                Ok(v) => v,
-                Err(_) => return (false, 0),
-            }
-        }
-        _ => return (false, 0),
-    };
-
-    let outputs = match resp["outputs"].as_array() {
-        Some(arr) => arr,
-        None => return (false, 0),
-    };
-
     let mut new_notes = 0usize;
     let mut max_height = scanned_height;
 
-    for output in outputs {
+    // v2.3.9 — only fetch /outputs/since/ if there is something new to scan.
+    // The nullifier sweep further down runs unconditionally so previously-
+    // missed spend markings eventually land.
+    let outputs_vec: Vec<serde_json::Value> = if up_to_date {
+        Vec::new()
+    } else {
+        let url = format!("{}/outputs/since/{}", node_url, scanned_height);
+        let resp = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+                Ok(v) => v,
+                Err(_) => return (false, 0),
+            },
+            _ => return (false, 0),
+        };
+        match resp["outputs"].as_array() {
+            Some(arr) => arr.clone(),
+            None => return (false, 0),
+        }
+    };
+
+    for output in &outputs_vec {
         let position = output["position"].as_u64().unwrap_or(0);
         let block_height = output["block_height"].as_u64().unwrap_or(0);
         let note_commitment = output["note_commitment"].as_str().unwrap_or("");
@@ -2557,26 +2566,45 @@ async fn try_scan_via_api(wallet: &mut ShieldedWallet, node_url: &str, wallet_pa
         }
     }
 
-    // Update scanned height to the chain height (we scanned all available outputs)
-    wallet.set_last_scanned_height(chain_height);
+    // Update scanned height to the chain height (we scanned all available outputs).
+    // Leave it untouched when `up_to_date` — no chain progress to record.
+    if !up_to_date {
+        wallet.set_last_scanned_height(chain_height);
+    }
 
-    // Check PQ nullifiers to mark spent notes
+    // v2.3.9 — Sweep both post-quantum AND legacy V1 nullifiers to catch
+    // every kind of note the wallet may still be tracking. The previous
+    // version only checked PQ-derived nullifiers, which silently left
+    // pre-v2.0 legacy notes stuck as `is_spent = false` even when the
+    // chain had already consumed them (symptom: the "−1058 TSN" rescan
+    // delta users observed).
+    let mut marked_spent = 0usize;
     {
         let nk_bytes = wallet.nullifier_key_bytes();
+        let nk_legacy = wallet.nullifier_key().clone();
         let mut nullifier_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let mut nullifier_hexes: Vec<String> = Vec::new();
         let notes = wallet.notes_mut();
-        for (i, note) in notes.iter().enumerate() {
-            if !note.is_spent {
-                if let Some(pq_cm) = note.pq_commitment {
-                    let nf = tsn::crypto::pq::commitment_pq::derive_nullifier_pq(
-                        &nk_bytes, &pq_cm, note.position
-                    );
-                    let nf_hex = hex::encode(nf);
-                    nullifier_map.insert(nf_hex.clone(), i);
-                    nullifier_hexes.push(nf_hex);
-                }
+        for i in 0..notes.len() {
+            if notes[i].is_spent {
+                continue;
             }
+            // Prefer the PQ nullifier when the note carries a PQ commitment.
+            if let Some(pq_cm) = notes[i].pq_commitment {
+                let nf = tsn::crypto::pq::commitment_pq::derive_nullifier_pq(
+                    &nk_bytes, &pq_cm, notes[i].position,
+                );
+                let nf_hex = hex::encode(nf);
+                nullifier_map.entry(nf_hex.clone()).or_insert(i);
+                nullifier_hexes.push(nf_hex);
+            }
+            // Always also include the legacy V1 nullifier — some old notes
+            // have only V1 data, and the server's nullifier set indexes
+            // both variants.
+            let nf_v1 = notes[i].nullifier(&nk_legacy);
+            let nf_v1_hex = hex::encode(nf_v1.0);
+            nullifier_map.entry(nf_v1_hex.clone()).or_insert(i);
+            nullifier_hexes.push(nf_v1_hex);
         }
         if !nullifier_hexes.is_empty() {
             let check_url = format!("{}/nullifiers/check", node_url);
@@ -2590,7 +2618,10 @@ async fn try_scan_via_api(wallet: &mut ShieldedWallet, node_url: &str, wallet_pa
                         for s in spent_arr {
                             if let Some(h) = s.as_str() {
                                 if let Some(&idx) = nullifier_map.get(h) {
-                                    notes[idx].is_spent = true;
+                                    if !notes[idx].is_spent {
+                                        notes[idx].is_spent = true;
+                                        marked_spent += 1;
+                                    }
                                 }
                             }
                         }
@@ -2604,7 +2635,11 @@ async fn try_scan_via_api(wallet: &mut ShieldedWallet, node_url: &str, wallet_pa
         eprintln!(" done ({} new notes).", new_notes);
     }
 
-    if chain_height > scanned_height {
+    // v2.3.9 — Persist the wallet when either new notes arrived OR existing
+    // notes just flipped to spent. Previously the save was gated purely on
+    // chain-height progress, so stale `is_spent=false` states never made it
+    // to SQLite and a full rescan was the only way to reconcile.
+    if new_notes > 0 || marked_spent > 0 || !up_to_date {
         if let Err(e) = wallet.save(wallet_path) {
             tracing::error!("Failed to save wallet after API scan: {}", e);
         }
