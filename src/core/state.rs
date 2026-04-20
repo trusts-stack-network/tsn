@@ -45,6 +45,20 @@ pub struct ShieldedState {
     /// V1 tree is legacy BN254 — all blocks since height 0 use V2 (Goldilocks).
     /// Skipping V1 updates dramatically speeds up sync (10x+).
     skip_v1_tree: bool,
+    /// v2.4.0 — per-relay accumulated rewards, credited at each relay-pool
+    /// payout boundary. Keyed by `miner_pk_hash` (Blake2s256 of ML-DSA-65
+    /// public key). Relays can later withdraw via a dedicated tx type
+    /// (shipping in a follow-up release).
+    relay_balances: std::collections::BTreeMap<[u8; 32], u64>,
+    /// v2.4.0 — relay pool accumulator. Lives in the state (bound into
+    /// state_root) so that fast-sync snapshots carry it and every node
+    /// agrees on the pending pool balance. 3% of every accepted block's
+    /// reward lands here; it drains at `PAYOUT_INTERVAL` boundaries.
+    relay_pool: crate::consensus::relay_pool::RelayPool,
+    /// v2.4.0 — cumulative amount ever paid out across the full chain
+    /// lifetime (sum of `pool_total` on every `RelayPayout`). Strictly
+    /// monotonic, bound into state_root.
+    relay_pool_total_paid: u64,
 }
 
 impl ShieldedState {
@@ -55,7 +69,51 @@ impl ShieldedState {
             commitment_tree_pq: CommitmentTreePQ::new(),
             nullifier_set: HashSet::new(),
             skip_v1_tree: false,
+            relay_balances: std::collections::BTreeMap::new(),
+            relay_pool: crate::consensus::relay_pool::RelayPool::new(),
+            relay_pool_total_paid: 0,
         }
+    }
+
+    /// Read-only access to the relay balance table (Phase 5 / v2.4.0).
+    pub fn relay_balances(&self) -> &std::collections::BTreeMap<[u8; 32], u64> {
+        &self.relay_balances
+    }
+
+    /// Read-only access to the relay pool accumulator.
+    pub fn relay_pool(&self) -> &crate::consensus::relay_pool::RelayPool {
+        &self.relay_pool
+    }
+
+    /// Cumulative amount ever paid out across the full chain lifetime.
+    pub fn relay_pool_total_paid(&self) -> u64 {
+        self.relay_pool_total_paid
+    }
+
+    /// Lookup a single relay's accumulated balance. Returns 0 if the relay
+    /// has never received a payout.
+    pub fn relay_balance_of(&self, pk_hash: &[u8; 32]) -> u64 {
+        self.relay_balances.get(pk_hash).copied().unwrap_or(0)
+    }
+
+    /// Accumulate 3% of a block's reward into the pool. Called on every
+    /// accepted block (including fast-sync replay), so the pool balance
+    /// stays consistent cross-node.
+    pub fn accumulate_relay_pool(&mut self, amount: u64) {
+        self.relay_pool.accumulate(amount);
+    }
+
+    /// Apply a `RelayPayout` to the state: for each entry, add `amount` to
+    /// the recipient's running balance; update the lifetime-paid counter;
+    /// drain the pool. Called once per payout boundary.
+    pub fn apply_relay_payout(&mut self, payout: &crate::consensus::relay_pool::RelayPayout) {
+        for entry in &payout.entries {
+            let slot = self.relay_balances.entry(entry.recipient).or_insert(0);
+            *slot = slot.saturating_add(entry.amount);
+        }
+        self.relay_pool_total_paid =
+            self.relay_pool_total_paid.saturating_add(payout.pool_total);
+        self.relay_pool.drain(payout.height);
     }
 
     /// Get the current commitment tree root.
@@ -133,6 +191,24 @@ impl ShieldedState {
         for nb in &nullifier_bytes {
             hasher.update(nb);
         }
+
+        // v2.4.0 — bind the relay-balance table into the state root so
+        // divergent balances propagate into block hashes. BTreeMap iteration
+        // order is already sorted, making this deterministic cross-node.
+        hasher.update(b"relay_balances");
+        hasher.update(&(self.relay_balances.len() as u64).to_le_bytes());
+        for (pk_hash, amount) in &self.relay_balances {
+            hasher.update(pk_hash);
+            hasher.update(&amount.to_le_bytes());
+        }
+
+        // v2.4.0 — bind the relay pool accumulator + lifetime counter so
+        // fast-synced nodes agree with miners on pending balance and
+        // cumulative payout.
+        hasher.update(b"relay_pool_v1");
+        hasher.update(&self.relay_pool.balance.to_le_bytes());
+        hasher.update(&self.relay_pool.last_payout_height.to_le_bytes());
+        hasher.update(&self.relay_pool_total_paid.to_le_bytes());
 
         let hash = hasher.finalize();
         let mut result = [0u8; 32];
@@ -737,6 +813,15 @@ impl ShieldedState {
     /// Create a snapshot of the full state (V1 + V2 trees + nullifiers) for persistence.
     /// If V1 tree is being skipped (V2-only mode), save as version 1 (V2-only).
     pub fn snapshot_pq(&self) -> StateSnapshotPQ {
+        // v2.4.0 — collect the relay-pool state into the snapshot so
+        // fast-synced nodes see the same pending balance + lifetime paid
+        // as the miner (bound into state_root for consensus safety).
+        let relay_balances: Vec<([u8; 32], u64)> =
+            self.relay_balances.iter().map(|(k, v)| (*k, *v)).collect();
+        let relay_pool_balance = self.relay_pool.balance;
+        let relay_pool_last_payout_height = self.relay_pool.last_payout_height;
+        let relay_pool_total_paid = self.relay_pool_total_paid;
+
         // Always include V1 tree in snapshots for consensus compatibility.
         // Nodes that restore this snapshot will have skip_v1_tree=false and
         // can compute correct commitment_roots identical to all other nodes.
@@ -750,6 +835,10 @@ impl ShieldedState {
                 version: 1,
                 v1_tree: Some(self.commitment_tree.clone()),
                 migration_hash: None,
+                relay_balances,
+                relay_pool_balance,
+                relay_pool_last_payout_height,
+                relay_pool_total_paid,
             }
         } else {
             // V1+V2 mode: calculate migration_hash for subsequent verification
@@ -763,6 +852,10 @@ impl ShieldedState {
                 version: 2,
                 v1_tree: Some(self.commitment_tree.clone()),
                 migration_hash: Some(mig_hash),
+                relay_balances,
+                relay_pool_balance,
+                relay_pool_last_payout_height,
+                relay_pool_total_paid,
             }
         }
     }
@@ -770,8 +863,15 @@ impl ShieldedState {
     /// Restore full state from a snapshot (V1 + V2 trees + nullifiers).
     /// Verifies migration_hash if available in the snapshot.
     pub fn restore_pq_from_snapshot(&mut self, snapshot: StateSnapshotPQ) {
-        self.commitment_tree_pq = CommitmentTreePQ::from_snapshot(snapshot.tree_snapshot);
-        self.nullifier_set = snapshot.nullifiers.into_iter().map(Nullifier).collect();
+        self.commitment_tree_pq = CommitmentTreePQ::from_snapshot(snapshot.tree_snapshot.clone());
+        self.nullifier_set = snapshot.nullifiers.clone().into_iter().map(Nullifier).collect();
+        // v2.4.0 — restore relay-pool state (balances + accumulator + lifetime).
+        self.relay_balances = snapshot.relay_balances.iter().cloned().collect();
+        self.relay_pool = crate::consensus::relay_pool::RelayPool {
+            balance: snapshot.relay_pool_balance,
+            last_payout_height: snapshot.relay_pool_last_payout_height,
+        };
+        self.relay_pool_total_paid = snapshot.relay_pool_total_paid;
         // V1 tree must be maintained for consensus: all nodes must compute
         // the same commitment_root in block headers. If V1 tree is present
         // in the snapshot, restore it and keep skip_v1_tree=false.
@@ -837,6 +937,18 @@ pub struct StateSnapshotPQ {
     /// Allows verifying integrity during restoration.
     #[serde(default)]
     pub migration_hash: Option<[u8; 32]>,
+    /// v2.4.0 — per-relay accumulated rewards.
+    #[serde(default)]
+    pub relay_balances: Vec<([u8; 32], u64)>,
+    /// v2.4.0 — relay pool pending balance (pool.balance).
+    #[serde(default)]
+    pub relay_pool_balance: u64,
+    /// v2.4.0 — last payout height (pool.last_payout_height).
+    #[serde(default)]
+    pub relay_pool_last_payout_height: u64,
+    /// v2.4.0 — cumulative lifetime paid.
+    #[serde(default)]
+    pub relay_pool_total_paid: u64,
 }
 
 impl StateSnapshotPQ {
@@ -1113,5 +1225,92 @@ mod tests {
 
         // nf3 has no conflict
         assert_eq!(state.check_nullifier_conflicts(&[&nf3], &pending), None);
+    }
+}
+
+#[cfg(test)]
+mod v240_state_tests {
+    use super::*;
+    use crate::consensus::relay_pool::{RelayPayout, PayoutEntry};
+
+    const A: [u8; 32] = [0xAAu8; 32];
+    const B: [u8; 32] = [0xBBu8; 32];
+
+    #[test]
+    fn relay_balance_of_returns_zero_for_unknown() {
+        let state = ShieldedState::new();
+        assert_eq!(state.relay_balance_of(&A), 0);
+    }
+
+    #[test]
+    fn apply_relay_payout_credits_entries() {
+        let mut state = ShieldedState::new();
+        let payout = RelayPayout {
+            height: 1000,
+            pool_total: 1500,
+            entries: vec![
+                PayoutEntry { recipient: A, amount: 700 },
+                PayoutEntry { recipient: B, amount: 800 },
+            ],
+        };
+        state.apply_relay_payout(&payout);
+        assert_eq!(state.relay_balance_of(&A), 700);
+        assert_eq!(state.relay_balance_of(&B), 800);
+    }
+
+    #[test]
+    fn apply_relay_payout_is_additive_across_payouts() {
+        let mut state = ShieldedState::new();
+        let p1 = RelayPayout {
+            height: 1000,
+            pool_total: 100,
+            entries: vec![PayoutEntry { recipient: A, amount: 100 }],
+        };
+        let p2 = RelayPayout {
+            height: 2000,
+            pool_total: 150,
+            entries: vec![PayoutEntry { recipient: A, amount: 150 }],
+        };
+        state.apply_relay_payout(&p1);
+        state.apply_relay_payout(&p2);
+        assert_eq!(state.relay_balance_of(&A), 250);
+    }
+
+    #[test]
+    fn state_root_binds_relay_balances() {
+        let mut a = ShieldedState::new();
+        let mut b = ShieldedState::new();
+        // Same initial roots.
+        assert_eq!(a.compute_state_root(), b.compute_state_root());
+
+        let payout = RelayPayout {
+            height: 1000,
+            pool_total: 100,
+            entries: vec![PayoutEntry { recipient: A, amount: 100 }],
+        };
+        a.apply_relay_payout(&payout);
+        // After applying the payout, state_root must diverge between nodes
+        // whose balances differ, otherwise consensus cannot detect the
+        // divergence and the relay pool is unsafe.
+        assert_ne!(a.compute_state_root(), b.compute_state_root());
+
+        b.apply_relay_payout(&payout);
+        // Once both apply the same payout, the roots converge again.
+        assert_eq!(a.compute_state_root(), b.compute_state_root());
+    }
+
+    #[test]
+    fn relay_balance_saturates_on_overflow() {
+        let mut state = ShieldedState::new();
+        let p = RelayPayout {
+            height: 1000,
+            pool_total: 100,
+            entries: vec![
+                PayoutEntry { recipient: A, amount: u64::MAX },
+                PayoutEntry { recipient: A, amount: 10 },
+            ],
+        };
+        state.apply_relay_payout(&p);
+        assert_eq!(state.relay_balance_of(&A), u64::MAX);
     }
 }

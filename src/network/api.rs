@@ -73,6 +73,11 @@ pub const VERSION_BAN_LOG_DEDUP_SECS: u64 = 300;
 pub struct AppState {
     pub blockchain: RwLock<ShieldedBlockchain>,
     pub mempool: RwLock<Mempool>,
+    /// Phase 3 / v2.4.0 — soft ban set for miners that repeatedly violate
+    /// the V2 inclusion rule. Persisted to `banned_miners_path` when set.
+    pub banned_miners: RwLock<crate::consensus::banned_miners::BannedMiners>,
+    /// Disk location for the banned-miners JSON (None = in-memory only).
+    pub banned_miners_path: Option<std::path::PathBuf>,
     /// List of known peer URLs for gossip
     pub peers: RwLock<Vec<String>>,
     /// Stats for the local miner (if running)
@@ -469,6 +474,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/sync/status", get(sync_status))
         .route("/node/info", get(node_info))
         .route("/mining/metrics", get(mining_metrics))
+        .route("/mining/template", get(mining_template))
+        .route("/mining/submit", post(mining_submit))
         .route("/snapshot/info", get(snapshot_info))
         .route("/snapshot/download", get(snapshot_download))
         .route("/snapshot/latest", get(snapshot_latest_manifest))
@@ -499,6 +506,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // v2.3.9 — explorer telemetry: cumulative activity counters + SSE.
         .route("/stats/activity", get(get_activity_stats))
         .route("/events/stream", get(get_activity_stream))
+        // v2.4.0 — relay pool explorer surface.
+        .route("/relay/pool/status", get(relay_pool_status))
+        .route("/relay/balance/:pk_hash", get(relay_balance_of))
+        .route("/relay/payouts/recent", get(relay_payouts_recent))
         .with_state(state.clone());
 
     // Admin routes — localhost only (not accessible from outside)
@@ -858,6 +869,9 @@ struct BlockResponse {
     transactions_v2: Vec<String>,
     coinbase_reward: u64,
     total_fees: u64,
+    /// Blake2s-256 hash of the miner's ML-DSA-65 public key.
+    /// All-zero for the genesis block. Populated from v2.4.0 onward.
+    miner_pk_hash: String,
     // Encrypted note data for miner monitoring (encrypted, so privacy-preserving)
     coinbase_ephemeral_pk: String,
     coinbase_ciphertext: String,
@@ -911,6 +925,7 @@ fn block_to_response(block: &ShieldedBlock, height: u64) -> BlockResponse {
         transactions_v2: block.transactions_v2.iter().map(|tx| hex::encode(tx.hash())).collect(),
         coinbase_reward: block.coinbase.reward,
         total_fees: block.total_fees(),
+        miner_pk_hash: hex::encode(block.coinbase.miner_pk_hash),
         coinbase_ephemeral_pk: hex::encode(&block.coinbase.encrypted_note.ephemeral_pk),
         coinbase_ciphertext: hex::encode(&block.coinbase.encrypted_note.ciphertext),
     }
@@ -942,6 +957,8 @@ struct BlockSummaryItem {
     timestamp: u64,
     difficulty: u64,
     coinbase_reward: u64,
+    /// Blake2s-256 hash of the miner's ML-DSA-65 public key (all-zero for genesis).
+    miner_pk_hash: String,
 }
 
 /// List blocks with pagination — page 1 = most recent.
@@ -975,6 +992,7 @@ async fn list_blocks_paginated(
                 timestamp: block.header.timestamp,
                 difficulty: block.header.difficulty,
                 coinbase_reward: block.coinbase.reward,
+                miner_pk_hash: hex::encode(block.coinbase.miner_pk_hash),
             });
         }
     }
@@ -4104,7 +4122,137 @@ async fn mining_metrics(
         "commitment_mismatches": state.metric_commitment_mismatches.load(Relaxed),
         "reorg_count": state.reorg_count.load(Relaxed),
         "orphan_count": state.orphan_count.load(Relaxed),
+        "relay_pool_balance": chain.relay_pool().balance,
+        "relay_pool_last_payout_height": chain.relay_pool().last_payout_height,
     }))
+}
+
+/// GET /mining/template — Phase 6 stub.
+///
+/// Returns a small header-preview payload usable by external miners to
+/// discover the current parent tip and difficulty. The full template flow
+/// (server-side block cache, nonce_prefix allocation, coinbase commit) lives
+/// in `network::mining_api` and will be wired to a real mining coinbase
+/// builder in a follow-up release. For now this endpoint is deliberately
+/// read-only and does not allocate a reusable template on the server.
+async fn mining_template(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let tip = chain.latest_hash();
+    let height = chain.height() + 1;
+    let difficulty = chain.next_difficulty();
+    Json(serde_json::json!({
+        "height": height,
+        "parent_hash": hex::encode(tip),
+        "difficulty": difficulty,
+        "minimum_version": crate::network::version_check::MINIMUM_VERSION,
+        "note": "Preview endpoint. Full mining/template flow with server-side cache lands in a follow-up release.",
+    }))
+}
+
+/// POST /mining/submit — Phase 6 stub.
+///
+/// Accepts a typed `SubmitRequest` body so GPU miners can start building
+/// against the stable JSON shape. Always rejects until the full template
+/// cache and block reconstitution flow are wired — this keeps the reward
+/// path gated while still pinning the schema for clients.
+async fn mining_submit(
+    State(_state): State<Arc<AppState>>,
+    Json(_req): Json<crate::network::mining_api::SubmitRequest>,
+) -> Json<crate::network::mining_api::SubmitResponse> {
+    Json(crate::network::mining_api::SubmitResponse::reject(
+        "mining/submit is reserved; full template flow ships in a follow-up release",
+    ))
+}
+
+// ============================================================================
+// Relay Pool explorer endpoints (v2.4.0)
+// ============================================================================
+
+/// GET /relay/pool/status — live accumulator state + countdown to next payout.
+async fn relay_pool_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    use crate::consensus::relay_pool::PAYOUT_INTERVAL;
+    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let pool = chain.relay_pool();
+    let current_height = chain.height();
+    let total_paid = chain.state().relay_pool_total_paid();
+    // Next payout = smallest multiple of PAYOUT_INTERVAL strictly greater
+    // than max(current_height, last_payout_height). Always guaranteed > 0.
+    let anchor = current_height.max(pool.last_payout_height);
+    let next_payout_height = ((anchor / PAYOUT_INTERVAL) + 1) * PAYOUT_INTERVAL;
+    let blocks_until = next_payout_height.saturating_sub(current_height);
+    // Total collected over the chain's lifetime = pending + already paid.
+    let total_accumulated = pool.balance.saturating_add(total_paid);
+    let divisor = 10f64.powi(crate::config::COIN_DECIMALS as i32);
+    Json(serde_json::json!({
+        "balance_atomic": pool.balance,
+        "balance_tsn": pool.balance as f64 / divisor,
+        "total_paid_atomic": total_paid,
+        "total_paid_tsn": total_paid as f64 / divisor,
+        "total_accumulated_atomic": total_accumulated,
+        "total_accumulated_tsn": total_accumulated as f64 / divisor,
+        "last_payout_height": pool.last_payout_height,
+        "next_payout_height": next_payout_height,
+        "blocks_until_next_payout": blocks_until,
+        "current_height": current_height,
+        "payout_interval": PAYOUT_INTERVAL,
+    }))
+}
+
+/// GET /relay/balance/:pk_hash — accumulated balance for a specific relay.
+async fn relay_balance_of(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(pk_hash_hex): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let bytes = hex::decode(&pk_hash_hex).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if bytes.len() != 32 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut pk = [0u8; 32];
+    pk.copy_from_slice(&bytes);
+    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let amount = chain.state().relay_balance_of(&pk);
+    let divisor = 10f64.powi(crate::config::COIN_DECIMALS as i32);
+    Ok(Json(serde_json::json!({
+        "pk_hash": pk_hash_hex,
+        "balance_atomic": amount,
+        "balance_tsn": amount as f64 / divisor,
+    })))
+}
+
+/// GET /relay/payouts/recent?limit=20 — the N most recent relay-pool payouts.
+/// Walks back from the chain tip, collecting blocks that carry a
+/// `relay_payout` (only happens every PAYOUT_INTERVAL blocks).
+async fn relay_payouts_recent(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<BlockListParams>,
+) -> Json<serde_json::Value> {
+    use crate::consensus::relay_pool::PAYOUT_INTERVAL;
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
+    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let tip = chain.height();
+    // Walk backwards across payout boundaries only — much cheaper than
+    // scanning every block.
+    let mut payouts = Vec::new();
+    let mut boundary = (tip / PAYOUT_INTERVAL) * PAYOUT_INTERVAL;
+    while payouts.len() < limit as usize && boundary > 0 {
+        if let Some(block) = chain.get_block_by_height(boundary) {
+            if let Some(payout) = &block.relay_payout {
+                payouts.push(serde_json::json!({
+                    "height": payout.height,
+                    "pool_total": payout.pool_total,
+                    "entries": payout.entries.iter().map(|e| serde_json::json!({
+                        "recipient": hex::encode(e.recipient),
+                        "amount": e.amount,
+                    })).collect::<Vec<_>>(),
+                }));
+            }
+        }
+        if boundary < PAYOUT_INTERVAL { break; }
+        boundary -= PAYOUT_INTERVAL;
+    }
+    Json(serde_json::json!({ "payouts": payouts }))
 }
 
 // ============================================================================

@@ -62,6 +62,14 @@ pub struct BlockHeader {
     /// Mining difficulty target (numeric: hash_prefix < u64::MAX / difficulty).
     pub difficulty: u64,
 
+    /// Minimum number of V2 transactions the miner commits this block to include,
+    /// derived from a consensus view of the mempool at block-build time.
+    /// Validators re-derive the same value deterministically and reject a block
+    /// whose `transactions_v2.len() < min_v2_count` (with a grace window — see
+    /// `consensus::v2_inclusion`). Signed by PoW (part of the header hash).
+    #[serde(default)]
+    pub min_v2_count: u16,
+
     /// Nonce for proof-of-work (512 bits).
     /// First 56 bytes are random per-thread, last 8 bytes are a counter.
     #[serde(with = "hex_nonce")]
@@ -81,6 +89,7 @@ impl BlockHeader {
             &self.nullifier_root,
             self.timestamp,
             self.difficulty,
+            self.min_v2_count,
             &self.nonce,
         )
     }
@@ -96,6 +105,7 @@ impl BlockHeader {
             &self.nullifier_root,
             self.timestamp,
             self.difficulty,
+            self.min_v2_count,
             &self.nonce,
             height,
         )
@@ -134,6 +144,7 @@ pub struct BlockHeaderHashPrefix {
     merkle_root: [u8; 32],
     commitment_root: [u8; 32],
     nullifier_root: [u8; 32],
+    min_v2_count: u16,
     height: u64,
 }
 
@@ -146,6 +157,7 @@ impl BlockHeaderHashPrefix {
             merkle_root: header.merkle_root,
             commitment_root: header.commitment_root,
             nullifier_root: header.nullifier_root,
+            min_v2_count: header.min_v2_count,
             height,
         }
     }
@@ -167,6 +179,7 @@ impl BlockHeaderHashPrefix {
             &self.nullifier_root,
             timestamp,
             difficulty,
+            self.min_v2_count,
             nonce,
             self.height,
         )
@@ -194,6 +207,12 @@ pub struct ShieldedBlock {
     #[serde(default)]
     pub contract_receipts: Vec<ContractReceipt>,
     pub coinbase: CoinbaseTransaction,
+    /// v2.4.0 — relay pool payout tx, present only on blocks whose height
+    /// is a multiple of `RelayPool::PAYOUT_INTERVAL`. Distributes the 3%
+    /// relay share accumulated over the preceding 1000-block window across
+    /// eligible relay nodes.
+    #[serde(default)]
+    pub relay_payout: Option<crate::consensus::relay_pool::RelayPayout>,
 }
 
 impl ShieldedBlock {
@@ -223,6 +242,7 @@ impl ShieldedBlock {
                 .unwrap()
                 .as_secs(),
             difficulty,
+            min_v2_count: 0,
             nonce: [0u8; 64],
         };
 
@@ -234,6 +254,7 @@ impl ShieldedBlock {
             contract_calls: Vec::new(),
             contract_receipts: Vec::new(),
             coinbase,
+            relay_payout: None,
         }
     }
 
@@ -265,6 +286,7 @@ impl ShieldedBlock {
                 .unwrap()
                 .as_secs(),
             difficulty,
+            min_v2_count: 0,
             nonce: [0u8; 64],
         };
 
@@ -276,12 +298,19 @@ impl ShieldedBlock {
             contract_calls: Vec::new(),
             contract_receipts: Vec::new(),
             coinbase,
+            relay_payout: None,
         }
     }
 
     /// Set the state root for this block (called after state is computed).
     pub fn set_state_root(&mut self, state_root: [u8; BLOCK_HASH_SIZE]) {
         self.header.state_root = state_root;
+    }
+
+    /// Set the mempool-derived minimum V2 transaction count this block commits to.
+    /// Must be called BEFORE mining (the field is part of the PoW hash).
+    pub fn set_min_v2_count(&mut self, count: u16) {
+        self.header.min_v2_count = count;
     }
 
     /// Get the signal bits from the version field (bits 29-31)
@@ -340,6 +369,7 @@ impl ShieldedBlock {
             state_root: [0u8; BLOCK_HASH_SIZE],
             timestamp: genesis_timestamp,
             difficulty,
+            min_v2_count: 0,
             nonce: [0u8; 64],
         };
 
@@ -351,6 +381,7 @@ impl ShieldedBlock {
             contract_calls: Vec::new(),
             contract_receipts: Vec::new(),
             coinbase,
+            relay_payout: None,
         }
     }
 
@@ -632,6 +663,7 @@ mod tests {
             state_root: [0u8; 32],
             timestamp: 1234567890,
             difficulty: 10000,
+            min_v2_count: 0,
             nonce: [42u8; 64],
         };
 
@@ -640,6 +672,14 @@ mod tests {
 
         // Hash should be deterministic
         assert_eq!(hash, header.hash());
+
+        // Flipping min_v2_count must change the PoW hash (Phase 2 invariant).
+        let mut other = header.clone();
+        other.min_v2_count = 1;
+        assert_ne!(header.hash(), other.hash(),
+            "min_v2_count must be part of the PoW hash");
+        assert_ne!(header.hash_for_height(10), other.hash_for_height(10),
+            "min_v2_count must be part of the height-aware PoW hash");
     }
 
     #[test]
@@ -721,6 +761,7 @@ mod tests {
             state_root: [0u8; 32],
             timestamp: 1234567890,
             difficulty: 10000,
+            min_v2_count: 0,
             nonce: [0xAB; 64],
         };
 

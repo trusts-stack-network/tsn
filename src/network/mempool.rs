@@ -293,6 +293,24 @@ impl Mempool {
             + self.contract_deploys.len() + self.contract_calls.len()
     }
 
+    /// Number of V2 transactions that have been sitting in the mempool for
+    /// at least `min_age_secs`. Used by the Phase 3 V2 inclusion rule to
+    /// compute the validator-side `expected_min_v2`.
+    ///
+    /// Transactions under `min_age_secs` are excluded — they give the miner
+    /// the grace window needed to account for gossip propagation lag.
+    pub fn v2_count_older_than(&self, min_age_secs: u64, now_secs: u64) -> usize {
+        self.v2_transactions
+            .keys()
+            .filter(|hash| {
+                self.tx_meta
+                    .get(*hash)
+                    .map(|m| now_secs.saturating_sub(m.added_at) >= min_age_secs)
+                    .unwrap_or(false)
+            })
+            .count()
+    }
+
     /// Check if the mempool is empty.
     pub fn is_empty(&self) -> bool {
         self.v1_transactions.is_empty() && self.v2_transactions.is_empty()

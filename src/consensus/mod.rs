@@ -1,8 +1,11 @@
+pub mod banned_miners;
 mod difficulty;
 pub mod poseidon_pow;
 mod pow;
+pub mod relay_pool;
 pub mod signature_validator;
 pub mod upgrade;
+pub mod v2_inclusion;
 
 pub use difficulty::{
     calculate_next_difficulty, calculate_next_difficulty_lwma, calculate_stats,

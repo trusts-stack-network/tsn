@@ -376,8 +376,12 @@ impl TransactionCircuit {
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-/// Maximum number of spends supported per transaction
-pub const MAX_SPENDS: usize = 10;
+/// Maximum number of spends supported per transaction.
+/// Bumped from 10 to 25 in v2.4.0: larger wallets can consolidate in fewer
+/// rounds and the prover has capacity for it. The STARK proving/verifying
+/// time scales roughly linearly with num_spends; at 25 the prover budget
+/// stays within acceptable bounds for interactive send operations.
+pub const MAX_SPENDS: usize = 25;
 
 /// Maximum number of outputs supported per transaction
 pub const MAX_OUTPUTS: usize = 4;
@@ -527,19 +531,42 @@ mod tests {
         assert!(cache.get_or_build(1, 1).is_some());
         assert!(cache.get_or_build(2, 2).is_some());
         // Skip large shapes in tests (too slow)
-        // assert!(cache.get_or_build(10, 4).is_some()); // Max supported
+        // assert!(cache.get_or_build(25, 4).is_some()); // Max supported
         // Exceeding limits should fail
-        assert!(cache.get_or_build(11, 1).is_none()); // > MAX_SPENDS (10)
+        assert!(cache.get_or_build(26, 1).is_none()); // > MAX_SPENDS (25)
         assert!(cache.get_or_build(1, 5).is_none());  // > MAX_OUTPUTS (4)
     }
 
     #[test]
     fn test_is_supported() {
         assert!(CircuitCache::is_supported(1, 1));
-        assert!(CircuitCache::is_supported(10, 4)); // Max supported
+        assert!(CircuitCache::is_supported(25, 4)); // Max supported
+        assert!(CircuitCache::is_supported(15, 2)); // Mid-range
         assert!(!CircuitCache::is_supported(0, 1));  // 0 spends
         assert!(!CircuitCache::is_supported(1, 0));  // 0 outputs
-        assert!(!CircuitCache::is_supported(11, 1)); // > MAX_SPENDS (10)
+        assert!(!CircuitCache::is_supported(26, 1)); // > MAX_SPENDS (25)
+        assert!(!CircuitCache::is_supported(100, 1)); // way over
         assert!(!CircuitCache::is_supported(1, 5));  // > MAX_OUTPUTS (4)
+    }
+
+    #[test]
+    fn test_max_spends_constant_is_25() {
+        // Phase 4 of v2.4.0 bumped MAX_SPENDS from 10 to 25.
+        // This test guards against accidental regression of the constant.
+        assert_eq!(MAX_SPENDS, 25);
+    }
+
+    #[test]
+    fn test_circuit_builds_at_max_spends_bound() {
+        // Proves the prover can actually assemble a circuit at the new upper
+        // bound (MAX_SPENDS, 1). Does not run a proof — just the circuit
+        // compilation — so test cost stays acceptable but regressions in
+        // the STARK parameters surface here.
+        let circuit = TransactionCircuit::new(MAX_SPENDS, 1);
+        let (data, _targets) = circuit.build();
+        assert!(data.common.degree_bits() > 0);
+        // At 25 spends the circuit should be materially larger than 1 spend.
+        let small = TransactionCircuit::new(1, 1).build();
+        assert!(data.common.degree_bits() >= small.0.common.degree_bits());
     }
 }

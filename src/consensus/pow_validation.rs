@@ -189,7 +189,8 @@ impl PowValidator {
             &header.nullifier_root,
             header.timestamp,
             header.difficulty,
-            header.nonce,
+            header.min_v2_count,
+            &header.nonce,
         )
     }
     

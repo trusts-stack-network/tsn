@@ -106,9 +106,10 @@ pub fn poseidon_hash_header_parts(
     nullifier_root: &[u8; 32],
     timestamp: u64,
     difficulty: u64,
+    min_v2_count: u16,
     nonce: &[u8; 64],
 ) -> [u8; 32] {
-    let mut header_bytes = Vec::with_capacity(212);
+    let mut header_bytes = Vec::with_capacity(214);
     header_bytes.extend_from_slice(&version.to_le_bytes());
     header_bytes.extend_from_slice(prev_hash);
     header_bytes.extend_from_slice(merkle_root);
@@ -116,6 +117,7 @@ pub fn poseidon_hash_header_parts(
     header_bytes.extend_from_slice(nullifier_root);
     header_bytes.extend_from_slice(&timestamp.to_le_bytes());
     header_bytes.extend_from_slice(&difficulty.to_le_bytes());
+    header_bytes.extend_from_slice(&min_v2_count.to_le_bytes());
     header_bytes.extend_from_slice(nonce);
 
     poseidon_hash_header(&header_bytes)
@@ -130,10 +132,11 @@ pub fn poseidon_hash_header_parts_for_height(
     nullifier_root: &[u8; 32],
     timestamp: u64,
     difficulty: u64,
+    min_v2_count: u16,
     nonce: &[u8; 64],
     height: u64,
 ) -> [u8; 32] {
-    let mut header_bytes = Vec::with_capacity(212);
+    let mut header_bytes = Vec::with_capacity(214);
     header_bytes.extend_from_slice(&version.to_le_bytes());
     header_bytes.extend_from_slice(prev_hash);
     header_bytes.extend_from_slice(merkle_root);
@@ -141,6 +144,7 @@ pub fn poseidon_hash_header_parts_for_height(
     header_bytes.extend_from_slice(nullifier_root);
     header_bytes.extend_from_slice(&timestamp.to_le_bytes());
     header_bytes.extend_from_slice(&difficulty.to_le_bytes());
+    header_bytes.extend_from_slice(&min_v2_count.to_le_bytes());
     header_bytes.extend_from_slice(nonce);
 
     poseidon_hash_header_for_height(&header_bytes, height)
@@ -232,9 +236,10 @@ pub fn poseidon_hash_header_parts_v2(
     nullifier_root: &[u8; 32],
     timestamp: u64,
     difficulty: u64,
+    min_v2_count: u16,
     nonce: &[u8; 64],
 ) -> [u8; 32] {
-    let mut header_bytes = Vec::with_capacity(212);
+    let mut header_bytes = Vec::with_capacity(214);
     header_bytes.extend_from_slice(&version.to_le_bytes());
     header_bytes.extend_from_slice(prev_hash);
     header_bytes.extend_from_slice(merkle_root);
@@ -242,17 +247,21 @@ pub fn poseidon_hash_header_parts_v2(
     header_bytes.extend_from_slice(nullifier_root);
     header_bytes.extend_from_slice(&timestamp.to_le_bytes());
     header_bytes.extend_from_slice(&difficulty.to_le_bytes());
+    header_bytes.extend_from_slice(&min_v2_count.to_le_bytes());
     header_bytes.extend_from_slice(nonce);
     poseidon_hash_header_v2(&header_bytes)
 }
 
 /// Pre-allocated mining context for fast Poseidon2 hashing.
-/// Keeps a reusable 212-byte header buffer to avoid allocations in the hot loop.
-/// Only the nonce bytes (148..212) change each iteration.
+/// Keeps a reusable 214-byte header buffer to avoid allocations in the hot loop.
+/// v2.4.0: layout extended from 212 to 214 bytes to carry `min_v2_count` (u16).
+/// Layout: version(4) + prev_hash(32) + merkle_root(32) + commitment_root(32)
+///       + nullifier_root(32) + timestamp(8) + difficulty(8) + min_v2_count(2)
+///       + nonce(64) = 214.
 #[derive(Clone)]
 pub struct MiningHashContext {
-    /// Pre-built header bytes (212 bytes). Only nonce portion changes.
-    header_bytes: [u8; 212],
+    /// Pre-built header bytes (214 bytes). Only nonce portion changes.
+    header_bytes: [u8; 214],
 }
 
 impl MiningHashContext {
@@ -263,14 +272,17 @@ impl MiningHashContext {
         merkle_root: &[u8; 32],
         commitment_root: &[u8; 32],
         nullifier_root: &[u8; 32],
+        min_v2_count: u16,
     ) -> Self {
-        let mut header_bytes = [0u8; 212];
+        let mut header_bytes = [0u8; 214];
         header_bytes[0..4].copy_from_slice(&version.to_le_bytes());
         header_bytes[4..36].copy_from_slice(prev_hash);
         header_bytes[36..68].copy_from_slice(merkle_root);
         header_bytes[68..100].copy_from_slice(commitment_root);
         header_bytes[100..132].copy_from_slice(nullifier_root);
-        // timestamp (132..140), difficulty (140..148), nonce (148..212) set per-hash
+        // timestamp (132..140) + difficulty (140..148) set per-hash.
+        header_bytes[148..150].copy_from_slice(&min_v2_count.to_le_bytes());
+        // nonce (150..214) set per-hash.
         Self { header_bytes }
     }
 
@@ -280,7 +292,7 @@ impl MiningHashContext {
         let mut buf = self.header_bytes;
         buf[132..140].copy_from_slice(&timestamp.to_le_bytes());
         buf[140..148].copy_from_slice(&difficulty.to_le_bytes());
-        buf[148..212].copy_from_slice(nonce);
+        buf[150..214].copy_from_slice(nonce);
         poseidon_hash_header_v2(&buf)
     }
 
@@ -409,9 +421,30 @@ mod tests {
         let nonce = [42u8; 64];
         let hash = poseidon_hash_header_parts(
             2, &[0u8; 32], &[1u8; 32], &[2u8; 32], &[3u8; 32],
-            1000, 8, &nonce,
+            1000, 8, 0, &nonce,
         );
         assert_ne!(hash, [0u8; 32], "Hash should not be zero");
+    }
+
+    #[test]
+    fn test_poseidon_pow_parts_min_v2_count_affects_hash() {
+        // min_v2_count is PoW-signed: flipping it must change the hash.
+        let nonce = [42u8; 64];
+        let h0 = poseidon_hash_header_parts(
+            2, &[0u8; 32], &[1u8; 32], &[2u8; 32], &[3u8; 32],
+            1000, 8, 0, &nonce,
+        );
+        let h1 = poseidon_hash_header_parts(
+            2, &[0u8; 32], &[1u8; 32], &[2u8; 32], &[3u8; 32],
+            1000, 8, 1, &nonce,
+        );
+        let h_max = poseidon_hash_header_parts(
+            2, &[0u8; 32], &[1u8; 32], &[2u8; 32], &[3u8; 32],
+            1000, 8, u16::MAX, &nonce,
+        );
+        assert_ne!(h0, h1, "min_v2_count=0 vs 1 must produce different hashes");
+        assert_ne!(h0, h_max, "min_v2_count=0 vs u16::MAX must produce different hashes");
+        assert_ne!(h1, h_max, "min_v2_count=1 vs u16::MAX must produce different hashes");
     }
 
     #[test]
@@ -558,14 +591,15 @@ mod tests {
     #[test]
     fn test_poseidon2_v2_parts() {
         let nonce = [42u8; 64];
+        let min_v2 = 7u16;
         let hash = poseidon_hash_header_parts_v2(
             2, &[0u8; 32], &[1u8; 32], &[2u8; 32], &[3u8; 32],
-            1000, 8, &nonce,
+            1000, 8, min_v2, &nonce,
         );
         assert_ne!(hash, [0u8; 32], "Hash should not be zero");
 
         // Parts function should match manual byte construction
-        let mut header_bytes = Vec::with_capacity(212);
+        let mut header_bytes = Vec::with_capacity(214);
         header_bytes.extend_from_slice(&2u32.to_le_bytes());
         header_bytes.extend_from_slice(&[0u8; 32]);
         header_bytes.extend_from_slice(&[1u8; 32]);
@@ -573,6 +607,7 @@ mod tests {
         header_bytes.extend_from_slice(&[3u8; 32]);
         header_bytes.extend_from_slice(&1000u64.to_le_bytes());
         header_bytes.extend_from_slice(&8u64.to_le_bytes());
+        header_bytes.extend_from_slice(&min_v2.to_le_bytes());
         header_bytes.extend_from_slice(&nonce);
         let hash_direct = poseidon_hash_header_v2(&header_bytes);
         assert_eq!(hash, hash_direct, "Parts and direct must produce same hash");

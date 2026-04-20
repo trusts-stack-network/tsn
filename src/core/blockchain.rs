@@ -1092,7 +1092,13 @@ impl ShieldedBlockchain {
         }
     }
 
-    /// Get the current shielded state.
+    /// Read-only access to the relay pool accumulator (Phase 5 / v2.4.0).
+    /// Delegates to the state-resident copy so fast-synced nodes see the
+    /// same balance as miners.
+    pub fn relay_pool(&self) -> &crate::consensus::relay_pool::RelayPool {
+        self.state.relay_pool()
+    }
+
     pub fn state(&self) -> &ShieldedState {
         &self.state
     }
@@ -1471,6 +1477,22 @@ impl ShieldedBlockchain {
             self.state.apply_transaction_v2(tx);
         }
         self.state.apply_coinbase(&block.coinbase);
+
+        // Phase 5 (v2.4.0): accumulate the 3% relay-pool share from this
+        // block's reward BEFORE applying the payout tx, so the payout has
+        // the up-to-date balance to drain. The pool now lives in state so
+        // this is consensus-binding: every node (including fast-synced ones
+        // restoring from a snapshot) sees the same accumulator.
+        self.state.accumulate_relay_pool(
+            crate::config::relay_pool(block.coinbase.reward),
+        );
+
+        // Phase 5 (v2.4.0): if the block carries a RelayPayout, credit each
+        // recipient, bump the lifetime counter, and drain the pool — all
+        // in `apply_relay_payout`.
+        if let Some(payout) = &block.relay_payout {
+            self.state.apply_relay_payout(payout);
+        }
 
         // Update chain state
         self.difficulty = block.header.difficulty;
@@ -2277,6 +2299,7 @@ impl ShieldedBlockchain {
             dev_commitment_pq,
             dev_encrypted,
             dev_amount,
+            miner_pk_hash,
         )
     }
 
@@ -2301,6 +2324,7 @@ impl ShieldedBlockchain {
         let total_fees: u64 = transactions.iter().map(|tx| tx.fee).sum::<u64>()
             + transactions_v2.iter().map(|tx| tx.fee).sum::<u64>();
         let coinbase = self.create_coinbase(miner_pk_hash, viewing_key, total_fees);
+        let coinbase_reward = coinbase.reward;
 
         // Calculate commitment root after applying transactions
         let mut temp_state = self.state.snapshot();
@@ -2333,6 +2357,13 @@ impl ShieldedBlockchain {
         // Compute state root from the post-block state
         let state_root = temp_state.compute_state_root();
 
+        // Phase 2 (v2.4.0): commit the number of V2 transactions included in
+        // this block into the header. This is the simplest faithful source
+        // for min_v2_count — a miner that under-includes V2 txs relative to
+        // the mempool will still fail the mempool-side check performed by
+        // validators (see Phase 3 `validate_v2_inclusion`).
+        let included_v2 = transactions_v2.len().min(u16::MAX as usize) as u16;
+
         let mut block = ShieldedBlock::new_with_v2(
             self.latest_hash(),
             transactions,
@@ -2343,6 +2374,39 @@ impl ShieldedBlockchain {
             self.next_difficulty(),
         );
         block.set_state_root(state_root);
+        block.set_min_v2_count(included_v2);
+
+        // Phase 5 (v2.4.0): on a payout boundary, drain the accumulator
+        // and build the payout tx.
+        //
+        // First-release policy when we have no cross-seed metrics yet
+        // (the full signed-metrics layer ships in a follow-up):
+        //   * If there are no known eligible relays, the entire pool goes
+        //     to the dev treasury. Keeps the 3% slice economic even before
+        //     the relay scoring loop is live.
+        //   * Once the metrics layer lands, `entries` will be filled from
+        //     `build_relay_payout()` with per-relay amounts.
+        let new_height = self.height() + 1;
+        if self.relay_pool().is_payout_due(new_height) {
+            // Accumulate THIS block's share before draining so the new
+            // block's reward also contributes.
+            let this_block_share = crate::config::relay_pool(coinbase_reward);
+            let pool_total = self.relay_pool().balance.saturating_add(this_block_share);
+            let entries = if pool_total == 0 {
+                Vec::new()
+            } else {
+                vec![crate::consensus::relay_pool::PayoutEntry {
+                    recipient: crate::config::DEV_TREASURY_PK_HASH,
+                    amount: pool_total,
+                }]
+            };
+            let payout = crate::consensus::relay_pool::RelayPayout {
+                height: new_height,
+                pool_total,
+                entries,
+            };
+            block.relay_payout = Some(payout);
+        }
         block
     }
 

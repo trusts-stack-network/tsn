@@ -13,6 +13,7 @@ pub mod gossip;
 pub mod mempool;
 pub mod message_limits;
 pub mod metrics;
+pub mod mining_api;
 pub mod monitoring_config;
 pub mod peer;
 pub mod protocol;

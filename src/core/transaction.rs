@@ -331,10 +331,38 @@ pub struct CoinbaseTransaction {
     /// Dev fee amount (5% of total reward). 0 for pre-activation blocks.
     #[serde(default)]
     pub dev_fee_amount: u64,
+
+    /// Hash of the miner's ML-DSA-65 public key (Blake2s-256).
+    /// Identifies which miner produced this block. Enables explorer attribution,
+    /// per-miner ban tracking, and relay pool score aggregation.
+    /// Required (non-zero) post-genesis as of testnet-v6 / v2.4.0.
+    #[serde(default, with = "hex_array_32")]
+    pub miner_pk_hash: [u8; 32],
+}
+
+mod hex_array_32 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8; 32], ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(&hex::encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<[u8; 32], D::Error> {
+        let s = String::deserialize(de)?;
+        let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
+        if v.len() != 32 {
+            return Err(serde::de::Error::custom("expected 32 bytes"));
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&v);
+        Ok(out)
+    }
 }
 
 impl CoinbaseTransaction {
     /// Create a new coinbase transaction (without dev fee — legacy compatibility).
+    /// `miner_pk_hash` defaults to all-zero; callers that need attribution must
+    /// set it explicitly via `with_miner_pk_hash` or use `new_with_dev_fee`.
     pub fn new(
         note_commitment: NoteCommitment,
         note_commitment_pq: [u8; 32],
@@ -352,10 +380,17 @@ impl CoinbaseTransaction {
             dev_fee_commitment_pq: None,
             dev_fee_encrypted_note: None,
             dev_fee_amount: 0,
+            miner_pk_hash: [0u8; 32],
         }
     }
 
-    /// Create a new coinbase transaction with dev fee.
+    /// Attach the miner pk_hash to an existing coinbase (builder-style).
+    pub fn with_miner_pk_hash(mut self, miner_pk_hash: [u8; 32]) -> Self {
+        self.miner_pk_hash = miner_pk_hash;
+        self
+    }
+
+    /// Create a new coinbase transaction with dev fee and miner attribution.
     pub fn new_with_dev_fee(
         note_commitment: NoteCommitment,
         note_commitment_pq: [u8; 32],
@@ -366,6 +401,7 @@ impl CoinbaseTransaction {
         dev_fee_commitment_pq: [u8; 32],
         dev_fee_encrypted_note: EncryptedNote,
         dev_fee_amount: u64,
+        miner_pk_hash: [u8; 32],
     ) -> Self {
         Self {
             note_commitment,
@@ -377,6 +413,7 @@ impl CoinbaseTransaction {
             dev_fee_commitment_pq: Some(dev_fee_commitment_pq),
             dev_fee_encrypted_note: Some(dev_fee_encrypted_note),
             dev_fee_amount,
+            miner_pk_hash,
         }
     }
 
@@ -396,6 +433,10 @@ impl CoinbaseTransaction {
             hasher.update(dev_cm.as_ref());
             hasher.update(&self.dev_fee_amount.to_le_bytes());
         }
+        // Bind the miner's pk_hash into the hash so it propagates through the
+        // block merkle_root and therefore the PoW: a miner cannot rewrite
+        // attribution without redoing the work.
+        hasher.update(&self.miner_pk_hash);
         hasher.finalize().into()
     }
 

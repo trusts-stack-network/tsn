@@ -243,6 +243,7 @@ fn run_mining_job(job: MineJob, _worker_id: usize) {
             &template.header.merkle_root,
             &template.header.commitment_root,
             &template.header.nullifier_root,
+            template.header.min_v2_count,
         ))
     } else {
         None

@@ -1608,7 +1608,11 @@ fn resolve_pq_commitment(
 /// the STARK prover can handle (mirrors MAX_SPENDS in circuit_pq.rs). The
 /// consolidation loop uses MAX_SPENDS_PER_TX - 1 as batch size to keep one
 /// slot free for flexibility at the final tx.
-pub const MAX_SPENDS_PER_TX: usize = 10;
+///
+/// Bumped from 10 to 25 in v2.4.0 (Phase 4). Larger wallets can now pack
+/// ~2.5x more notes per tx, cutting consolidation rounds and the user-visible
+/// "auto_consolidate" latency proportionally.
+pub const MAX_SPENDS_PER_TX: usize = 25;
 pub const CONSOLIDATION_BATCH: usize = MAX_SPENDS_PER_TX - 1;
 
 /// v2.3.1: GET with exponential backoff on HTTP 429 (Too Many Requests).
@@ -3813,9 +3817,20 @@ async fn cmd_node(
         None
     };
 
+    // v2.4.0 — load the persisted BannedMiners set from disk, if any. A
+    // missing file is not an error (fresh node case).
+    let banned_miners_path = std::path::PathBuf::from(data_dir).join("banned_miners.json");
+    let banned_miners = tsn::consensus::banned_miners::BannedMiners::load_from_disk(&banned_miners_path)
+        .unwrap_or_else(|e| {
+            tracing::warn!("failed to load banned_miners from {:?}: {}", banned_miners_path, e);
+            tsn::consensus::banned_miners::BannedMiners::new()
+        });
+
     let state = Arc::new(AppState {
         blockchain: RwLock::new(blockchain),
         mempool: RwLock::new(mempool),
+        banned_miners: RwLock::new(banned_miners),
+        banned_miners_path: Some(banned_miners_path),
         peers: RwLock::new(peers.clone()),
         miner_stats: RwLock::new(MinerStats::default()),
         faucet: faucet_service,

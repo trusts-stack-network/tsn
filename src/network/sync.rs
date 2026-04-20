@@ -473,6 +473,43 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
             }
             let block_hash_hex = hex::encode(&block.hash()[..8]);
             let block_h = block.coinbase.height;
+
+            // v2.4.0 / Phase 3 — enforce V2 inclusion + ban policy BEFORE
+            // accepting the block into the chain. A banned miner or a block
+            // that under-commits relative to the local mempool is rejected
+            // here rather than in the chain's internal validator, so we can
+            // also update the ban set atomically with the decision.
+            {
+                let mempool = state.mempool.read()
+                    .map_err(|e| SyncError::LockPoisoned(format!("mempool lock: {}", e)))?;
+                let mut banned = state.banned_miners.write()
+                    .map_err(|e| SyncError::LockPoisoned(format!("banned lock: {}", e)))?;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs()).unwrap_or(0);
+                let chain_ro = state.blockchain.read()
+                    .map_err(|e| SyncError::LockPoisoned(format!("chain read: {}", e)))?;
+                let current_height = chain_ro.height();
+                drop(chain_ro);
+                let outcome = crate::consensus::v2_inclusion::enforce_at_acceptance(
+                    &block, &mempool, &mut *banned, current_height, now,
+                );
+                if !outcome.is_accept() {
+                    if let Some(path) = &state.banned_miners_path {
+                        let _ = banned.save_to_disk(path);
+                    }
+                    warn!(
+                        "SYNC_DEBUG: BLOCK_RESULT idx={}/{} result=REJECTED(policy) reason={}",
+                        idx + 1, batch_size,
+                        outcome.reason().unwrap_or_default()
+                    );
+                    continue;
+                }
+                if let Some(path) = &state.banned_miners_path {
+                    let _ = banned.save_to_disk(path);
+                }
+            }
+
             let mut chain = state.blockchain.write()
                 .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
             debug!(
