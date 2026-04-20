@@ -4009,6 +4009,13 @@ async fn cmd_node(
             const WIPE_MAX_PER_24H: usize = 3;       // kill switch
             const SOLO_FORK_THRESHOLD: u64 = 5;      // blocks ahead of consensus. Smart guards (≥3 peers agree, cooldown 1h, max 3 wipes/24h) make this safe at low threshold.
             const MIN_PEERS_AGREE: usize = 3;        // peers agreeing on consensus
+            // v2.3.9 — Check 2d: auto-wipe when local is BEHIND consensus and cannot
+            // catch up via peer sync (happens when the common ancestor sits below
+            // finalization and sync.rs refuses to rollback). Must stay behind for at
+            // least STUCK_BEHIND_GRACE_SECS before firing to rule out transient lag.
+            const STUCK_BEHIND_THRESHOLD: u64 = 20;  // blocks behind consensus
+            const STUCK_BEHIND_GRACE_SECS: u64 = 120;
+            let mut behind_stuck_since: Option<std::time::Instant> = None;
 
             // Returns Some(consensus_height) iff ≥MIN_PEERS_AGREE peers share the
             // same tip height (majority), otherwise None. Used to gate auto-wipe.
@@ -4222,6 +4229,65 @@ async fn cmd_node(
                             if !is_auto {
                                 tracing::info!("\x1b[36mWATCHDOG:\x1b[0m Mode validation — solo fork detected (gap={}), action proposed via /admin/force-resync", ahead_gap);
                             }
+                        }
+
+                        // v2.3.9 — Check 2d: symmetric case of 2c — local is BEHIND
+                        // consensus and peer-sync can't rollback (common ancestor sits
+                        // below finalization). Without this, a node that forked early
+                        // stays stuck forever while logs spam "REJECTED rollback ...
+                        // below finalized height". Same guards as 2c (cooldown, kill
+                        // switch, ≥3 peers agree). Requires the behind state to
+                        // persist for STUCK_BEHIND_GRACE_SECS to rule out transient
+                        // lag from a slow sync or a peer catching up.
+                        let behind_gap = consensus_opt
+                            .map(|c| c.saturating_sub(current_height))
+                            .unwrap_or(0);
+                        if behind_gap > STUCK_BEHIND_THRESHOLD {
+                            if behind_stuck_since.is_none() {
+                                behind_stuck_since = Some(std::time::Instant::now());
+                            }
+                            let grace_elapsed = behind_stuck_since
+                                .map(|t| t.elapsed().as_secs() >= STUCK_BEHIND_GRACE_SECS)
+                                .unwrap_or(false);
+                            if grace_elapsed {
+                                let consensus_h = consensus_opt.unwrap();
+                                let now = std::time::Instant::now();
+                                while let Some(front) = wipe_history_24h.front() {
+                                    if now.duration_since(*front).as_secs() > 86400 {
+                                        wipe_history_24h.pop_front();
+                                    } else { break; }
+                                }
+                                let (allowed, reason) = check_wipe_allowed(now, last_wipe_at, &wipe_history_24h);
+                                let status_msg = if allowed {
+                                    "ALLOWED".to_string()
+                                } else {
+                                    format!("DENIED: {}", reason)
+                                };
+                                tracing::warn!(
+                                    "\x1b[36mWATCHDOG:\x1b[0m STUCK BEHIND confirmed — local={} consensus={} gap={} ({} peers agree, {}s elapsed). Auto-wipe {}.",
+                                    current_height, consensus_h, behind_gap, verified_peer_heights.len(),
+                                    STUCK_BEHIND_GRACE_SECS, status_msg
+                                );
+                                if allowed && is_auto {
+                                    tracing::warn!("\x1b[36mWATCHDOG:\x1b[0m Executing smart auto-wipe (stuck behind, rollback blocked by finalization).");
+                                    let _reorg_guard = watchdog_state.reorg_lock.write().await;
+                                    let mut chain = watchdog_state.blockchain.write().unwrap();
+                                    chain.reset_for_snapshot_resync();
+                                    drop(chain);
+                                    drop(_reorg_guard);
+                                    last_wipe_at = Some(now);
+                                    wipe_history_24h.push_back(now);
+                                    stuck_since = None;
+                                    behind_stuck_since = None;
+                                    last_height = 0;
+                                    continue;
+                                }
+                                if !is_auto {
+                                    tracing::info!("\x1b[36mWATCHDOG:\x1b[0m Mode validation — stuck behind detected (gap={}), action proposed via /admin/force-resync", behind_gap);
+                                }
+                            }
+                        } else {
+                            behind_stuck_since = None;
                         }
                     }
                 }
