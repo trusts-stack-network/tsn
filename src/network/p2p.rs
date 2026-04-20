@@ -779,17 +779,27 @@ async fn p2p_event_loop(
 /// This ensures that nodes on any HTTP port correctly dial seeds on their actual P2P port.
 pub fn seeds_to_bootstrap(seed_urls: &[String], _local_p2p_port: u16) -> Vec<Multiaddr> {
     seed_urls.iter().filter_map(|url| {
-        // Extract IP and port from "http://1.2.3.4:9333"
+        // Extract host and port from "http://<host>:9333"
         let stripped = url.trim_start_matches("http://").trim_start_matches("https://");
         let mut parts = stripped.split(':');
-        let ip = parts.next()?;
+        let host = parts.next()?;
         // Parse the seed's HTTP port (default 9333), then P2P = HTTP + 1
         let seed_http_port: u16 = parts.next()
             .and_then(|p| p.trim_matches('/').parse().ok())
             .unwrap_or(9333);
         let seed_p2p_port = seed_http_port + 1;
-        let addr: Multiaddr = format!("/ip4/{}/tcp/{}", ip, seed_p2p_port).parse().ok()?;
-        Some(addr)
+        // Pick the correct multiaddr scheme: /ip4 for a dotted-quad, /dns4
+        // for a DNS name. v2.4.0 fix — seeds migrated to DNS names in v2.3.9
+        // were silently producing empty dial lists under the /ip4 hard-coding,
+        // which made relay/miner peers invisible to the libp2p mesh and to
+        // the explorer's peer list.
+        let is_ipv4 = host.parse::<std::net::Ipv4Addr>().is_ok();
+        let multiaddr_str = if is_ipv4 {
+            format!("/ip4/{}/tcp/{}", host, seed_p2p_port)
+        } else {
+            format!("/dns4/{}/tcp/{}", host, seed_p2p_port)
+        };
+        multiaddr_str.parse().ok()
     }).collect()
 }
 
