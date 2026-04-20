@@ -125,7 +125,7 @@ zeroize = { version = "1.8", features = ["derive"] }
 
 # TUI
 ratatui = "0.27"
-crossterm = "0.28"
+crossterm = "0.29"
 
 [[bin]]
 name = "tsn-miner-monitor"
