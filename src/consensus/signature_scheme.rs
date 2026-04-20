@@ -61,9 +61,9 @@ pub enum SignatureError {
     InvalidSignature,
     #[error("Version non supported: {0:?}")]
     UnsupportedVersion(SignatureVersion),
-    #[error("Key publique incompatible avec la version")]
+    #[error("Public key incompatible with the signature version")]
     IncompatibleKeyVersion,
-    #[error("Signature expired pour cette hauteur de bloc")]
+    #[error("Signature expired for this block height")]
     ExpiredSignatureVersion,
     #[error("Governance error: {0}")]
     GovernanceError(String),

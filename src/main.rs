@@ -1212,7 +1212,7 @@ async fn cmd_wallet_menu(wallet_path: &str, node_url: &str) -> anyhow::Result<()
 
         println!();
         println!("  {}╔══════════════════════════════════════════════════════════════════════╗{}", cyan, reset);
-        println!("  {}║  TSN Wallet v1.3.0║{}", cyan, reset);
+        println!("  {}║  TSN Wallet v{}                                                     ║{}", cyan, env!("CARGO_PKG_VERSION"), reset);
         println!("  {}╚══════════════════════════════════════════════════════════════════════╝{}", cyan, reset);
         println!("  Your address (share this to receive TSN):");
         println!("  {}{}{}", green, pk_hash_hex, reset);
@@ -1266,6 +1266,19 @@ async fn cmd_wallet_menu(wallet_path: &str, node_url: &str) -> anyhow::Result<()
             }
             "4" => {
                 println!("  Rescanning wallet from height 0...");
+                // v2.3.7 — capture pre-rescan totals so we can surface what actually
+                // changed (new notes, stale notes removed, net balance delta).
+                // A rescan can DECREASE the visible balance when the previous
+                // incremental scan missed nullifiers and the wallet was counting
+                // already-spent notes as unspent — the full replay corrects that.
+                let pre_balance_raw: u64;
+                let pre_notes_count: usize;
+                {
+                    let w = ShieldedWallet::open(wallet_path)
+                        .or_else(|_| ShieldedWallet::load(wallet_path))?;
+                    pre_balance_raw = w.balance();
+                    pre_notes_count = w.note_count();
+                }
                 {
                     let _lock = WalletLock::acquire(wallet_path)?;
                     if let Ok(mut w) = ShieldedWallet::open(wallet_path)
@@ -1277,6 +1290,32 @@ async fn cmd_wallet_menu(wallet_path: &str, node_url: &str) -> anyhow::Result<()
                     }
                 }
                 cmd_balance(wallet_path, node_url).await?;
+                // Report delta vs previous snapshot.
+                let (post_balance_raw, post_notes_count) = {
+                    let w = ShieldedWallet::open(wallet_path)
+                        .or_else(|_| ShieldedWallet::load(wallet_path))?;
+                    (w.balance(), w.note_count())
+                };
+                let divisor = 10u64.pow(config::COIN_DECIMALS) as f64;
+                let notes_delta = post_notes_count as i64 - pre_notes_count as i64;
+                let bal_delta = post_balance_raw as i128 - pre_balance_raw as i128;
+                let bal_delta_coins = bal_delta as f64 / divisor as f64;
+                let yellow = "\x1b[1;33m";
+                let reset = "\x1b[0m";
+                if notes_delta != 0 || bal_delta != 0 {
+                    println!();
+                    println!("  {}Rescan delta vs previous state:{}", yellow, reset);
+                    if notes_delta >= 0 {
+                        println!("    +{} notes", notes_delta);
+                    } else {
+                        println!("    {} notes removed (were counted as unspent but are actually spent on-chain)", notes_delta);
+                    }
+                    if bal_delta >= 0 {
+                        println!("    +{:.4} TSN", bal_delta_coins);
+                    } else {
+                        println!("    {:.4} TSN (the rescan corrected stale unspent accounting)", bal_delta_coins);
+                    }
+                }
             }
             "0" | "q" | "quit" | "exit" => {
                 println!("  Bye!");
@@ -2705,17 +2744,36 @@ fn check_snapshot_auto_trigger(state: &std::sync::Arc<tsn::network::AppState>, t
     {
         return;
     }
+    // v2.3.7 — persist the trigger height to disk so we don't re-trigger on restart.
+    // Previously the atomic was reset to 0 at boot, causing every restart to fire
+    // a snapshot at the current (non-aligned) tip, polluting tsn-snapshots with
+    // dozens of near-duplicate releases.
+    let data_dir = tsn::config::get_data_dir();
+    let trigger_file = std::path::PathBuf::from(&data_dir).join(".last_snapshot_trigger");
+    let _ = std::fs::write(&trigger_file, latest_eligible.to_string());
+
     tracing::info!(
         "Snapshot auto-trigger: height {} finalized interval {}",
         latest_eligible, interval
     );
     let snap_state = state.clone();
+    let export_height = latest_eligible;
     tokio::spawn(async move {
-        auto_snapshot_export(snap_state).await;
+        auto_snapshot_export(snap_state, export_height).await;
     });
 }
 
-async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>) {
+/// v2.3.7 — Load the last-triggered snapshot height from disk so we don't re-fire
+/// a snapshot at the same interval after a restart.
+fn load_last_snapshot_trigger(data_dir: &str) -> u64 {
+    let path = std::path::PathBuf::from(data_dir).join(".last_snapshot_trigger");
+    match std::fs::read_to_string(&path) {
+        Ok(s) => s.trim().parse::<u64>().unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>, tag_height: u64) {
     use tracing::{info, warn};
 
     // Only export if we have a signing key (seed nodes only)
@@ -2803,8 +2861,14 @@ async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>) {
         let client = state.http_client.clone();
         let compressed_for_gh = compressed.clone();
         let manifest_for_gh = manifest.clone();
+        // v2.3.7 — tag by interval-multiple (e.g. "snapshot-2000") rather than by
+        // exact chain height. This makes the tag deterministic across seeds that
+        // race to publish the same interval, so GitHub's idempotent tag check
+        // actually hits (422 → skip) instead of creating near-duplicate releases
+        // like snapshot-1582, snapshot-1585, snapshot-1587, snapshot-1592.
+        let gh_tag_height = tag_height;
         tokio::spawn(async move {
-            publish_snapshot_to_github(&client, &manifest_for_gh, &compressed_for_gh).await;
+            publish_snapshot_to_github(&client, &manifest_for_gh, &compressed_for_gh, gh_tag_height).await;
         });
     }
 
@@ -2966,6 +3030,7 @@ async fn publish_snapshot_to_github(
     client: &reqwest::Client,
     manifest: &tsn::network::snapshot_manifest::SnapshotManifest,
     compressed: &[u8],
+    tag_height: u64,
 ) {
     use tracing::{info, warn};
     let token = match std::env::var("TSN_SNAPSHOT_GH_TOKEN") {
@@ -2974,7 +3039,33 @@ async fn publish_snapshot_to_github(
     };
 
     let owner_repo = "trusts-stack-network/tsn-snapshots";
-    let tag = format!("snapshot-{}", manifest.height);
+    // v2.3.7 — tag by interval-multiple (passed in), not manifest.height. This
+    // makes the tag deterministic so concurrent publishers collide and only one
+    // succeeds.
+    let tag = format!("snapshot-{}", tag_height);
+
+    // v2.3.7 — HEAD probe before POST to catch the race window where two seeds
+    // both see a missing tag and fire create-release. GitHub's POST handler does
+    // return 422 for duplicate tags but the check is not strictly atomic; a HEAD
+    // first removes most of the window.
+    let head_url = format!(
+        "https://api.github.com/repos/{}/releases/tags/{}",
+        owner_repo, tag
+    );
+    if let Ok(resp) = client
+        .get(&head_url)
+        .bearer_auth(&token)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            info!("Snapshot GitHub publish: tag {} already exists (HEAD 200), skipping", tag);
+            return;
+        }
+    }
 
     let create_url = format!("https://api.github.com/repos/{}/releases", owner_repo);
     let body = serde_json::json!({
@@ -3721,7 +3812,11 @@ async fn cmd_node(
             std::num::NonZeroUsize::new(tsn::network::api::BLOCK_DEDUP_CAPACITY).unwrap(),
         )),
         fork_recovery_cooldown: std::sync::Mutex::new(std::collections::HashMap::new()),
-        last_snapshot_auto_trigger: std::sync::atomic::AtomicU64::new(0),
+        last_snapshot_auto_trigger: std::sync::atomic::AtomicU64::new(
+            // v2.3.7 — load persisted trigger height so restart does not re-fire
+            // a snapshot at an interval we already published.
+            load_last_snapshot_trigger(&data_dir)
+        ),
         version_bans: std::sync::RwLock::new(std::collections::HashMap::new()),
     });
 
@@ -3859,6 +3954,60 @@ async fn cmd_node(
             let mut resync_count: u32 = 0;
             let mut resync_window_start = std::time::Instant::now();
             let mut error_count: u32 = 0;
+            // v2.3.8 — smart auto-wipe state
+            let mut last_wipe_at: Option<std::time::Instant> = None;
+            let mut wipe_history_24h: std::collections::VecDeque<std::time::Instant> =
+                std::collections::VecDeque::new();
+            const WIPE_COOLDOWN_SECS: u64 = 3600;    // 1 hour between wipes
+            const WIPE_MAX_PER_24H: usize = 3;       // kill switch
+            const SOLO_FORK_THRESHOLD: u64 = 5;      // blocks ahead of consensus. Smart guards (≥3 peers agree, cooldown 1h, max 3 wipes/24h) make this safe at low threshold.
+            const MIN_PEERS_AGREE: usize = 3;        // peers agreeing on consensus
+
+            // Returns Some(consensus_height) iff ≥MIN_PEERS_AGREE peers share the
+            // same tip height (majority), otherwise None. Used to gate auto-wipe.
+            let compute_consensus = |peer_heights: &[u64]| -> Option<u64> {
+                if peer_heights.len() < MIN_PEERS_AGREE {
+                    return None;
+                }
+                let mut by_h: std::collections::HashMap<u64, usize> =
+                    std::collections::HashMap::new();
+                for h in peer_heights {
+                    *by_h.entry(*h).or_insert(0) += 1;
+                }
+                let mut entries: Vec<(u64, usize)> = by_h.into_iter().collect();
+                entries.sort_by(|a, b| b.1.cmp(&a.1));
+                if let Some((h, count)) = entries.first() {
+                    if *count >= MIN_PEERS_AGREE {
+                        return Some(*h);
+                    }
+                    // Allow ±2 block cluster around majority
+                    let cluster: usize = entries.iter()
+                        .filter(|(eh, _)| eh.abs_diff(*h) <= 2)
+                        .map(|(_, c)| *c).sum();
+                    if cluster >= MIN_PEERS_AGREE {
+                        return Some(*h);
+                    }
+                }
+                None
+            };
+
+            // v2.3.8 — decide whether a wipe is safe right now.
+            // Returns (allow: bool, reason: String)
+            let check_wipe_allowed = |now: std::time::Instant,
+                                      last: Option<std::time::Instant>,
+                                      history: &std::collections::VecDeque<std::time::Instant>|
+             -> (bool, String) {
+                if let Some(t) = last {
+                    let since = now.duration_since(t).as_secs();
+                    if since < WIPE_COOLDOWN_SECS {
+                        return (false, format!("cooldown ({}s since last wipe, need {}s)", since, WIPE_COOLDOWN_SECS));
+                    }
+                }
+                if history.len() >= WIPE_MAX_PER_24H {
+                    return (false, format!("kill switch ({} wipes in last 24h, max {})", history.len(), WIPE_MAX_PER_24H));
+                }
+                (true, String::new())
+            };
 
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -3886,7 +4035,7 @@ async fn cmd_node(
                     if !peers.is_empty() && active_bans >= peers.len() {
                         drop(bans);
                         drop(peers);
-                        tracing::warn!("WATCHDOG: All peers banned! Clearing ban list.");
+                        tracing::warn!("\x1b[36mWATCHDOG:\x1b[0m All peers banned! Clearing ban list.");
                         tsn::network::log_node_error(&watchdog_state, "all_peers_banned", "All peers were banned, clearing ban list");
                         let mut bans = watchdog_state.banned_peers.write().unwrap();
                         bans.clear();
@@ -3913,7 +4062,7 @@ async fn cmd_node(
                                 // Wiping silently destroys data and re-imports whatever vintage
                                 // snapshot a peer happens to serve. Log only; operator decides.
                                 tracing::warn!(
-                                    "WATCHDOG: {}. Auto-wipe DISABLED (v2.3.6). Use /admin/force-resync if needed.",
+                                    "\x1b[36mWATCHDOG:\x1b[0m {}. Auto-wipe DISABLED (v2.3.6). Use /admin/force-resync if needed.",
                                     msg
                                 );
                                 tsn::network::log_node_error(&watchdog_state, "stuck_height", &msg);
@@ -3957,7 +4106,7 @@ async fn cmd_node(
                         // In each case, blind auto-wipe is worse than waiting: it destroys
                         // the canonical chain and re-imports from an arbitrary peer.
                         tracing::warn!(
-                            "WATCHDOG: Peers far ahead — {} peers at ~{} but local at {} (gap={}). Auto-wipe DISABLED (v2.3.6). Investigate manually.",
+                            "\x1b[36mWATCHDOG:\x1b[0m Peers far ahead — {} peers at ~{} but local at {} (gap={}). Auto-wipe DISABLED (v2.3.6). Investigate manually.",
                             peers_at_max, max_peer_h, current_height, gap
                         );
                         let _ = is_auto;
@@ -3981,28 +4130,50 @@ async fn cmd_node(
                             }
                         }
                     }
-                    // Only trigger if we have 2+ verified peers and ALL are far behind us
-                    if verified_peer_heights.len() >= 2 && current_height > 100 {
-                        let max_peer = *verified_peer_heights.iter().max().unwrap_or(&0);
-                        let ahead_gap = current_height.saturating_sub(max_peer);
-                        if ahead_gap > 100 {
-                            // v2.3.6 — Never auto-wipe. Solo-fork detection can misfire
-                            // when peers transiently show stale tips (RW race, restart).
-                            // Operator decides via /admin/force-resync.
+                    // v2.3.8 — smart auto-wipe for solo-fork:
+                    // only triggered when MULTIPLE guards are satisfied simultaneously.
+                    if verified_peer_heights.len() >= MIN_PEERS_AGREE && current_height > 100 {
+                        let consensus_opt = compute_consensus(&verified_peer_heights);
+                        let ahead_gap = consensus_opt
+                            .map(|c| current_height.saturating_sub(c))
+                            .unwrap_or(0);
+                        if ahead_gap > SOLO_FORK_THRESHOLD {
+                            let consensus_h = consensus_opt.unwrap();
+                            let now = std::time::Instant::now();
+                            // Trim wipe_history_24h
+                            while let Some(front) = wipe_history_24h.front() {
+                                if now.duration_since(*front).as_secs() > 86400 {
+                                    wipe_history_24h.pop_front();
+                                } else { break; }
+                            }
+                            let (allowed, reason) = check_wipe_allowed(now, last_wipe_at, &wipe_history_24h);
+                            let status_msg = if allowed {
+                                "ALLOWED".to_string()
+                            } else {
+                                format!("DENIED: {}", reason)
+                            };
                             tracing::warn!(
-                                "WATCHDOG: SOLO FORK — local at {} but all {} peers are at max {}. Gap={}. Auto-wipe DISABLED (v2.3.6). Investigate manually.",
-                                current_height, verified_peer_heights.len(), max_peer, ahead_gap
+                                "\x1b[36mWATCHDOG:\x1b[0m SOLO FORK confirmed — local={} consensus={} gap={} ({} peers agree). Auto-wipe {}.",
+                                current_height, consensus_h, ahead_gap, verified_peer_heights.len(),
+                                status_msg
                             );
-                            if false { // dead-branch retained for minimal diff
+                            if allowed && is_auto {
+                                tracing::warn!("\x1b[36mWATCHDOG:\x1b[0m Executing smart auto-wipe (conditions satisfied).");
                                 let _reorg_guard = watchdog_state.reorg_lock.write().await;
                                 let mut chain = watchdog_state.blockchain.write().unwrap();
                                 chain.reset_for_snapshot_resync();
                                 drop(chain);
                                 drop(_reorg_guard);
+                                last_wipe_at = Some(now);
+                                wipe_history_24h.push_back(now);
                                 stuck_since = None;
                                 last_height = 0;
-                            } else {
-                                tracing::info!("WATCHDOG: Mode validation — solo fork detected (gap={}), action proposed via /admin/force-resync", ahead_gap);
+                                continue;
+                            }
+                            // v2.3.8 — If validation mode OR wipe denied by guards,
+                            // surface to operator without touching data.
+                            if !is_auto {
+                                tracing::info!("\x1b[36mWATCHDOG:\x1b[0m Mode validation — solo fork detected (gap={}), action proposed via /admin/force-resync", ahead_gap);
                             }
                         }
                     }
@@ -4011,10 +4182,10 @@ async fn cmd_node(
                 // Check 3: Too many resyncs in short window → wipe completely
                 if resync_count >= 3 {
                     let msg = format!("{} resyncs in 5 min — chain is unstable", resync_count);
-                    tracing::error!("WATCHDOG: {}. Auto-wipe DISABLED (v2.3.6). Investigate manually.", msg);
+                    tracing::error!("\x1b[36mWATCHDOG:\x1b[0m {}. Auto-wipe DISABLED (v2.3.6). Investigate manually.", msg);
                     tsn::network::log_node_error(&watchdog_state, "resync_loop", &msg);
                     if false { // v2.3.6: dead-branch, full wipe disabled
-                        tracing::warn!("WATCHDOG: Auto mode — full wipe + fresh sync.");
+                        tracing::warn!("\x1b[36mWATCHDOG:\x1b[0m Auto mode — full wipe + fresh sync.");
                         // v2.0.9: Take reorg_lock to prevent race with miner
                         let _reorg_guard = watchdog_state.reorg_lock.write().await;
                         let mut chain = watchdog_state.blockchain.write().unwrap();
@@ -4024,7 +4195,7 @@ async fn cmd_node(
                         let mut bans = watchdog_state.banned_peers.write().unwrap();
                         bans.clear();
                     } else {
-                        tracing::warn!("WATCHDOG: Validation mode — action required: POST /admin/force-resync");
+                        tracing::warn!("\x1b[36mWATCHDOG:\x1b[0m Validation mode — action required: POST /admin/force-resync");
                     }
                     resync_count = 0;
                     last_height = 0;
@@ -4042,7 +4213,7 @@ async fn cmd_node(
                                 let actual_hex = hex::encode(actual);
                                 if actual_hex != "0".repeat(64) && actual_hex != cp_hash {
                                     let msg = format!("Checkpoint violation at height {}", cp_height);
-                                    tracing::error!("WATCHDOG: {}! Re-syncing.", msg);
+                                    tracing::error!("\x1b[36mWATCHDOG:\x1b[0m {}! Re-syncing.", msg);
                                     tsn::network::log_node_error(&watchdog_state, "checkpoint_violation", &msg);
                                     violated = true;
                                     break;

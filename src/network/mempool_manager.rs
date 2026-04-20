@@ -567,7 +567,7 @@ impl MempoolMemoryManager {
             }
         }
         
-        // Trier par taux de fees (plus faible in premier)
+        // Sort by fee rate (lowest first so they are evicted in priority).
         candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         
         let mut evicted_count = 0;

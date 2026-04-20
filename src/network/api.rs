@@ -1643,6 +1643,10 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
             .unwrap_or_default();
         peers.iter()
             .filter(|p| !seed_peer_ids.contains(&p.peer_id)) // exclude seeds by PeerID
+            // v2.3.7 — keep peers even when height is unknown so freshly connected
+            // miners show up while their first tip broadcast propagates. The
+            // front-end renders them as "syncing..." which is less misleading
+            // than dropping them entirely (node disappears from explorer).
             .map(|p| {
             let h = p.height;
             let lag = h.map(|ph| tip_height.saturating_sub(ph));
@@ -1703,9 +1707,47 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
     let mut all_peers = p2p_peers;
     all_peers.extend(http_miners);
 
+    // v2.3.7 — consensus_height: median of online seed heights (plus local tip).
+    // This is the stable canonical view of the network. Individual seeds oscillate
+    // by ±1-2 blocks between polls; the median smooths that out so the front-end
+    // never re-renders "fresh vs stale" just because our node was 1 block behind
+    // a faster sibling for 3 seconds. Also returns `quorum` = seeds_agreeing.
+    let mut seed_heights: Vec<u64> = seeds
+        .iter()
+        .filter_map(|s| s["height"].as_u64())
+        .collect();
+    seed_heights.push(tip_height);
+    seed_heights.sort_unstable();
+    let consensus_height = if seed_heights.is_empty() {
+        tip_height
+    } else {
+        seed_heights[seed_heights.len() / 2]
+    };
+    let quorum = seed_heights.iter().filter(|h| consensus_height.saturating_sub(**h) <= 2).count();
+
+    // v2.3.7 — tag peers that are far AHEAD of consensus as solo-fork miners.
+    // A peer reporting height > consensus_height + 20 is mining on its own chain
+    // that nobody else accepts. The front-end highlights these nodes in red so
+    // the operator can identify and rescue them (wipe + fast-sync).
+    const SOLO_FORK_THRESHOLD: u64 = 20;
+    let mut tag_solo_fork = |node: &mut serde_json::Value| {
+        if let Some(h) = node.get("height").and_then(|v| v.as_u64()) {
+            if h > consensus_height + SOLO_FORK_THRESHOLD {
+                let above = h - consensus_height;
+                node["solo_fork"] = serde_json::json!(true);
+                node["above_consensus"] = serde_json::json!(above);
+                node["status"] = serde_json::json!("solo_fork");
+            }
+        }
+    };
+    for s in seeds.iter_mut() { tag_solo_fork(s); }
+    for p in all_peers.iter_mut() { tag_solo_fork(p); }
+
     Json(serde_json::json!({
         "tip_height": tip_height,
         "tip_hash": tip_hash,
+        "consensus_height": consensus_height,
+        "quorum": quorum,
         "seeds": seeds,
         "peers": all_peers,
     }))
@@ -3971,9 +4013,20 @@ async fn wallet_address_api(
     };
     let address = ws.address_hex().await;
     let pk_hash = hex::encode(ws.pk_hash().await);
+    // v2.3.7 — clarify which field to use.
+    //   - `mining_address` = pk_hash (32 bytes, ML-DSA-65 hash). This is what
+    //     the miner's coinbase credits and what you share to receive TSN.
+    //   - `legacy_address_v1` = 20-byte truncated SHA256 of the pubkey. It
+    //     belonged to the transparent v1 account model which is no longer
+    //     used for rewards. Exposed only for backward compatibility with
+    //     older tools.
+    //   - `address` and `pk_hash` kept as aliases for existing integrations.
     Json(serde_json::json!({
+        "mining_address": pk_hash.clone(),
+        "legacy_address_v1": address.clone(),
         "address": address,
         "pk_hash": pk_hash,
+        "note": "Use `mining_address` (pk_hash) to receive mining rewards and for shielded v2 transactions. `legacy_address_v1` is the 20-byte transparent-v1 identifier — not used for rewards.",
     })).into_response()
 }
 

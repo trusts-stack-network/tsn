@@ -403,12 +403,27 @@ async fn p2p_event_loop(
     // Backoff for outdated peers: don't spam disconnect logs every 30s
     // Maps PeerID → (next_allowed_log_time, disconnect_count)
     let mut outdated_backoff: std::collections::HashMap<PeerId, (std::time::Instant, u32)> = std::collections::HashMap::new();
+    // v2.3.7 — Last meaningful activity per peer (message received, identify, etc.).
+    // Peers whose TCP stays open but stop broadcasting for 120s are evicted from the
+    // visible SharedPeerList so the explorer stops showing ghost entries.
+    let mut peer_last_activity: std::collections::HashMap<PeerId, std::time::Instant> = std::collections::HashMap::new();
+    const PEER_GHOST_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 
     // Helper: refresh the shared peer list from current swarm state
     macro_rules! refresh_shared_peers {
         () => {
             let local_proto = format!("tsn/{}/relay", env!("CARGO_PKG_VERSION"));
+            let now_ttl = std::time::Instant::now();
             let peers_snapshot: Vec<PeerInfo> = swarm.connected_peers()
+                .filter(|p| {
+                    // v2.3.7: hide peers with no activity for PEER_GHOST_TTL.
+                    // Eviction from the visible list does not disconnect them
+                    // at the libp2p layer — they just stop polluting the explorer.
+                    match peer_last_activity.get(*p) {
+                        Some(t) => now_ttl.duration_since(*t) < PEER_GHOST_TTL,
+                        None => true, // never-seen peers shown until first event window closes
+                    }
+                })
                 .map(|p| PeerInfo {
                     peer_id: p.to_string(),
                     height: peer_heights.get(p).copied(),
@@ -437,6 +452,10 @@ async fn p2p_event_loop(
                         swarm.dial(addr.clone()).ok();
                     }
                 }
+                // v2.3.7 — force a shared-peers refresh every 30s so ghost peers
+                // (connected but silent for > PEER_GHOST_TTL) are evicted from
+                // the explorer view even without an incoming event.
+                refresh_shared_peers!();
             }
             // Handle incoming swarm events
             event = swarm.select_next_some() => {
@@ -444,6 +463,11 @@ async fn p2p_event_loop(
                     SwarmEvent::Behaviour(TsnBehaviourEvent::Gossipsub(
                         gossipsub::Event::Message { propagation_source, message, .. }
                     )) => {
+                        // v2.3.7 — mark this peer as active so the ghost-peer TTL resets.
+                        peer_last_activity.insert(propagation_source, std::time::Instant::now());
+                        if let Some(source) = message.source {
+                            peer_last_activity.insert(source, std::time::Instant::now());
+                        }
                         let topic = message.topic.as_str();
                         if topic == block_topic.hash().as_str() {
                             debug!("Received block via GossipSub ({} bytes)", message.data.len());
@@ -491,17 +515,20 @@ async fn p2p_event_loop(
                             debug!("Received transaction via GossipSub ({} bytes)", message.data.len());
                             event_tx.send(P2pEvent::NewTransaction(message.data)).await.ok();
                         } else if topic == tip_topic.hash().as_str() {
-                            // Tip announcement received — update peer height
+                            // Tip announcement received — update peer height.
+                            // v2.3.9 — always accept the broadcast value (including downgrades).
+                            // A peer that legitimately wipes/resets its chain needs us to
+                            // reflect its new lower height; the previous `if h > prev` check
+                            // trapped us in a stale cache (e.g. EPYC1 at 2150 pre-wipe stayed
+                            // cached even after the peer fast-synced back to h=2133).
                             if let Some(source) = message.source {
                                 if let Ok(tip) = serde_json::from_slice::<serde_json::Value>(&message.data) {
                                     if let Some(h) = tip.get("height").and_then(|v| v.as_u64()) {
-                                        let prev = peer_heights.get(&source).copied().unwrap_or(0);
-                                        if h > prev {
-                                            let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-                                            peer_heights.insert(source, h);
-                                            peer_height_times.insert(source, now_secs);
-                                            refresh_shared_peers!();
-                                        }
+                                        let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                        peer_heights.insert(source, h);
+                                        peer_height_times.insert(source, now_secs);
+                                        peer_last_activity.insert(source, std::time::Instant::now());
+                                        refresh_shared_peers!();
                                     }
                                 }
                             }
@@ -520,6 +547,8 @@ async fn p2p_event_loop(
                     SwarmEvent::Behaviour(TsnBehaviourEvent::Identify(
                         identify::Event::Received { peer_id, info, .. }
                     )) => {
+                        // v2.3.7 — mark active on identify too.
+                        peer_last_activity.insert(peer_id, std::time::Instant::now());
                         // Process peer identification (log only first time or if not in backoff)
                         {
                             let is_new = identified_peers.insert(peer_id);
@@ -663,6 +692,8 @@ async fn p2p_event_loop(
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                         debug!("P2P peer connected: {}", peer_id);
+                        // v2.3.7 — seed activity marker on connect.
+                        peer_last_activity.insert(peer_id, std::time::Instant::now());
                         refresh_shared_peers!();
                         event_tx.send(P2pEvent::PeerConnected(peer_id)).await.ok();
                     }
@@ -671,6 +702,7 @@ async fn p2p_event_loop(
                         identified_peers.remove(&peer_id);
                         peer_heights.remove(&peer_id);
                         peer_height_times.remove(&peer_id);
+                        peer_last_activity.remove(&peer_id);
                         refresh_shared_peers!();
                         event_tx.send(P2pEvent::PeerDisconnected(peer_id)).await.ok();
                     }

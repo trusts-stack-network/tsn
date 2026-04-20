@@ -33,14 +33,18 @@ pub const POSEIDON2_ACTIVATION_HEIGHT: u64 = 0;
 pub const POSEIDON2_V2_ACTIVATION_HEIGHT: u64 = 0;
 
 /// Default seed nodes for the TSN network.
-/// These are the initial nodes that new nodes connect to.
-/// Add your deployed node URLs here.
+/// v2.3.9 — Migrated from hardcoded IPs to DNS names. The A-records live
+/// under the `tsnchain.com` zone so operators can rotate a seed's hosting
+/// without shipping a new binary. `nexus` is the primary relay; `seed1..4`
+/// are the supporting seeds. If DNS resolution fails at bootstrap, libp2p
+/// Kademlia discovery will still find peers through any reachable seed,
+/// and the node keeps working via cached peers after the first sync.
 pub const SEED_NODES: &[&str] = &[
-    "http://45.145.165.223:9333",   // node-1 (relay)
-    "http://151.240.19.253:9333",   // seed-1
-    "http://45.145.164.76:9333",    // seed-2
-    "http://146.19.168.71:9333",    // seed-3
-    "http://45.132.96.141:9333",    // seed-4
+    "http://nexus.tsnchain.com:9333",
+    "http://seed1.tsnchain.com:9333",
+    "http://seed2.tsnchain.com:9333",
+    "http://seed3.tsnchain.com:9333",
+    "http://seed4.tsnchain.com:9333",
 ];
 
 /// Whitelisted IPs — only these can connect via HTTP API and P2P.
@@ -110,7 +114,7 @@ pub const RELAY_POOL_PERCENT: u64 = 3;
 
 /// Dev treasury pk_hash (Blake2s256 hash of ML-DSA-65 public key).
 /// This is the PUBLIC hash — safe to include in code.
-/// Private keys stored offline at /root/tsn-treasury/treasury_wallet.json (NEVER in git).
+/// Private keys are held offline by the treasury operator and MUST NEVER be committed.
 /// Address: 1d923ecba7891a3c4bce0c65da2e1036099a4c52
 pub const DEV_TREASURY_PK_HASH: [u8; 32] = [
     0x06, 0xde, 0x72, 0xf4, 0xe7, 0x28, 0xaf, 0x0c,

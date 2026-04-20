@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 slh-dsa = { version = "0.2.0-rc.4", default-features = false, features = ["alloc", "zeroize"] }
-# autres dépendances...
+# other dependencies...
 
-# Si vous avez besoin de std pour d'autres crates, gardez-le pour celles-ci
+# If std is required by other crates, keep it for those.
 # rand = { version = "0.8", features = ["std"] }

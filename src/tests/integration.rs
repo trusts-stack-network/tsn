@@ -407,11 +407,11 @@ mod shielded_transaction_integration {
             },
         };
         
-        // Appliquer the premier bloc
+        // Apply the first block.
         let result1 = state.apply_block(&block1);
-        // Note: can failsr if the validation ZK n'est pas implementede
-        
-        // Second transaction that tente de spendingr the same note (double-spend)
+        // Note: may fail if the ZK validation is not implemented.
+
+        // Second transaction that tries to spend the same note (double-spend).
         let tx2 = ShieldedTransaction {
             nullifiers: vec![nullifier], // Same nullifier !
             commitments: vec![],

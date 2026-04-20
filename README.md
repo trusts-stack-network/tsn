@@ -9,10 +9,10 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-2.1.2-blue">
-  <img alt="Rust" src="https://img.shields.io/badge/rust-97k+_lines-orange">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-370+_passing-brightgreen">
-  <img alt="Testnet" src="https://img.shields.io/badge/testnet--v2-live-success">
+  <img alt="Version" src="https://img.shields.io/badge/version-2.3.9-blue">
+  <img alt="Rust" src="https://img.shields.io/badge/rust-110k+_lines-orange">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-400+_passing-brightgreen">
+  <img alt="Testnet" src="https://img.shields.io/badge/testnet--v5-live-success">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
@@ -96,7 +96,7 @@ Merkle Node     = Poseidon(domain=5, left, right)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                         TSN Node v2.0.0                              │
+│                         TSN Node v2.3.9                              │
 ├──────────────┬──────────────┬──────────────┬─────────────────────────┤
 │    Core      │    Crypto    │  Consensus   │        Network          │
 │  Block       │  Poseidon2   │  PoW Mining  │  libp2p (GossipSub)     │
@@ -215,11 +215,11 @@ TSN is one of the first blockchains with **fully decentralized automatic updates
 5. Current binary backed up, new binary installed, node restarts
 
 ```
-Node A (v1.1.0) connects to Node B (v1.2.0)
+Node A (v2.3.8) connects to Node B (v2.3.9)
   → A detects newer version via P2P handshake
-  → A downloads v1.2.0 from GitHub, verifies signature
+  → A downloads v2.3.9 from GitHub, verifies Ed25519 signature
   → A self-updates and restarts
-  → A is now v1.2.0
+  → A is now v2.3.9
   → A's other peers detect the update via handshake
   → Network propagates the update in minutes
 ```
@@ -348,13 +348,15 @@ New nodes join the network in **seconds** by downloading a compressed state snap
 | **Checkpoint finality** | Every 100 blocks, a checkpoint is created |
 | **Fork ID verification** | Genesis hash checked at sync — prevents silent splits |
 | **Anchor block filter** | Blocks must reference a recent valid ancestor |
-| **P2P version gate** | Nodes below MINIMUM_VERSION (v2.0.0) are rejected |
+| **P2P version gate** | Nodes below MINIMUM_VERSION (v2.3.7) are rejected, with escalating IP bans on repeat offenders |
 | **Genesis HTTP check** | Peer genesis block hash verified before any sync |
 | **Protocol magic** | TSN2 magic bytes — old network nodes cannot connect |
+| **Smart auto-wipe watchdog** | Solo-fork detection with cooldown + kill-switch guards |
+| **Signed snapshots** | Ed25519-signed fast-sync snapshots, optionally mirrored on GitHub |
 
 ## Testnet Status
 
-The private testnet v2 is live with a **fresh genesis**, **new network identity** (tsn-testnet-v2), and **strict version enforcement** (v2.0.0 minimum).
+The private testnet v5 is live with a **fresh genesis** (hash `dadfa2a3...`), **network identity** `tsn-testnet-v5`, and **strict version enforcement** (v2.3.7 minimum).
 
 > **TSN tokens currently have no value.** The testnet is for development and testing only. Tokens can be mined for free by anyone running a node. Economic value will only be introduced at the incentivized testnet phase.
 
@@ -433,6 +435,17 @@ A cross-chain anonymous DEX built on TSN with AMM pools, escrow P2P, yield farmi
 - **Privacy** — anonymous trading via TSN shielded transactions
 
 ## Changelog
+
+### v2.3.x — Post-quantum network hardening (2026-Q2)
+
+- **v2.3.9** — LWMA fast-sync fix (eliminates the post-fast-sync fork loop), seeds migrated from hardcoded IPs to DNS (`nexus.tsnchain.com`, `seed1..4.tsnchain.com`), explorer gets typed traffic particles + `/stats/activity` + SSE event stream, wallet rescan discrepancy fix, snapshot GitHub dedup, watchdog logs in cyan, README refresh.
+- **v2.3.6** — Anti-spam middleware with escalating IP bans (1h → 6h → 24h) keyed on X-TSN-Version / X-TSN-Network / X-TSN-Genesis, fork-work recovery (`prefix_estimate`), snapshot cache stale protection (500-block gap).
+- **v2.3.5** — Testnet-v5 reset with genesis hash derived deterministically from `NETWORK_NAME`, auto-wipe at boot on genesis mismatch, signed GitHub snapshot mirror + retention pruning, HTTP CLOSE-WAIT fix.
+- **v2.3.4** — P2P `NewBlock` mempool cleanup in `spawn_blocking`, snapshot persistence to disk with 24h retention, `cmd_balance` orphan-aware display.
+- **v2.3.3** — Pre-validate orphan notes before `cmd_send` to avoid retry loops after chain reorgs.
+- **v2.3.2** — Wallet rescan actually deletes DB rows, metrics port auto-fallback 9090..9099, `WalletLock::try_acquire` returns an actionable error.
+- **v2.3.1** — Admin `/mempool/purge` endpoint, HTTP 429 backoff (1s → 32s) on witness fetch and tx submit, auto-consolidation multi-round orchestration.
+- **v2.3.0** — LRU dedup (tip / block / fork-recovery), snapshot auto-trigger from miner path, `agent_version` height hint in libp2p Identify, wallet `resolve_pq_commitment` fallback on server leaf.
 
 ### v2.0.0 — Network Reset & Sync Stability
 

@@ -42,11 +42,11 @@ impl NodeId {
         let hash = hasher.finalize();
         
         let mut node_id = [0u8; 20];
-        node_id.copy_from_slice(&hash[..20]); // Prend les 20 premiers bytes
+        node_id.copy_from_slice(&hash[..20]); // Take the first 20 bytes
         Self(node_id)
     }
-    
-    /// Distance XOR entre deux NodeId (metric Kademlia)
+
+    /// XOR distance between two NodeIds (Kademlia metric)
     pub fn distance(&self, other: &NodeId) -> NodeDistance {
         let mut result = [0u8; 20];
         for i in 0..20 {
@@ -65,17 +65,17 @@ impl NodeId {
         (self.0[byte_index] >> bit_index) & 1 == 1
     }
     
-    /// Prefix commun the plus long with a other NodeId
+    /// Longest common prefix with another NodeId.
     pub fn common_prefix_len(&self, other: &NodeId) -> usize {
         for i in 0..160 {
             if self.bit(i) != other.bit(i) {
                 return i;
             }
         }
-        160 // Identiques
+        160 // identical
     }
-    
-    /// Returns the bytes bruts
+
+    /// Raw bytes of the NodeId.
     pub fn as_bytes(&self) -> &[u8; 20] {
         &self.0
     }
@@ -83,7 +83,7 @@ impl NodeId {
 
 impl std::fmt::Display for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(&self.0[..8])) // Affiche onlyment les 8 premiers bytes
+        write!(f, "{}", hex::encode(&self.0[..8])) // Display only the first 8 bytes
     }
 }
 
@@ -369,14 +369,14 @@ impl RoutingTable {
             candidates.extend(bucket.nodes().iter().cloned());
         }
         
-        // Trie par distance to the cible
+        // Sort by distance to the target
         candidates.sort_by_key(|node| node.id.distance(target));
-        
-        // Returns the count premiers
+
+        // Return the first `count` entries
         candidates.into_iter().take(count).collect()
     }
-    
-    /// Trouve the nodes in a bucket specific
+
+    /// Find the nodes in a specific bucket.
     pub fn bucket_nodes(&self, bucket_index: usize) -> Vec<KademliaNode> {
         if bucket_index < self.buckets.len() {
             self.buckets[bucket_index].nodes().to_vec()

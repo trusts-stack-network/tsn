@@ -31,16 +31,16 @@ use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
 #[cfg(feature = "vulnerable-demo")]
 use aes::Aes128;
 
-/// VULNERABILITY: Comparison non-constant-time (Timing Attack)
-/// 
-/// **Problem**: This function reveals information through execution time.
-/// Un attaquant can deviner the key or the message byte par byte in mesurant
-/// the temps de response.
-/// 
-/// **Attaque** : Mesurer the temps for determine combien de bytes are corrects
-/// before the premier failure.
-/// 
-/// **Solution** : Utiliser `subtle::ConstantTimeEq` for comparisons secure.
+/// VULNERABILITY: Non-constant-time comparison (timing attack).
+///
+/// **Problem**: This function leaks information through its execution time.
+/// An attacker can guess the key or the message one byte at a time by measuring
+/// the response time.
+///
+/// **Attack**: Measure the response time to determine how many bytes are correct
+/// before the first mismatch.
+///
+/// **Fix**: Use `subtle::ConstantTimeEq` for secure comparisons.
 #[cfg(feature = "vulnerable-demo")]
 pub fn insecure_compare(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {

@@ -53,7 +53,7 @@ async fn test_complete_handshake_workflow() {
             // Node B responds with HandshakeAck
             let ack_b = TsnMessage::HandshakeAck {
                 accepted: true,
-                timestamp_ns: current_time + 1_000_000, // 1ms plus tard
+                timestamp_ns: current_time + 1_000_000, // 1ms later
                 your_node_id: node_a_id,
             };
             

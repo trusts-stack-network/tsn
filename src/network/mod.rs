@@ -51,12 +51,12 @@ use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::time::Duration;
 
-/// Masque a URL de peer in identifiant court for the logs.
+/// Mask a peer URL to a short identifier for logs.
 ///
-/// - Seeds connus (seed1-4.tsnchain.com) → "seed1", "seed2", etc.
-/// - Autres URLs → "peer:" + 8 premiers hex d'un hash SHA-256
+/// - Known seeds (seed1-4.tsnchain.com) -> "seed1", "seed2", etc.
+/// - Other URLs -> "peer:" + the first 8 hex chars of a SHA-256 hash.
 ///
-/// L'URL originale reste used in interne ; seul l'affichage change.
+/// The original URL is kept internally; only the display changes.
 ///
 /// Returns true if this peer string is a contactable HTTP URL (not a hashed peer ID).
 /// Hashed peer IDs like "peer:a1b2c3d4" are display-only and must never be used for HTTP requests.

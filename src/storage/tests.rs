@@ -457,7 +457,7 @@ mod faucet_store_tests {
         let first_amount = 500000;
         let second_amount = 750000;
         let first_timestamp = create_test_timestamp();
-        let second_timestamp = first_timestamp + 3600; // 1 heure plus tard
+        let second_timestamp = first_timestamp + 3600; // 1 hour later
 
         // First claim
         let first_record = store.record_claim(&address, first_amount, first_timestamp).await;

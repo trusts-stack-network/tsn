@@ -29,10 +29,10 @@ use crate::crypto::{
     Address,
 };
 
-/// Duration de validity by default d'une key (30 jours)
+/// Default key validity duration (30 days).
 pub const DEFAULT_KEY_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// Period de transition pendant laquelle l'ancienne and the new key coexistsnt (7 jours)
+/// Transition period during which the old and new keys coexist (7 days).
 pub const DEFAULT_TRANSITION_PERIOD: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Maximum number of simultaneously active keys

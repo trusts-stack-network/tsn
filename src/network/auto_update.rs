@@ -31,8 +31,9 @@ use crate::network::version_check::{LOCAL_VERSION, version_less_than};
 
 /// Ed25519 public key used to verify release signatures (Phase 2).
 /// Generated offline and embedded at compile time.
-// v2.1.0: Rotated after old key was leaked in git history.
-// Private key stored ONLY at /root/.tsn-release-signing.key (never in repo).
+// v2.1.0: Rotated after the earlier key was leaked in git history.
+// The matching private key is held offline by the release signer and MUST
+// NEVER be committed to this repository.
 pub const RELEASE_SIGNING_PUBKEY: [u8; 32] = [
     0x8a, 0xbd, 0x0a, 0x68, 0xf7, 0x68, 0xc7, 0x44,
     0xa8, 0xe2, 0x6f, 0x27, 0xf8, 0x26, 0x88, 0xef,

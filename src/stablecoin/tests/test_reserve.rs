@@ -364,7 +364,7 @@ fn test_circuit_breaker_expired() {
     let e = engine();
     let mut state = default_state();
     state.circuit_breaker_activated = 1000;
-    // 86400 secondes plus tard
+    // 86400 seconds later
     assert!(e.check_circuit_breaker(&state, 1000 + 86_401).is_ok());
 }
 
