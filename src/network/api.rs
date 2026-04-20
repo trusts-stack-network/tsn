@@ -158,6 +158,14 @@ pub struct AppState {
     /// v2.3.6 — Per-IP version-ban tracker. Populated by the version gate middleware.
     /// Keyed by source IP (peer of the TCP connection, not X-Forwarded-For to prevent spoof).
     pub version_bans: std::sync::RwLock<std::collections::HashMap<std::net::IpAddr, VersionBanEntry>>,
+    /// v2.3.9 — Cumulative network-activity counters consumed by the explorer
+    /// to render typed traffic particles (tip, block, tx, sync, snapshot, peer,
+    /// reject). Exposed at `GET /stats/activity`.
+    pub activity: std::sync::Arc<super::activity::ActivityCounters>,
+    /// v2.3.9 — Broadcast bus for the Server-Sent Events endpoint
+    /// `GET /events/stream`. Clones per SSE client; a slow client lagging
+    /// more than 256 events drops the oldest (broadcast semantics).
+    pub activity_bus: std::sync::Arc<super::activity::ActivityBus>,
 }
 
 /// v2.3.6 — Tracks a peer that sent an outdated `X-TSN-Version` header.
@@ -488,6 +496,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/faucet/stats", get(faucet_stats))
         .route("/network/health", get(network_health))
         .route("/node/errors", get(get_node_errors))
+        // v2.3.9 — explorer telemetry: cumulative activity counters + SSE.
+        .route("/stats/activity", get(get_activity_stats))
+        .route("/events/stream", get(get_activity_stream))
         .with_state(state.clone());
 
     // Admin routes — localhost only (not accessible from outside)
@@ -1238,6 +1249,15 @@ async fn submit_transaction_v2(
     }
 
     info!("V2 transaction {} added to mempool", &hash[..16]);
+    // v2.3.9 — explorer telemetry.
+    super::activity::record(
+        &state.activity,
+        &state.activity_bus,
+        super::activity::ActivityKind::Tx,
+        None,
+        None,
+        None,
+    );
 
     // Relay V2 transaction to peers via P2P GossipSub
     {
@@ -1368,6 +1388,15 @@ async fn receive_block(
     }
 
     info!("Received block {} from peer", &block_hash[..16]);
+    // v2.3.9 — explorer telemetry.
+    super::activity::record(
+        &state.activity,
+        &state.activity_bus,
+        super::activity::ActivityKind::Block,
+        Some(block.coinbase.height),
+        sender_peer_id.map(|s| s.chars().take(16).collect::<String>()),
+        None,
+    );
 
     // Try to add the block (handles forks and reorgs automatically)
     // v2.1.2: Acquire reorg_lock.read() before blockchain.write() — consistent with
@@ -1423,10 +1452,29 @@ async fn receive_block(
             Ok(false) => {
                 // Block was duplicate or stored as side chain
                 info!("Block {} stored (orphan or side chain)", &block_hash[..16]);
+                // v2.3.9 — explorer telemetry: a stored side-chain block is a
+                // rejected propagation path from the network-consumer's view.
+                super::activity::record(
+                    &state.activity,
+                    &state.activity_bus,
+                    super::activity::ActivityKind::Reject,
+                    Some(block.coinbase.height),
+                    None,
+                    None,
+                );
                 (false, "stored")
             }
             Err(e) => {
                 warn!("Block {} rejected: {}", &block_hash[..16], e);
+                // v2.3.9 — explorer telemetry.
+                super::activity::record(
+                    &state.activity,
+                    &state.activity_bus,
+                    super::activity::ActivityKind::Reject,
+                    Some(block.coinbase.height),
+                    None,
+                    None,
+                );
                 return Err((StatusCode::BAD_REQUEST, format!("Block rejected: {}", e)));
             }
         }
@@ -1486,6 +1534,16 @@ async fn get_blocks_since(
             blocks.push(block);
         }
     }
+
+    // v2.3.9 — explorer telemetry: record the sync request.
+    super::activity::record(
+        &state.activity,
+        &state.activity_bus,
+        super::activity::ActivityKind::Sync,
+        Some(since_height),
+        None,
+        None,
+    );
 
     Json(blocks)
 }
@@ -2951,6 +3009,15 @@ async fn receive_tip(
     state.sync_gate.update_tip(&peer_id, req.height, hash_bytes);
 
     info!("Received tip announcement: height={}, hash={}...", req.height, &req.hash[..16]);
+    // v2.3.9 — explorer telemetry.
+    super::activity::record(
+        &state.activity,
+        &state.activity_bus,
+        super::activity::ActivityKind::Tip,
+        Some(req.height),
+        Some(super::peer_id(&peer_url)),
+        None,
+    );
 
     // Return our own tip info
     let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
@@ -3527,6 +3594,57 @@ async fn get_node_errors(
         "total": errors.len(),
         "auto_heal_mode": *state.auto_heal_mode.read().unwrap(),
     }))
+}
+
+/// GET /stats/activity — v2.3.9 explorer telemetry.
+///
+/// Returns cumulative counters for each network-activity kind (tip, block,
+/// tx, sync, snapshot, peer, reject). The explorer polls this endpoint every
+/// few seconds and derives per-type throughput by diffing successive snapshots.
+///
+/// Counters never reset. They are incremented wherever the node observes an
+/// event (see `activity::record` call sites). Reading them is a single atomic
+/// load per kind — cheap enough to serve on the polling path.
+async fn get_activity_stats(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let snap = state.activity.snapshot_view();
+    Json(serde_json::json!({
+        "at_unix": super::activity::now_secs(),
+        "counters": snap,
+    }))
+}
+
+/// GET /events/stream — v2.3.9 Server-Sent Events.
+///
+/// Subscribes to the node's activity broadcast channel and streams one JSON
+/// event per network incident. A browser can consume this with
+/// `new EventSource('/events/stream')`. Buffer size on the producer side is
+/// 256; lagging clients drop the oldest events (broadcast semantics), never
+/// the producer.
+async fn get_activity_stream(
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+    use axum::response::sse::{Event, Sse, KeepAlive};
+    use tokio_stream::wrappers::BroadcastStream;
+    use tokio_stream::StreamExt;
+
+    let rx = state.activity_bus.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|res| match res {
+        Ok(event) => {
+            // Best-effort JSON encode; on failure we simply skip this frame.
+            let payload = serde_json::to_string(&event).ok()?;
+            Some(Ok(Event::default().event("activity").data(payload)))
+        }
+        // A lagging subscriber dropping events is expected — skip the error.
+        Err(_) => None,
+    });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("ping"),
+    )
 }
 
 /// POST /admin/force-resync — Force the node to wipe and re-sync from peers

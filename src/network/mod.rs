@@ -2,6 +2,7 @@
 //!
 //! Handles peer discovery, block sync, mempool, and JSON-RPC API.
 
+pub mod activity;
 pub mod alerts;
 pub mod anti_dos;
 pub mod api;

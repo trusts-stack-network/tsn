@@ -3863,6 +3863,8 @@ async fn cmd_node(
             load_last_snapshot_trigger(&data_dir)
         ),
         version_bans: std::sync::RwLock::new(std::collections::HashMap::new()),
+        activity: std::sync::Arc::new(tsn::network::activity::ActivityCounters::default()),
+        activity_bus: std::sync::Arc::new(tsn::network::activity::ActivityBus::new()),
     });
 
     // ========================================================================

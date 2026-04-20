@@ -62,7 +62,9 @@ toml = "0.8"
 # Networking (HTTP API — kept for wallet, explorer, external tools)
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7"
+futures = "0.3"
 tower-http = { version = "0.5", features = ["cors", "fs", "limit"] }
 tower_governor = "0.4"
 tower = "0.5"
