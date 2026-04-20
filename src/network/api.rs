@@ -1697,6 +1697,24 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
     // P2P peers with raw heights + freshness info, excluding seeds
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    // v2.3.9 — A peer must *prove* it belongs on this chain before it appears in
+    // the public explorer. Without this filter, a misconfigured node on an
+    // incompatible version or a different testnet briefly shows up as a ghost
+    // (libp2p accepts the connection on the same protocol ID, then the TSN
+    // middleware rejects its HTTP requests ~2 s later). The 2-second flicker
+    // breaks the network-graph animation. Rules:
+    //   1. `protocol` must be a well-formed `tsn/<version>/<role>`.
+    //   2. Declared version must meet the current minimum.
+    //   3. The peer must have successfully exchanged at least one height
+    //      (confirms the TSN handshake completed, not just libp2p's).
+    let peer_passes_explorer_filter = |p: &crate::network::p2p::PeerInfo| -> bool {
+        let parts: Vec<&str> = p.protocol.split('/').collect();
+        if parts.len() < 2 || parts[0] != "tsn" { return false; }
+        if !crate::network::version_check::version_meets_minimum(parts[1]) {
+            return false;
+        }
+        p.height.is_some() && p.height_updated_at.is_some()
+    };
     let p2p_peers: Vec<serde_json::Value> = {
         let peers = state.p2p_shared_peers.read().unwrap_or_else(|e| e.into_inner())
             .as_ref()
@@ -1704,10 +1722,7 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
             .unwrap_or_default();
         peers.iter()
             .filter(|p| !seed_peer_ids.contains(&p.peer_id)) // exclude seeds by PeerID
-            // v2.3.7 — keep peers even when height is unknown so freshly connected
-            // miners show up while their first tip broadcast propagates. The
-            // front-end renders them as "syncing..." which is less misleading
-            // than dropping them entirely (node disappears from explorer).
+            .filter(|p| peer_passes_explorer_filter(p))      // v2.3.9 — no ghosts
             .map(|p| {
             let h = p.height;
             let lag = h.map(|ph| tip_height.saturating_sub(ph));
