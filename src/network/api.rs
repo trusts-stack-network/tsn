@@ -4135,22 +4135,31 @@ async fn wallet_address_api(
     let Some(ref ws) = state.wallet_service else {
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "no wallet configured"}))).into_response();
     };
-    let address = ws.address_hex().await;
+    let legacy = ws.address_hex().await;
     let pk_hash = hex::encode(ws.pk_hash().await);
-    // v2.3.7 — clarify which field to use.
-    //   - `mining_address` = pk_hash (32 bytes, ML-DSA-65 hash). This is what
-    //     the miner's coinbase credits and what you share to receive TSN.
-    //   - `legacy_address_v1` = 20-byte truncated SHA256 of the pubkey. It
-    //     belonged to the transparent v1 account model which is no longer
-    //     used for rewards. Exposed only for backward compatibility with
-    //     older tools.
-    //   - `address` and `pk_hash` kept as aliases for existing integrations.
+    // v2.3.9 — unambiguous response shape.
+    //
+    // The previous v2.3.7 response exposed `address` as an alias of the
+    // legacy 20-byte value, which directly caused the community confusion
+    // reported on Discord ("the wallet shows pk_hash, the node shows
+    // address with a different value, which do I share?"). A user copying
+    // `address` was sending funds to a dead transparent-v1 identifier.
+    //
+    // `address` now aliases the pk_hash (the correct thing to share). The
+    // legacy 20-byte form is still exposed as `legacy_address_v1` for tools
+    // that need it, but it is no longer reachable through the ambiguous
+    // `address` key.
     Json(serde_json::json!({
-        "mining_address": pk_hash.clone(),
-        "legacy_address_v1": address.clone(),
-        "address": address,
-        "pk_hash": pk_hash,
-        "note": "Use `mining_address` (pk_hash) to receive mining rewards and for shielded v2 transactions. `legacy_address_v1` is the 20-byte transparent-v1 identifier — not used for rewards.",
+        "address":           pk_hash.clone(),
+        "mining_address":    pk_hash.clone(),
+        "pk_hash":           pk_hash,
+        "legacy_address_v1": legacy,
+        "format": {
+            "address":           "32-byte hex (Blake2s256 of the ML-DSA-65 public key). Use this to receive TSN rewards and for shielded v2 transactions.",
+            "mining_address":    "Alias of `address`. Same value.",
+            "pk_hash":           "Alias of `address`. Same value.",
+            "legacy_address_v1": "20-byte hex (truncated SHA-256). Pre-v2 transparent identifier, exposed for back-compat only — NOT used for rewards.",
+        },
     })).into_response()
 }
 
