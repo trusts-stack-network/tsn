@@ -366,6 +366,29 @@ pub async fn version_gate_middleware(
 }
 
 /// Update peer info from an incoming HTTP request.
+/// Resolve SEED_NODES DNS names to IPs and check if the given peer IP
+/// belongs to a hardcoded seed. Used to suppress double-counting of seeds
+/// in peer_info — seeds appear in the dedicated `seeds` list of
+/// /network/status and must not also show up in `peers`.
+pub async fn is_sender_a_seed(ip: &str) -> bool {
+    for url in crate::config::SEED_NODES.iter() {
+        let host = url.trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .split(':').next().unwrap_or("");
+        if host.is_empty() { continue; }
+        // Fast path: exact host string match (covers literal-IP seed entries).
+        if host == ip { return true; }
+        if let Ok(addrs) = tokio::net::lookup_host((host, 9333u16)).await {
+            for addr in addrs {
+                if addr.ip().to_string() == ip {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn update_peer_info(state: &AppState, peer_url: &str, version: Option<&str>, height: Option<u64>) {
     let peer_id = super::peer_id(peer_url);
     let now = std::time::SystemTime::now()
@@ -1354,31 +1377,35 @@ async fn receive_block(
             return Err((StatusCode::FORBIDDEN, format!("Node version {} is below minimum {}", ver, crate::network::version_check::MINIMUM_VERSION)));
         }
     }
-    // Track peer info (version, height, last seen).
+    // Track peer info (version, height, last seen), but skip hardcoded seeds
+    // — they render via the dedicated `seeds` list in /network/status.
+    //
     // v2.4.3+: key by libp2p PeerID when the sender provides X-TSN-PeerID,
     // and do NOT also create a URL-hash entry — that caused every peer to
     // show up twice on the explorer (once under its libp2p PeerID, once
     // under peer:<hash(http://IP:9333)>).
     let sender_peer_id = headers.get("X-TSN-PeerID").and_then(|v| v.to_str().ok());
-    if let Some(pid_str) = sender_peer_id {
-        let mut info = state.peer_info.write().unwrap_or_else(|e| e.into_inner());
-        let entry = info.entry(pid_str.to_string()).or_insert(PeerDetail {
-            peer_id: pid_str.to_string(),
-            version: "?".to_string(),
-            role: "miner".to_string(),
-            height: 0,
-            last_seen: 0,
-        });
-        entry.role = "miner".to_string();
-        entry.height = block.coinbase.height;
-        entry.last_seen = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-        if let Some(v) = peer_ver {
-            entry.version = v.to_string();
+    if !is_sender_a_seed(&ip).await {
+        if let Some(pid_str) = sender_peer_id {
+            let mut info = state.peer_info.write().unwrap_or_else(|e| e.into_inner());
+            let entry = info.entry(pid_str.to_string()).or_insert(PeerDetail {
+                peer_id: pid_str.to_string(),
+                version: "?".to_string(),
+                role: "miner".to_string(),
+                height: 0,
+                last_seen: 0,
+            });
+            entry.role = "miner".to_string();
+            entry.height = block.coinbase.height;
+            entry.last_seen = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            if let Some(v) = peer_ver {
+                entry.version = v.to_string();
+            }
+        } else {
+            let peer_url = format!("http://{}:9333", addr.ip());
+            update_peer_info(&state, &peer_url, peer_ver, Some(block.coinbase.height));
         }
-    } else {
-        let peer_url = format!("http://{}:9333", addr.ip());
-        update_peer_info(&state, &peer_url, peer_ver, Some(block.coinbase.height));
     }
 
     let block_hash = block.hash_hex();
@@ -3057,32 +3084,37 @@ async fn receive_tip(
     let sender_peer_id = headers.get("X-TSN-PeerID").and_then(|v| v.to_str().ok());
     let sender_role = headers.get("X-TSN-Role").and_then(|v| v.to_str().ok());
     let peer_url = format!("http://{}:9333", addr.ip());
-    // Track peer info.
+    // Skip peer_info tracking entirely if the sender is a hardcoded seed —
+    // seeds render via the dedicated `seeds` list in /network/status and
+    // tracking them here leads to double-counting on the explorer.
+    let is_seed_sender = is_sender_a_seed(&ip).await;
+    // Track peer info for non-seed peers.
     //
     // v2.4.3+ node (sends X-TSN-PeerID + X-TSN-Role): key by the libp2p
     // PeerID ONLY. This is the only identity that distinguishes two nodes
     // behind the same public IP (miner on :9333 + relay on :9335), and
-    // dropping the URL-hash entry avoids the double-count that was showing
-    // every node twice on the explorer.
+    // dropping the URL-hash entry avoids the double-count.
     //
     // Older peer (no PeerID header): fall back to the URL-hashed peer_id.
-    if let Some(pid) = sender_peer_id {
-        let mut info = state.peer_info.write().unwrap_or_else(|e| e.into_inner());
-        let role = sender_role.unwrap_or("relay").to_string();
-        let entry = info.entry(pid.to_string()).or_insert(PeerDetail {
-            peer_id: pid.to_string(),
-            version: "?".to_string(),
-            role: role.clone(),
-            height: 0,
-            last_seen: 0,
-        });
-        entry.role = role;
-        if req.height > entry.height { entry.height = req.height; }
-        entry.last_seen = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-        if let Some(v) = peer_ver { entry.version = v.to_string(); }
-    } else {
-        update_peer_info(&state, &peer_url, peer_ver, Some(req.height));
+    if !is_seed_sender {
+        if let Some(pid) = sender_peer_id {
+            let mut info = state.peer_info.write().unwrap_or_else(|e| e.into_inner());
+            let role = sender_role.unwrap_or("relay").to_string();
+            let entry = info.entry(pid.to_string()).or_insert(PeerDetail {
+                peer_id: pid.to_string(),
+                version: "?".to_string(),
+                role: role.clone(),
+                height: 0,
+                last_seen: 0,
+            });
+            entry.role = role;
+            if req.height > entry.height { entry.height = req.height; }
+            entry.last_seen = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            if let Some(v) = peer_ver { entry.version = v.to_string(); }
+        } else {
+            update_peer_info(&state, &peer_url, peer_ver, Some(req.height));
+        }
     }
 
     // Parse the hash from hex
