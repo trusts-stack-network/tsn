@@ -1814,6 +1814,13 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
                 else if lag <= 5 { "fresh" }
                 else if lag <= 50 { "stale" }
                 else { "behind" };
+            // Don't double-count seeds: if this peer_info entry matches one
+            // of the hardcoded seeds (by libp2p PeerID or URL hash), skip it
+            // — the seed is already in the `seeds` list. Applies to both
+            // roles; previously only relays were filtered, so seeds that
+            // happened to also be mining showed up twice.
+            if seed_peer_ids.contains(&p.peer_id) { continue; }
+            if seed_hashed_ids.contains(&p.peer_id) { continue; }
             match p.role.as_str() {
                 "miner" => miners.push(serde_json::json!({
                     "peer_id": p.peer_id,
@@ -1824,7 +1831,7 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
                     "height_age_secs": age,
                     "source": "http",
                 })),
-                "relay" if !seed_hashed_ids.contains(&p.peer_id) => {
+                "relay" => {
                     relays.push(serde_json::json!({
                         "peer_id": p.peer_id,
                         "height": p.height,
