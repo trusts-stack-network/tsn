@@ -1633,6 +1633,8 @@ impl ShieldedBlockchain {
     }
 
     /// Check if a block exists in RAM cache or in the database.
+    /// Kept for callers that want to know "is this block material we have
+    /// in any form" (e.g. parent lookup on an orphan).
     fn has_block(&self, hash: &[u8; 32]) -> bool {
         if self.blocks.contains(hash) {
             tracing::debug!("SYNC_DEBUG: has_block {} = TRUE (source=LRU)", hex::encode(&hash[..8]));
@@ -1650,6 +1652,25 @@ impl ShieldedBlockchain {
         }
     }
 
+    /// Check if a block is on the CANONICAL chain (DB-backed) — i.e. we
+    /// actually applied it. LRU-only blocks are stored fork candidates that
+    /// were rejected by fork-choice at the time, and must NOT be treated as
+    /// duplicates: a later reorg may want to adopt them, which requires them
+    /// to flow through the fork-evaluation path again.
+    ///
+    /// v2.4.3 (fork-fix): the old DUP short-circuit used `has_block`, which
+    /// returned TRUE for LRU-only blocks. That caused the relay to silently
+    /// discard every peer block that it had once seen on a losing fork —
+    /// permanent stick on the old tip, no way to catch up once the seeds
+    /// had moved past the shared point.
+    fn has_block_canonical(&self, hash: &[u8; 32]) -> bool {
+        if let Some(ref db) = self.db {
+            return db.get_block_hash_by_height(0).is_ok()
+                && db.load_block(hash).ok().flatten().is_some();
+        }
+        false
+    }
+
     /// Try to add a block, handling orphans and potential reorgs.
     pub fn try_add_block(&mut self, block: ShieldedBlock) -> Result<bool, BlockchainError> {
         let block_hash = block.hash();
@@ -1664,9 +1685,11 @@ impl ShieldedBlockchain {
             self.blocks.len(), self.orphans.len()
         );
 
-        // Already have this block?
-        if self.has_block(&block_hash) {
-            tracing::debug!("SYNC_DEBUG: REJECT DUP block={} height={}", block_hash_hex, block_height);
+        // Already have this block on the canonical chain? (v2.4.3 fork-fix:
+        // do NOT short-circuit on LRU-only hits — a block sitting in the LRU
+        // may be a stored fork candidate that we now need to re-evaluate.)
+        if self.has_block_canonical(&block_hash) {
+            tracing::debug!("SYNC_DEBUG: REJECT DUP_CANONICAL block={} height={}", block_hash_hex, block_height);
             return Ok(false);
         }
 
