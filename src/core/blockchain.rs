@@ -1824,11 +1824,28 @@ impl ShieldedBlockchain {
             0
         };
 
-        // Fast path: parent's cumulative_work is in DB
-        if let Some(parent_work) = self.db.as_ref()
-            .and_then(|db| db.get_cumulative_work(parent_height).ok().flatten())
-        {
-            return parent_work + block_work;
+        // Fast path: ONLY safe when the parent block is the canonical block
+        // at `parent_height`. Otherwise `db.get_cumulative_work(parent_height)`
+        // returns the running total for whichever fork was last applied at
+        // that height, which may not be the fork this block actually extends.
+        //
+        // v2.4.3 (fork-fix iter 4) — previous versions skipped this check and
+        // trusted the DB value unconditionally. When two chains briefly tied
+        // at the same height and the local node flipped between them via
+        // sequential reorgs, the DB cumulative_work entry at the ancestor
+        // height alternated too, so the attacker's solo fork kept looking
+        // viable to fork-choice — which then kept reorging, corrupting
+        // height_index along the way (observed live: height_index[553] from
+        // chain A, height_index[554] from chain B, with broken prev_hash
+        // linkage that relays could never sync past).
+        if let Some(canon_parent_hash) = self.height_index.get(parent_height as usize) {
+            if *canon_parent_hash == block.header.prev_hash {
+                if let Some(parent_work) = self.db.as_ref()
+                    .and_then(|db| db.get_cumulative_work(parent_height).ok().flatten())
+                {
+                    return parent_work + block_work;
+                }
+            }
         }
 
         // Slow path: walk back through parent blocks to find known cumulative_work.
