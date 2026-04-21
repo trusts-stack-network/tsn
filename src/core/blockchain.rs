@@ -306,6 +306,14 @@ impl ShieldedBlockchain {
                         state.apply_transaction_v2(tx);
                     }
                     state.apply_coinbase(&block.coinbase);
+                    // v2.4.2 fix — mirror insert_block_internal exactly so
+                    // the replayed state matches live apply results (Phase 5).
+                    state.accumulate_relay_pool(
+                        crate::config::relay_pool(block.coinbase.reward),
+                    );
+                    if let Some(ref payout) = block.relay_payout {
+                        state.apply_relay_payout(payout);
+                    }
 
                     blocks.put(hash, block);
                 }
@@ -873,7 +881,17 @@ impl ShieldedBlockchain {
 
         let mut new_difficulty = self.difficulty;
 
-        // Replay state only (cumulative_work comes from DB, not recalculated)
+        // Replay state only (cumulative_work comes from DB, not recalculated).
+        //
+        // v2.4.2 fix — the replay MUST mirror the full v2.4.x apply sequence
+        // used by `insert_block_internal`, otherwise the resulting state_root
+        // drifts from what the header says and every subsequent block at the
+        // tip is rejected with "state_root mismatch", leaving the node
+        // permanently forked. Before this fix the slow-path rollback only
+        // replayed apply_transaction + apply_coinbase (the v2.3.x apply
+        // surface), which missed the two new Phase 5 steps:
+        //   (a) accumulate_relay_pool (3% of coinbase.reward)
+        //   (b) apply_relay_payout (when the block carries one)
         for h in replay_from..=target_height {
             if let Some(hash) = self.height_index.get(h as usize) {
                 if *hash == [0u8; BLOCK_HASH_SIZE] { continue; } // placeholder
@@ -881,6 +899,12 @@ impl ShieldedBlockchain {
                     for tx in &block.transactions { new_state.apply_transaction(tx); }
                     for tx in &block.transactions_v2 { new_state.apply_transaction_v2(tx); }
                     new_state.apply_coinbase(&block.coinbase);
+                    new_state.accumulate_relay_pool(
+                        crate::config::relay_pool(block.coinbase.reward),
+                    );
+                    if let Some(ref payout) = block.relay_payout {
+                        new_state.apply_relay_payout(payout);
+                    }
                     new_difficulty = block.header.difficulty;
                 }
             }
@@ -1862,6 +1886,19 @@ impl ShieldedBlockchain {
         self.cumulative_work
     }
 
+    /// Read cumulative_work stored at a specific height from the DB.
+    ///
+    /// v2.4.3 — used by /snapshot/info so the receiver gets the cw of the
+    /// snapshot height rather than the sender's current tip cw. Sending
+    /// tip cw with an older snapshot caused the receiver's local_work to
+    /// be artificially inflated, so every subsequent block looked like
+    /// LESS_WORK and the node could never sync.
+    pub fn cumulative_work_at_height(&self, height: u64) -> Option<u128> {
+        self.db
+            .as_ref()
+            .and_then(|db| db.get_cumulative_work(height).ok().flatten())
+    }
+
     /// Process orphan blocks to see if any can now be connected.
     pub fn process_orphans(&mut self) -> Result<(), BlockchainError> {
         let mut connected = true;
@@ -2081,6 +2118,15 @@ impl ShieldedBlockchain {
                     for tx in &block.transactions { new_state.apply_transaction(tx); }
                     for tx in &block.transactions_v2 { new_state.apply_transaction_v2(tx); }
                     new_state.apply_coinbase(&block.coinbase);
+                    // v2.4.2 fix — Phase 5 steps must run during full-chain
+                    // replay (alt-chain reorg) so state_root matches the
+                    // header of the winning chain.
+                    new_state.accumulate_relay_pool(
+                        crate::config::relay_pool(block.coinbase.reward),
+                    );
+                    if let Some(ref payout) = block.relay_payout {
+                        new_state.apply_relay_payout(payout);
+                    }
                     new_height_index.push(block.hash());
                     new_difficulty = block.header.difficulty;
                     running_work += block.header.difficulty as u128;
@@ -2162,6 +2208,14 @@ impl ShieldedBlockchain {
             for tx in &block.transactions { self.state.apply_transaction(tx); }
             for tx in &block.transactions_v2 { self.state.apply_transaction_v2(tx); }
             self.state.apply_coinbase(&block.coinbase);
+            // v2.4.2 fix — Phase 5 steps must run during fork-apply so the
+            // state_root of the new tip matches the block header.
+            self.state.accumulate_relay_pool(
+                crate::config::relay_pool(block.coinbase.reward),
+            );
+            if let Some(ref payout) = block.relay_payout {
+                self.state.apply_relay_payout(payout);
+            }
             new_height_index.push(block.hash());
             new_difficulty = block.header.difficulty;
             running_work += block.header.difficulty as u128;
@@ -2326,7 +2380,19 @@ impl ShieldedBlockchain {
         let coinbase = self.create_coinbase(miner_pk_hash, viewing_key, total_fees);
         let coinbase_reward = coinbase.reward;
 
-        // Calculate commitment root after applying transactions
+        // Calculate commitment root after applying transactions.
+        //
+        // v2.4.2 fix — the state_root this miner embeds in the header MUST
+        // match what every validator will compute when it replays the block
+        // through `insert_block_internal`. That replay does, in order:
+        //   1. apply_transaction(s) / apply_transaction_v2(s)
+        //   2. apply_coinbase
+        //   3. accumulate_relay_pool(3% of reward)
+        //   4. apply_relay_payout (if the block carries one)
+        // The old template code stopped at (2), which made every miner emit
+        // a state_root one step behind the validator's and every block was
+        // rejected with "state_root mismatch" — the root cause of the mass
+        // forks observed in the v2.4.0/v2.4.1 network.
         let mut temp_state = self.state.snapshot();
         let miner_pre_pq = temp_state.commitment_tree_pq().size();
         for tx in &transactions {
@@ -2336,6 +2402,8 @@ impl ShieldedBlockchain {
             temp_state.apply_transaction_v2(tx);
         }
         temp_state.apply_coinbase(&coinbase);
+        // (3) bind the relay-pool accumulator into the state root.
+        temp_state.accumulate_relay_pool(crate::config::relay_pool(coinbase_reward));
         let commitment_root = temp_state.commitment_root();
         let miner_post_pq = temp_state.commitment_tree_pq().size();
         tracing::debug!(
@@ -2354,15 +2422,54 @@ impl ShieldedBlockchain {
             hash
         };
 
-        // Compute state root from the post-block state
-        let state_root = temp_state.compute_state_root();
-
         // Phase 2 (v2.4.0): commit the number of V2 transactions included in
         // this block into the header. This is the simplest faithful source
         // for min_v2_count — a miner that under-includes V2 txs relative to
         // the mempool will still fail the mempool-side check performed by
         // validators (see Phase 3 `validate_v2_inclusion`).
         let included_v2 = transactions_v2.len().min(u16::MAX as usize) as u16;
+
+        // Phase 5 (v2.4.0): on a payout boundary, drain the accumulator and
+        // build the payout tx, THEN bind the drained state into state_root.
+        //
+        // First-release policy when we have no cross-seed metrics yet
+        // (the full signed-metrics layer ships in a follow-up):
+        //   * If there are no known eligible relays, the entire pool goes
+        //     to the dev treasury. Keeps the 3% slice economic even before
+        //     the relay scoring loop is live.
+        //   * Once the metrics layer lands, `entries` will be filled from
+        //     `build_relay_payout()` with per-relay amounts.
+        let new_height = self.height() + 1;
+        // Build the payout_due view from `temp_state` (which already includes
+        // this block's accumulated share) rather than `self.relay_pool()` —
+        // otherwise we'd miss the freshly-added 3% slice when the boundary
+        // block itself triggers a payout.
+        let payout_opt = if temp_state.relay_pool().is_payout_due(new_height) {
+            let pool_total = temp_state.relay_pool().balance;
+            let entries = if pool_total == 0 {
+                Vec::new()
+            } else {
+                vec![crate::consensus::relay_pool::PayoutEntry {
+                    recipient: crate::config::DEV_TREASURY_PK_HASH,
+                    amount: pool_total,
+                }]
+            };
+            Some(crate::consensus::relay_pool::RelayPayout {
+                height: new_height,
+                pool_total,
+                entries,
+            })
+        } else {
+            None
+        };
+        // (4) apply the payout to temp_state so state_root matches what
+        // validators will compute after `insert_block_internal`.
+        if let Some(ref payout) = payout_opt {
+            temp_state.apply_relay_payout(payout);
+        }
+
+        // Now the state root covers steps 1..4 — identical to validators.
+        let state_root = temp_state.compute_state_root();
 
         let mut block = ShieldedBlock::new_with_v2(
             self.latest_hash(),
@@ -2375,38 +2482,7 @@ impl ShieldedBlockchain {
         );
         block.set_state_root(state_root);
         block.set_min_v2_count(included_v2);
-
-        // Phase 5 (v2.4.0): on a payout boundary, drain the accumulator
-        // and build the payout tx.
-        //
-        // First-release policy when we have no cross-seed metrics yet
-        // (the full signed-metrics layer ships in a follow-up):
-        //   * If there are no known eligible relays, the entire pool goes
-        //     to the dev treasury. Keeps the 3% slice economic even before
-        //     the relay scoring loop is live.
-        //   * Once the metrics layer lands, `entries` will be filled from
-        //     `build_relay_payout()` with per-relay amounts.
-        let new_height = self.height() + 1;
-        if self.relay_pool().is_payout_due(new_height) {
-            // Accumulate THIS block's share before draining so the new
-            // block's reward also contributes.
-            let this_block_share = crate::config::relay_pool(coinbase_reward);
-            let pool_total = self.relay_pool().balance.saturating_add(this_block_share);
-            let entries = if pool_total == 0 {
-                Vec::new()
-            } else {
-                vec![crate::consensus::relay_pool::PayoutEntry {
-                    recipient: crate::config::DEV_TREASURY_PK_HASH,
-                    amount: pool_total,
-                }]
-            };
-            let payout = crate::consensus::relay_pool::RelayPayout {
-                height: new_height,
-                pool_total,
-                entries,
-            };
-            block.relay_payout = Some(payout);
-        }
+        block.relay_payout = payout_opt;
         block
     }
 
@@ -2573,7 +2649,37 @@ impl ShieldedBlockchain {
         // v1.7.0: Use exact cumulative_work from peer (transmitted in snapshot/info).
         // This is the peer's DB value, calculated block-by-block since genesis.
         // Stored in per-height DB tree so insert_block_internal can read it.
-        self.cumulative_work = peer_cumulative_work;
+        //
+        // v2.4.3 — plausibility clamp. Pre-v2.4.3 peers sent `chain.cumulative_work()`
+        // (cw at the peer's CURRENT TIP) instead of the cw at the snapshot height.
+        // When the snapshot lagged the peer's tip, the receiver adopted a cw far
+        // higher than what's realistic for its height, and every subsequent block
+        // looked like LESS_WORK because `fork_work < local_work` — the node could
+        // never sync. Reject implausibly high values and fall back to a
+        // height-proportional estimate based on the genesis difficulty.
+        let min_plausible: u128 = (height as u128).saturating_mul((crate::config::GENESIS_DIFFICULTY as u128) / 2);
+        let max_plausible: u128 = (height as u128).saturating_mul(crate::consensus::MAX_DIFFICULTY as u128);
+        self.cumulative_work = if height == 0 {
+            peer_cumulative_work
+        } else if peer_cumulative_work > max_plausible
+            || (peer_cumulative_work < min_plausible && peer_cumulative_work != 0)
+        {
+            let fallback = (height as u128).saturating_mul(crate::config::GENESIS_DIFFICULTY as u128);
+            tracing::warn!(
+                "import_snapshot: peer_cumulative_work={} implausible at height={} (plausible range [{}, {}]) — using height × GENESIS_DIFFICULTY = {}",
+                peer_cumulative_work, height, min_plausible, max_plausible, fallback
+            );
+            fallback
+        } else if peer_cumulative_work == 0 && height > 0 {
+            let fallback = (height as u128).saturating_mul(crate::config::GENESIS_DIFFICULTY as u128);
+            tracing::warn!(
+                "import_snapshot: peer_cumulative_work=0 at height={} — using height × GENESIS_DIFFICULTY = {}",
+                height, fallback
+            );
+            fallback
+        } else {
+            peer_cumulative_work
+        };
         self.fast_sync_base_height = height;
         // Save commitment count at snapshot time for correct position calculation
         self.fast_sync_commitment_offset = self.state.commitment_count();
@@ -2771,6 +2877,41 @@ mod tests {
         assert_eq!(template.header.prev_hash, chain.latest_hash());
         assert_eq!(template.coinbase.height, 1);
         assert_eq!(template.coinbase.reward, BLOCK_REWARD);
+    }
+
+    #[test]
+    fn test_template_state_root_matches_validator_state_root() {
+        // v2.4.2 regression test — before the fix, the miner's state_root
+        // (computed in create_block_template_with_v2) did not include the
+        // relay_pool accumulator step, while insert_block_internal did,
+        // so every block was rejected with a state_root mismatch and the
+        // network could not reach consensus across multiple miners.
+        let vk = test_viewing_key();
+        let pk_hash = test_pk_hash();
+        let coinbase = ShieldedBlockchain::create_genesis_coinbase(pk_hash, &vk);
+
+        // Miner-side: build a template.
+        let miner_chain = ShieldedBlockchain::new(MIN_DIFFICULTY, coinbase.clone());
+        let template = miner_chain.create_block_template(pk_hash, &vk, vec![]);
+        let template_state_root = template.header.state_root;
+
+        // Validator-side: apply the same block over a parallel chain and
+        // recompute state_root exactly the way `insert_block_internal` does.
+        let mut validator_state = miner_chain.state().clone();
+        validator_state.apply_coinbase(&template.coinbase);
+        validator_state.accumulate_relay_pool(
+            crate::config::relay_pool(template.coinbase.reward),
+        );
+        if let Some(ref payout) = template.relay_payout {
+            validator_state.apply_relay_payout(payout);
+        }
+        let validator_state_root = validator_state.compute_state_root();
+
+        assert_eq!(
+            template_state_root, validator_state_root,
+            "miner and validator must agree on state_root — \
+             divergence causes systematic forks in multi-miner networks"
+        );
     }
 
     #[test]

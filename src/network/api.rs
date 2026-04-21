@@ -1767,25 +1767,56 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
         }).collect()
     };
 
-    // HTTP miners from peer_info (submit blocks via HTTP, may also be visible in P2P)
-    // Dedup: skip miners whose PeerID is already in p2p_peers
+    // HTTP peers from peer_info (submit blocks or broadcast via HTTP, may also be
+    // visible in P2P). Two categories surface separately so the explorer can
+    // render relays distinctly from mining nodes:
+    //  - http_miners : role == "miner"
+    //  - http_relays : role == "relay" AND not one of the hardcoded seeds
+    //                  (seeds already render under `seeds`, don't double-count).
+    // Dedup: skip peers whose PeerID is already in p2p_peers.
     let p2p_peer_ids_set: std::collections::HashSet<String> = p2p_peers.iter()
         .filter_map(|p| p["peer_id"].as_str().map(|s| s.to_string()))
         .collect();
-    let http_miners: Vec<serde_json::Value> = {
+    // Seeds register in peer_info under the hashed url peer_id (e.g. `peer:b0fb...`).
+    // Two hashing paths exist in practice:
+    //   1. peer_id(SEED_NODES[i])             — DNS-based (e.g. http://nexus...com:9333)
+    //   2. peer_id(format!("http://{ip}:9333")) — IP-based, used when a seed
+    //      receives a block/tip from another seed (the receiver sees the peer
+    //      by its resolved IP, not by its DNS name).
+    // We compute BOTH forms here so we can exclude seeds from the http_relays
+    // list regardless of which path created the entry.
+    let mut seed_hashed_ids: std::collections::HashSet<String> =
+        crate::config::SEED_NODES.iter()
+            .map(|url| crate::network::peer_id(url))
+            .collect();
+    for url in crate::config::SEED_NODES.iter() {
+        let host = url.trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .split(':').next().unwrap_or("");
+        if host.is_empty() { continue; }
+        if let Ok(addrs) = tokio::net::lookup_host((host, 9333u16)).await {
+            for addr in addrs {
+                seed_hashed_ids.insert(
+                    crate::network::peer_id(&format!("http://{}:9333", addr.ip()))
+                );
+            }
+        }
+    }
+    let (http_miners, http_relays): (Vec<serde_json::Value>, Vec<serde_json::Value>) = {
         let info = state.peer_info.read().unwrap_or_else(|e| e.into_inner());
-        info.values()
-            .filter(|p| p.role == "miner")
-            .filter(|p| !p2p_peer_ids_set.contains(&p.peer_id)) // skip if already in P2P list
-            .filter(|p| now_secs.saturating_sub(p.last_seen) < 120) // only show miners seen in last 2min
-            .map(|p| {
-                let lag = tip_height.saturating_sub(p.height);
-                let age = now_secs.saturating_sub(p.last_seen);
-                let status = if age > 60 { "stale" }
-                    else if lag <= 5 { "fresh" }
-                    else if lag <= 50 { "stale" }
-                    else { "behind" };
-                serde_json::json!({
+        let mut miners = Vec::new();
+        let mut relays = Vec::new();
+        for p in info.values() {
+            if p2p_peer_ids_set.contains(&p.peer_id) { continue; }
+            if now_secs.saturating_sub(p.last_seen) >= 120 { continue; }
+            let lag = tip_height.saturating_sub(p.height);
+            let age = now_secs.saturating_sub(p.last_seen);
+            let status = if age > 60 { "stale" }
+                else if lag <= 5 { "fresh" }
+                else if lag <= 50 { "stale" }
+                else { "behind" };
+            match p.role.as_str() {
+                "miner" => miners.push(serde_json::json!({
                     "peer_id": p.peer_id,
                     "height": p.height,
                     "protocol": format!("tsn/{}/miner", p.version),
@@ -1793,13 +1824,29 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
                     "status": status,
                     "height_age_secs": age,
                     "source": "http",
-                })
-            }).collect()
+                })),
+                "relay" if !seed_hashed_ids.contains(&p.peer_id) => {
+                    relays.push(serde_json::json!({
+                        "peer_id": p.peer_id,
+                        "height": p.height,
+                        "protocol": format!("tsn/{}/relay", p.version),
+                        "lag": lag,
+                        "status": status,
+                        "height_age_secs": age,
+                        "source": "http",
+                    }))
+                }
+                _ => {}
+            }
+        }
+        (miners, relays)
     };
 
-    // Merge P2P peers and HTTP miners (dedup by role — miners from HTTP, relays from P2P)
+    // Merge: P2P peers (libp2p) + HTTP miners + HTTP relays.
+    // Frontend uses protocol string `tsn/<version>/<role>` to colour-code each.
     let mut all_peers = p2p_peers;
     all_peers.extend(http_miners);
+    all_peers.extend(http_relays);
 
     // v2.3.7 — consensus_height: median of online seed heights (plus local tip).
     // This is the stable canonical view of the network. Individual seeds oscillate
@@ -3001,9 +3048,32 @@ async fn receive_tip(
         return Err((StatusCode::FORBIDDEN, format!("IP {} not whitelisted", ip)));
     }
     let peer_ver = headers.get("X-TSN-Version").and_then(|v| v.to_str().ok());
-    // Track peer info
+    let sender_peer_id = headers.get("X-TSN-PeerID").and_then(|v| v.to_str().ok());
+    let sender_role = headers.get("X-TSN-Role").and_then(|v| v.to_str().ok());
+    // Track peer info. v2.4.3+: if the sender included its libp2p PeerID +
+    // role, key by PeerID — that's the only way two nodes behind the same
+    // public IP (miner on :9333 + relay on :9335) can register distinctly.
     let peer_url = format!("http://{}:9333", addr.ip());
     update_peer_info(&state, &peer_url, peer_ver, Some(req.height));
+    if let Some(pid) = sender_peer_id {
+        let is_seed = crate::config::SEED_NODES.iter().any(|s| s.contains(&ip));
+        if !is_seed {
+            let mut info = state.peer_info.write().unwrap_or_else(|e| e.into_inner());
+            let role = sender_role.unwrap_or("relay").to_string();
+            let entry = info.entry(pid.to_string()).or_insert(PeerDetail {
+                peer_id: pid.to_string(),
+                version: "?".to_string(),
+                role: role.clone(),
+                height: 0,
+                last_seen: 0,
+            });
+            entry.role = role;
+            if req.height > entry.height { entry.height = req.height; }
+            entry.last_seen = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            if let Some(v) = peer_ver { entry.version = v.to_string(); }
+        }
+    }
 
     // Parse the hash from hex
     let hash_bytes: [u8; 32] = hex::decode(&req.hash)
@@ -3105,16 +3175,26 @@ struct SnapshotInfoResponse {
 }
 
 /// GET /snapshot/info — check if a state snapshot is available for download.
+///
+/// v2.4.3 — return the cumulative_work at the SNAPSHOT HEIGHT, not the sender's
+/// current tip cw. The old code sent `chain.cumulative_work()` which is the
+/// tip value — when the snapshot lagged the tip, the receiver adopted a wildly
+/// inflated cw and then rejected every further block with LESS_WORK.
 async fn snapshot_info(State(state): State<Arc<AppState>>) -> Json<SnapshotInfoResponse> {
     let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
     match chain.export_snapshot() {
-        Some((data, height, hash)) => Json(SnapshotInfoResponse {
-            available: true,
-            height,
-            block_hash: hash,
-            size_bytes: data.len() as u64,
-            cumulative_work: chain.cumulative_work().to_string(),
-        }),
+        Some((data, height, hash)) => {
+            let snap_work = chain
+                .cumulative_work_at_height(height)
+                .unwrap_or_else(|| chain.cumulative_work());
+            Json(SnapshotInfoResponse {
+                available: true,
+                height,
+                block_hash: hash,
+                size_bytes: data.len() as u64,
+                cumulative_work: snap_work.to_string(),
+            })
+        }
         None => Json(SnapshotInfoResponse {
             available: false,
             height: 0,

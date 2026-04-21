@@ -4766,14 +4766,24 @@ async fn cmd_node(
                 let mut peers = tip_state.peers.read().unwrap().clone();
                 peers.retain(|p| p != &tip_our_url && p != &tip_local_url && p != &tip_local_ip_url);
 
+                // v2.4.3+: attach libp2p PeerID + node role so the receiver can
+                // key this entry correctly in peer_info. Without this the receiver
+                // falls back to a URL-IP hash and cannot distinguish two nodes
+                // (e.g. miner+relay on the same host) behind the same public IP.
+                let my_pid = tip_state.p2p_peer_id.read().unwrap().clone();
+                let my_role = tip_state.node_role.clone();
                 for peer in &peers {
                     let url = format!("{}/tip", peer);
                     let body = serde_json::json!({ "height": height, "hash": hash });
-                    match client.post(&url)
+                    let mut req = client.post(&url)
                         .header("X-TSN-Version", env!("CARGO_PKG_VERSION"))
                         .header("X-TSN-Network", tsn::config::NETWORK_NAME)
                         .header("X-TSN-Genesis", tsn::config::EXPECTED_GENESIS_HASH)
-                        .json(&body).send().await {
+                        .header("X-TSN-Role", my_role.as_str());
+                    if let Some(ref id) = my_pid {
+                        req = req.header("X-TSN-PeerID", id.as_str());
+                    }
+                    match req.json(&body).send().await {
                         Ok(resp) => {
                             if let Ok(tip_resp) = resp.json::<serde_json::Value>().await {
                                 // Update sync gate with peer's tip

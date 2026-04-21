@@ -144,13 +144,21 @@ impl EnforcementOutcome {
 
 /// Integrated enforcement at block-acceptance time.
 ///
-/// Runs three checks in order:
-///   1. Is `miner_pk_hash` currently banned? → reject.
-///   2. Does `block.header.min_v2_count` / `transactions_v2.len()` satisfy
-///      the validator's mempool-derived expected value? → reject + record
-///      offense + possibly ban on threshold.
-///   3. If everything checks out, `record_compliant_block` resets the
-///      miner's offense tally (Accept).
+/// The historical design rejected blocks whose `min_v2_count` was lower than
+/// the local validator's `expected` — but `expected` derives from the local
+/// mempool, which is not consensus-bound and varies between nodes. That made
+/// acceptance non-deterministic and caused spurious forks in v2.4.x: a relay
+/// or seed with more pending V2 txs would reject an otherwise-valid block
+/// while a peer with fewer txs accepted it, and the chains would diverge.
+///
+/// v2.4.2 fork-fix — split the enforcement into two independent branches:
+///
+///   1. Deterministic consensus check: `included >= committed`. The header
+///      commitment `min_v2_count` is bound into the PoW; the miner must
+///      deliver at least that many V2 txs. Violation → hard reject.
+///   2. Local ban policy: `committed >= expected_local`. Non-deterministic;
+///      only records an offense so a chronically under-committing miner
+///      crosses the ban threshold. Never rejects the block itself.
 ///
 /// Mutates `banned_miners` on offenses and compliant blocks. The caller is
 /// responsible for persisting the updated set to disk.
@@ -176,26 +184,33 @@ pub fn enforce_at_acceptance(
         return EnforcementOutcome::RejectBanned { until_height: until };
     }
 
+    // Branch 1 — deterministic: miner must honour its own commitment.
+    let committed = block.header.min_v2_count;
+    let included_u16 = block.transactions_v2.len().min(u16::MAX as usize) as u16;
+    if included_u16 < committed {
+        let error = V2InclusionError::MissingV2 { committed, included: included_u16 };
+        let now_banned = if is_attributed {
+            banned_miners.record_offense(&miner_pk, current_height, error.to_string())
+        } else {
+            false
+        };
+        return EnforcementOutcome::RejectV2Violation { error, now_banned };
+    }
+
+    // Branch 2 — local ban policy. Records an offense but never rejects.
     let grace_secs = V2_GRACE_BLOCKS.saturating_mul(crate::consensus::TARGET_BLOCK_TIME_SECS);
     let old_enough = mempool.v2_count_older_than(grace_secs, now_secs);
     let expected = expected_min_v2(old_enough);
-
-    match validate_v2_inclusion(block, expected) {
-        Ok(()) => {
-            if is_attributed {
-                banned_miners.record_compliant_block(&miner_pk, current_height);
-            }
-            EnforcementOutcome::Accept
+    if committed < expected {
+        if is_attributed {
+            let err = V2InclusionError::UnderCommitted { header_value: committed, expected };
+            banned_miners.record_offense(&miner_pk, current_height, err.to_string());
         }
-        Err(error) => {
-            let now_banned = if is_attributed {
-                banned_miners.record_offense(&miner_pk, current_height, error.to_string())
-            } else {
-                false
-            };
-            EnforcementOutcome::RejectV2Violation { error, now_banned }
-        }
+    } else if is_attributed {
+        banned_miners.record_compliant_block(&miner_pk, current_height);
     }
+
+    EnforcementOutcome::Accept
 }
 
 #[cfg(test)]

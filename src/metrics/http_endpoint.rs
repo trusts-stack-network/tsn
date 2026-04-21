@@ -64,21 +64,23 @@ impl MetricsServer {
     pub fn new(config: MetricsServerConfig) -> Self {
         Self { config }
     }
-    
-    /// Starts the metrics server
-    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+    /// Binds the listener synchronously so the caller can detect "port in use"
+    /// before spawning the serve task. Returns the bound listener + router.
+    pub async fn bind(
+        &self,
+    ) -> Result<(TcpListener, Router), Box<dyn std::error::Error + Send + Sync>> {
         let app = self.create_router();
-        
         let bind_addr = format!("{}:{}", self.config.bind_address, self.config.port);
         let listener = TcpListener::bind(&bind_addr).await?;
-        
-        info!(
-            bind_address = %bind_addr,
-            "TSN metrics server started"
-        );
-        
+        info!(bind_address = %bind_addr, "TSN metrics server started");
+        Ok((listener, app))
+    }
+
+    /// Starts the metrics server (blocking until serve exits).
+    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (listener, app) = self.bind().await?;
         axum::serve(listener, app).await?;
-        
         Ok(())
     }
     
@@ -247,18 +249,24 @@ async fn readiness_handler() -> Response {
     }
 }
 
-/// Starts the metrics server in background
+/// Starts the metrics server in background.
+///
+/// Binds the TCP port synchronously BEFORE spawning the serve task so that
+/// "Address already in use" surfaces as an `Err` to the caller (which is what
+/// lets `main.rs` walk the 9090..=9099 fallback range). Previously the bind
+/// happened inside the spawned task, so the caller always saw `Ok(handle)` and
+/// the fallback loop never advanced — the error only showed up later in the
+/// logs once the task actually ran.
 pub async fn start_metrics_server(
     config: MetricsServerConfig
 ) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error + Send + Sync>> {
     let server = MetricsServer::new(config);
-    
+    let (listener, app) = server.bind().await?;
     let handle = tokio::spawn(async move {
-        if let Err(e) = server.start().await {
+        if let Err(e) = axum::serve(listener, app).await {
             error!(error = %e, "Metrics server error");
         }
     });
-    
     Ok(handle)
 }
 
