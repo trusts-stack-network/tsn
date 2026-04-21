@@ -1196,8 +1196,24 @@ impl ShieldedBlockchain {
             } else {
                 1.0
             };
-            // M4 audit fix: reduced from ±25% to ±10% to prevent gradual difficulty manipulation
-            let within_one_step = ratio >= 0.90 && ratio <= 1.10;
+            // v2.4.3 (fork-fix): widen tolerance back to ±25%.
+            //
+            // The M4 audit narrowed this to ±10% to deter "gradual difficulty
+            // manipulation", but in a real multi-miner network that tolerance
+            // is too tight: after a depth-1 rollback, each node's LWMA window
+            // is computed over its own recently-mined blocks (same heights,
+            // different timestamps/difficulties than peers), so the expected
+            // difficulty can drift 10-20% between nodes that have already
+            // reorg-converged. The strict check then rejects every peer block
+            // with `Invalid difficulty`, which stops the reorg from completing
+            // and freezes the node on its solo fork.
+            //
+            // Security remains intact: `block.verify()` still checks the PoW
+            // against `block.header.difficulty`, and fork choice uses
+            // cumulative_work — an attacker cannot skew the canonical chain
+            // by submitting blocks with off-target difficulty because they
+            // would still have to satisfy the PoW threshold they committed to.
+            let within_one_step = ratio >= 0.75 && ratio <= 1.25;
 
             if self.fast_sync_base_height > 0 {
                 // v2.0.9: Tighter difficulty tolerance post fast-sync.
