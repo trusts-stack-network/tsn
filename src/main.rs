@@ -1931,66 +1931,99 @@ async fn pre_validate_orphan_positions(
     eprint!("  Validating {} note witness(es)... ", candidates.len());
     let mut orphans = std::collections::HashSet::new();
     let mut checked = 0usize;
-    let mut consecutive_429: u32 = 0;
     let mut bailed_best_effort = false;
-    for (pos, stored) in candidates {
-        // v2.3.5: pace requests so we never trip the server's sync rate
-        // limiter (200 rps / burst 400 in `api.rs`). 100ms per request caps
-        // the effective rate at 10 rps from a single wallet, well under the
-        // threshold even if other peers are also polling.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let url = format!("{}/witness/v2/position/{}", node_url, pos);
-        let resp = match get_with_429_backoff(
-            client,
-            &url,
-            &format!("validate pos {}", pos),
-        ).await {
-            Ok(r) => r,
-            Err(e) => {
-                // v2.3.5: when the node keeps pushing back with 429, short-
-                // circuit best-effort callers (cmd_balance) instead of
-                // burning their time. cmd_send stays strict.
-                let is_429 = format!("{}", e).contains("429");
-                if is_429 {
-                    consecutive_429 += 1;
-                } else {
-                    consecutive_429 = 0;
+    // v2.4.3 — try the bulk endpoint first. One HTTP call resolves thousands
+    // of positions at once (leaf bytes only, no merkle path), which is all
+    // pre-validation actually needs (orphan detection = compare stored
+    // commitment to the node's current leaf). Falls back to the legacy
+    // per-position loop if the node is older than v2.4.3 and returns 404.
+    let bulk_url = format!("{}/leaves/bulk", node_url);
+    let positions: Vec<u64> = candidates.iter().map(|(pos, _)| *pos).collect();
+    let bulk_body = serde_json::json!({ "positions": positions });
+    let bulk_resp = client.post(&bulk_url)
+        .json(&bulk_body)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await;
+
+    let stored_by_pos: std::collections::HashMap<u64, [u8; 32]> =
+        candidates.iter().copied().collect();
+
+    let mut bulk_ok = false;
+    if let Ok(resp) = bulk_resp {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if let Some(leaves) = body["leaves"].as_array() {
+                    for entry in leaves {
+                        let pos = match entry["position"].as_u64() {
+                            Some(p) => p,
+                            None => continue,
+                        };
+                        let Some(stored) = stored_by_pos.get(&pos) else { continue };
+                        let leaf_hex = match entry["leaf"].as_str() {
+                            Some(s) => s.trim().to_string(),
+                            None => continue,
+                        };
+                        if leaf_hex.is_empty() || leaf_hex == placeholder { continue; }
+                        let leaf_bytes = match hex::decode(&leaf_hex) {
+                            Ok(b) if b.len() == 32 => b,
+                            _ => continue,
+                        };
+                        let mut leaf_arr = [0u8; 32];
+                        leaf_arr.copy_from_slice(&leaf_bytes);
+                        if &leaf_arr != stored { orphans.insert(pos); }
+                        checked += 1;
+                    }
+                    bulk_ok = true;
                 }
-                if best_effort && consecutive_429 >= 2 {
-                    bailed_best_effort = true;
-                    break;
-                }
-                continue;
             }
-        };
-        consecutive_429 = 0;
-        if !resp.status().is_success() {
-            continue;
         }
-        let body: serde_json::Value = match resp.json().await {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let leaf_hex = match body["leaf"].as_str() {
-            Some(s) => s.trim().to_string(),
-            None => continue,
-        };
-        if leaf_hex.is_empty() || leaf_hex == placeholder {
-            // Placeholder leaf (fast-sync blind zone) — trust the wallet's
-            // stored value, not an orphan.
-            continue;
+    }
+
+    // Legacy per-position fallback for nodes that don't expose /leaves/bulk.
+    // Keeps backwards compatibility with pre-v2.4.3 nodes on older testnets.
+    let mut consecutive_429: u32 = 0;
+    if !bulk_ok {
+        for (pos, stored) in candidates {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let url = format!("{}/witness/v2/position/{}", node_url, pos);
+            let resp = match get_with_429_backoff(
+                client,
+                &url,
+                &format!("validate pos {}", pos),
+            ).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let is_429 = format!("{}", e).contains("429");
+                    if is_429 { consecutive_429 += 1; } else { consecutive_429 = 0; }
+                    if best_effort && consecutive_429 >= 2 {
+                        bailed_best_effort = true;
+                        break;
+                    }
+                    continue;
+                }
+            };
+            consecutive_429 = 0;
+            if !resp.status().is_success() { continue; }
+            let body: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let leaf_hex = match body["leaf"].as_str() {
+                Some(s) => s.trim().to_string(),
+                None => continue,
+            };
+            if leaf_hex.is_empty() || leaf_hex == placeholder { continue; }
+            let leaf_bytes = match hex::decode(&leaf_hex) {
+                Ok(b) if b.len() == 32 => b,
+                _ => continue,
+            };
+            let mut leaf_arr = [0u8; 32];
+            leaf_arr.copy_from_slice(&leaf_bytes);
+            if leaf_arr != stored { orphans.insert(pos); }
+            checked += 1;
         }
-        let leaf_bytes = match hex::decode(&leaf_hex) {
-            Ok(b) if b.len() == 32 => b,
-            _ => continue,
-        };
-        let mut leaf_arr = [0u8; 32];
-        leaf_arr.copy_from_slice(&leaf_bytes);
-        if leaf_arr != stored {
-            orphans.insert(pos);
-        }
-        checked += 1;
     }
 
     if bailed_best_effort {

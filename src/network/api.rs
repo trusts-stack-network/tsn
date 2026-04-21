@@ -551,6 +551,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/witness/:commitment", get(get_witness))
         .route("/witness/position/:position", get(get_witness_by_position))
         .route("/witness/v2/position/:position", get(get_witness_by_position_v2))
+        .route("/leaves/bulk", post(get_leaves_bulk))
         // Debug endpoints REMOVED from production (H3 audit fix).
         // These exposed internal crypto structures. Re-enable with --debug flag if needed.
         // .route("/debug/commitments", get(debug_list_commitments))
@@ -2576,6 +2577,43 @@ async fn get_witness_by_position_v2(
         position: witness.position,
         leaf: Some(leaf_hex),
     }))
+}
+
+/// Bulk leaf lookup: POST body = {"positions": [u64, ...]} → returns
+/// {"leaves": [{"position": u64, "leaf": hex_string|null}, ...]}.
+///
+/// v2.4.3 — wallet pre-validation used to fire one `/witness/v2/position/N`
+/// per unspent note (896 requests for a 41k TSN wallet), saturating its own
+/// rate limit and stalling `tsn send` for 90+ seconds or indefinitely. The
+/// wallet only needs the leaf bytes for orphan detection (compare-equal vs
+/// the stored commitment), not the full merkle path. Collapsing to one bulk
+/// call makes a 10 TSN transfer finish in <2 s even with thousands of notes.
+#[derive(Deserialize)]
+struct BulkLeavesRequest { positions: Vec<u64> }
+
+#[derive(Serialize)]
+struct BulkLeafEntry { position: u64, leaf: Option<String> }
+
+#[derive(Serialize)]
+struct BulkLeavesResponse { leaves: Vec<BulkLeafEntry> }
+
+async fn get_leaves_bulk(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BulkLeavesRequest>,
+) -> Result<Json<BulkLeavesResponse>, StatusCode> {
+    const MAX_BULK_POSITIONS: usize = 10_000;
+    if req.positions.len() > MAX_BULK_POSITIONS {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let commitment_tree_pq = chain.state().commitment_tree_pq();
+    let leaves: Vec<BulkLeafEntry> = req.positions.into_iter().map(|position| {
+        BulkLeafEntry {
+            position,
+            leaf: commitment_tree_pq.leaf_at(position).map(hex::encode),
+        }
+    }).collect();
+    Ok(Json(BulkLeavesResponse { leaves }))
 }
 
 /// Debug endpoint to test Poseidon hash compatibility.
