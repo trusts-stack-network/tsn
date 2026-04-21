@@ -4770,8 +4770,26 @@ async fn cmd_node(
                 // key this entry correctly in peer_info. Without this the receiver
                 // falls back to a URL-IP hash and cannot distinguish two nodes
                 // (e.g. miner+relay on the same host) behind the same public IP.
+                //
+                // Role is derived from actual mining activity, not from the
+                // static node_role: a node started with NodeRole::Miner but
+                // without a wallet never spins up the mining loop and should
+                // announce itself as a relay. Otherwise the explorer sees five
+                // "miners" that never produce a block, and the block-attribution
+                // histogram looks falsely skewed toward the two nodes with wallets.
                 let my_pid = tip_state.p2p_peer_id.read().unwrap().clone();
-                let my_role = tip_state.node_role.clone();
+                let is_actively_mining = tip_state
+                    .miner_stats
+                    .read()
+                    .map(|s| s.is_mining)
+                    .unwrap_or(false);
+                let my_role: String = if tip_state.node_role == "light" {
+                    "light".to_string()
+                } else if is_actively_mining {
+                    "miner".to_string()
+                } else {
+                    "relay".to_string()
+                };
                 for peer in &peers {
                     let url = format!("{}/tip", peer);
                     let body = serde_json::json!({ "height": height, "hash": hash });
