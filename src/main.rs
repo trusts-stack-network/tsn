@@ -440,6 +440,22 @@ enum Commands {
         #[arg(short, long)]
         node: Option<String>,
     },
+    /// Prune orphan notes (from historical reorgs) from the local wallet DB.
+    /// Marks every unspent note whose on-chain leaf no longer matches as spent
+    /// so it stops cluttering balance / send flows. On-chain state is
+    /// untouched — this only cleans up the local wallet.
+    #[command(name = "wallet-cleanup")]
+    WalletCleanup {
+        /// Wallet file (default: auto-detect)
+        #[arg(short, long)]
+        wallet: Option<String>,
+        /// Node URL to query (default: auto-detect)
+        #[arg(short, long)]
+        node: Option<String>,
+        /// Scan only, don't actually modify the wallet (preview mode)
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Start mining blocks
     Mine {
         /// Wallet file (mining rewards go to this wallet)
@@ -540,7 +556,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Suppress logs for simple commands (balance, new-wallet)
-    let is_quiet_cmd = matches!(cli.command, Some(Commands::Wallet { .. }) | Some(Commands::Balance { .. }) | Some(Commands::NewWallet { .. }) | Some(Commands::RestoreWallet { .. }) | Some(Commands::Send { .. }) | Some(Commands::History { .. }) | Some(Commands::Update));
+    let is_quiet_cmd = matches!(cli.command, Some(Commands::Wallet { .. }) | Some(Commands::Balance { .. }) | Some(Commands::NewWallet { .. }) | Some(Commands::RestoreWallet { .. }) | Some(Commands::Send { .. }) | Some(Commands::History { .. }) | Some(Commands::Update) | Some(Commands::WalletCleanup { .. }));
     let log_level = if is_quiet_cmd {
         "error".to_string()
     } else {
@@ -639,6 +655,22 @@ async fn main() -> anyhow::Result<()> {
                 format!("http://127.0.0.1:{}", config::get_port())
             });
             cmd_send(&wallet, &node, &to, amount, fee).await?;
+        }
+        Some(Commands::WalletCleanup { wallet, node, dry_run }) => {
+            let wallet = wallet.or_else(auto_detect_wallet).unwrap_or_else(|| "wallet.json".to_string());
+            let node = node.unwrap_or_else(|| {
+                for port in [9333u16, 9334, 9335, 8333] {
+                    if let Ok(stream) = std::net::TcpStream::connect_timeout(
+                        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                        std::time::Duration::from_millis(200),
+                    ) {
+                        drop(stream);
+                        return format!("http://127.0.0.1:{}", port);
+                    }
+                }
+                format!("http://127.0.0.1:{}", config::get_port())
+            });
+            cmd_wallet_cleanup(&wallet, &node, dry_run).await?;
         }
         Some(Commands::RestoreSnapshot { snapshot, manifest, data_dir }) => {
             let data_dir = data_dir.unwrap_or_else(|| "data".to_string());
@@ -1490,13 +1522,24 @@ async fn cmd_balance(wallet_path: &str, node_url: &str) -> anyhow::Result<()> {
     println!();
     println!("  Address:   {}", hex::encode(wallet.pk_hash()));
     if balance_raw > 0 {
-        let total_coins = balance_coins;
+        // v2.4.3 — "Balance" is the spendable amount only. Stuck orphans
+        // from historical reorgs are still in the wallet DB but they cannot
+        // be spent and shouldn't be counted as user funds. The orphan total
+        // is surfaced as a separate, dimmed line with a pointer to
+        // `tsn wallet-cleanup` so the user can prune them for good.
         let spendable_coins = spendable_raw as f64 / divisor as f64;
         let stuck_coins = stuck_raw as f64 / divisor as f64;
-        println!("  Total:     {}{:.4} TSN{} ({} notes)", green, total_coins, reset, wallet.note_count());
+        let spendable_notes = wallet
+            .notes()
+            .iter()
+            .filter(|n| !n.is_spent && !orphan_positions.contains(&n.position))
+            .count();
+        println!("  Balance:   {}{:.4} TSN{} ({} notes)", green, spendable_coins, reset, spendable_notes);
         if stuck_raw > 0 {
-            println!("  Spendable: {}{:.4} TSN{}", green, spendable_coins, reset);
-            println!("  Stuck:     {}{:.4} TSN{} ({} orphan note(s) from chain reorg)", yellow, stuck_coins, reset, orphan_positions.len());
+            println!(
+                "  Stuck:     {}{:.4} TSN{} ({} orphan note(s) from chain reorg — run `tsn wallet-cleanup` to prune)",
+                yellow, stuck_coins, reset, orphan_positions.len()
+            );
         }
     } else {
         println!("  Balance:   0 TSN");
@@ -1511,6 +1554,101 @@ async fn cmd_balance(wallet_path: &str, node_url: &str) -> anyhow::Result<()> {
         println!();
         println!("  Tip: Run your node to sync the blockchain first.");
     }
+    println!();
+
+    Ok(())
+}
+
+/// Prune orphan notes from the local wallet DB.
+///
+/// Orphan notes are wallet notes whose on-chain commitment has been superseded
+/// by a chain reorg (typical in multi-miner networks): the block that created
+/// them was later replaced by a different block at the same height. The node
+/// can no longer produce a valid merkle witness for the original leaf, so the
+/// notes are unspendable. They still take up space in the wallet DB and
+/// confuse the user-facing "Total" balance.
+///
+/// This command flags every such note as spent=true in the local wallet DB.
+/// No on-chain effect (there is nothing to spend). Dry-run mode previews the
+/// count without modifying anything.
+async fn cmd_wallet_cleanup(wallet_path: &str, node_url: &str, dry_run: bool) -> anyhow::Result<()> {
+    let _lock = WalletLock::acquire(wallet_path)?;
+    let mut wallet = ShieldedWallet::open(wallet_path)
+        .or_else(|_| ShieldedWallet::load(wallet_path))?;
+
+    let coin_decimals = config::COIN_DECIMALS;
+    let divisor = 10u64.pow(coin_decimals);
+    let green = "\x1b[1;32m";
+    let yellow = "\x1b[1;33m";
+    let cyan = "\x1b[1;36m";
+    let reset = "\x1b[0m";
+
+    println!();
+    println!("  Wallet:    {}", wallet_path);
+    println!("  Address:   {}", hex::encode(wallet.pk_hash()));
+
+    // Refresh wallet state so we don't miss notes that were added very recently.
+    let (_api_ok, new_notes) = try_scan_via_api(&mut wallet, node_url, wallet_path).await;
+    if new_notes > 0 {
+        println!("  {}+{} new notes found{} during pre-scan", cyan, new_notes, reset);
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
+
+    // Use the same validation path as cmd_balance / cmd_send so the definition
+    // of "orphan" stays consistent. Non-best-effort: we want every orphan
+    // caught, not just the first dozen.
+    let orphan_positions = pre_validate_orphan_positions(&wallet, node_url, &client, false).await;
+
+    if orphan_positions.is_empty() {
+        println!();
+        println!("  {}Wallet is clean.{} No orphan notes detected.", green, reset);
+        println!();
+        return Ok(());
+    }
+
+    // Compute totals for the summary.
+    let (stuck_count, stuck_value) = {
+        let mut n = 0usize;
+        let mut v = 0u64;
+        for note in wallet.notes().iter() {
+            if !note.is_spent && orphan_positions.contains(&note.position) {
+                n += 1;
+                v = v.saturating_add(note.note.value);
+            }
+        }
+        (n, v)
+    };
+    let stuck_coins = stuck_value as f64 / divisor as f64;
+
+    println!();
+    println!("  Orphans:   {} note(s) totalling {}{:.4} TSN{}",
+        stuck_count, yellow, stuck_coins, reset);
+
+    if dry_run {
+        println!();
+        println!("  {}[dry-run]{} no changes written. Rerun without --dry-run to prune.", yellow, reset);
+        println!();
+        return Ok(());
+    }
+
+    // Mark each orphan note as spent in the local wallet. This is purely a
+    // bookkeeping action — the on-chain state is already what it is.
+    let mut pruned = 0usize;
+    for note in wallet.notes_mut().iter_mut() {
+        if !note.is_spent && orphan_positions.contains(&note.position) {
+            note.mark_spent();
+            pruned += 1;
+        }
+    }
+    wallet.save(wallet_path)?;
+
+    println!();
+    println!("  {}Pruned {} orphan note(s).{} Wallet DB updated.", green, pruned, reset);
+    println!("  Run `tsn balance` to see the cleaned-up view.");
     println!();
 
     Ok(())
