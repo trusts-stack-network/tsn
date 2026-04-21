@@ -1652,23 +1652,25 @@ impl ShieldedBlockchain {
         }
     }
 
-    /// Check if a block is on the CANONICAL chain (DB-backed) — i.e. we
-    /// actually applied it. LRU-only blocks are stored fork candidates that
-    /// were rejected by fork-choice at the time, and must NOT be treated as
-    /// duplicates: a later reorg may want to adopt them, which requires them
-    /// to flow through the fork-evaluation path again.
+    /// Check if a block is on the CANONICAL chain — i.e. it matches the
+    /// hash recorded at its declared height in `height_index`.
     ///
-    /// v2.4.3 (fork-fix): the old DUP short-circuit used `has_block`, which
-    /// returned TRUE for LRU-only blocks. That caused the relay to silently
-    /// discard every peer block that it had once seen on a losing fork —
-    /// permanent stick on the old tip, no way to catch up once the seeds
-    /// had moved past the shared point.
-    fn has_block_canonical(&self, hash: &[u8; 32]) -> bool {
-        if let Some(ref db) = self.db {
-            return db.get_block_hash_by_height(0).is_ok()
-                && db.load_block(hash).ok().flatten().is_some();
+    /// Neither DB presence nor LRU presence is a safe signal on its own.
+    /// `rollback_to_height` leaves orphaned fork blocks in DB (they only get
+    /// pruned lazily), and LRU caches both canonical and fork candidates.
+    /// The only authoritative view of "is this block on MY chain right now"
+    /// is `height_index[block.height] == block.hash`.
+    ///
+    /// v2.4.3 (fork-fix iter 2): earlier revisions checked DB-only. That
+    /// still treated fork blocks as duplicates after a rollback: the rollback
+    /// truncates height_index but the abandoned fork blocks remain stored in
+    /// the DB with their old heights, so `load_block(hash)` returned Some and
+    /// try_add_block silently dropped every legitimate resync attempt.
+    fn has_block_canonical(&self, hash: &[u8; 32], declared_height: u64) -> bool {
+        match self.height_index.get(declared_height as usize) {
+            Some(canon_hash) => canon_hash == hash,
+            None => false,
         }
-        false
     }
 
     /// Try to add a block, handling orphans and potential reorgs.
@@ -1686,9 +1688,11 @@ impl ShieldedBlockchain {
         );
 
         // Already have this block on the canonical chain? (v2.4.3 fork-fix:
-        // do NOT short-circuit on LRU-only hits — a block sitting in the LRU
-        // may be a stored fork candidate that we now need to re-evaluate.)
-        if self.has_block_canonical(&block_hash) {
+        // do NOT short-circuit on LRU-only or DB-only hits — a block sitting
+        // in the LRU may be a stored fork candidate that we now need to
+        // re-evaluate, and a block sitting in the DB may be an abandoned
+        // fork block that rollback_to_height didn't prune.)
+        if self.has_block_canonical(&block_hash, block_height) {
             tracing::debug!("SYNC_DEBUG: REJECT DUP_CANONICAL block={} height={}", block_hash_hex, block_height);
             return Ok(false);
         }
