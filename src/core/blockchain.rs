@@ -1929,6 +1929,55 @@ impl ShieldedBlockchain {
         self.cumulative_work
     }
 
+    /// Recompute cumulative_work from scratch by walking the canonical chain
+    /// (height_index) and summing block difficulties. Authoritative — use this
+    /// to repair a node whose cw has drifted from the true chain work.
+    ///
+    /// v2.4.3 (fork-fix iter 3) — observed EPYC1 miner and seeds agreeing on
+    /// the same canonical tip (identical height_index) but disagreeing on
+    /// cumulative_work by ~83 block-equivalents. Root cause: during a reorg,
+    /// `running_work = ancestor_work + sum(fork_block_diffs)`, where
+    /// `ancestor_work` is read from DB. If the DB entry at `ancestor_h` was
+    /// itself written by a previous reorg that was slightly wrong, every
+    /// subsequent block inherits the drift via `parent_work = db.get(h-1)`.
+    /// The corruption is self-sustaining, so a one-time authoritative rebuild
+    /// from height_index is the only way to get all nodes to agree again.
+    ///
+    /// Fork-choice uses cumulative_work; disagreeing cw at the same tip means
+    /// nodes make opposite fork-choice decisions on the next block, which is
+    /// the actual fork-persistence root cause.
+    pub fn recompute_cumulative_work(&mut self) -> Result<u128, BlockchainError> {
+        let mut running: u128 = 0;
+        for (h, hash) in self.height_index.iter().enumerate() {
+            let h = h as u64;
+            // Genesis: height 0 contributes 0 work (no difficulty entry).
+            if h == 0 { continue; }
+            // Pull difficulty from the block at this height. Prefer the cached
+            // block in LRU/DB; if missing, we cannot recompute reliably and
+            // signal failure so the caller can decide (ignore vs. refuse).
+            let difficulty = match self.get_block(hash) {
+                Some(b) => b.header.difficulty,
+                None => {
+                    return Err(BlockchainError::StorageError(format!(
+                        "recompute_cumulative_work: missing block at height {}",
+                        h
+                    )));
+                }
+            };
+            running = running.saturating_add(difficulty as u128);
+            // Persist the corrected value so parent_work lookups on the next
+            // block are authoritative going forward.
+            if let Some(ref db) = self.db {
+                let _ = db.save_cumulative_work(h, running);
+            }
+        }
+        self.cumulative_work = running;
+        if let Some(ref db) = self.db {
+            let _ = db.set_metadata("cumulative_work", &running.to_string());
+        }
+        Ok(running)
+    }
+
     /// Read cumulative_work stored at a specific height from the DB.
     ///
     /// v2.4.3 — used by /snapshot/info so the receiver gets the cw of the
@@ -2723,6 +2772,20 @@ impl ShieldedBlockchain {
         } else {
             peer_cumulative_work
         };
+        // v2.4.3 (fork-fix iter 3) — persist the snapshot cw under the
+        // per-height DB entry so the next `insert_block_internal` can read a
+        // plausible `parent_work` at `height`. Without this, the fast-sync
+        // receiver has no DB entry for cw at the snapshot height, so the
+        // parent-work lookup falls into the "repair from height_index" path,
+        // which iterates over the placeholder ([0u8;32]) hashes the snapshot
+        // import left behind and computes running=0 — collapsing the chain's
+        // cumulative work to a tiny value. Fork-choice then either favours
+        // the node's own fresh blocks (which grow from 0) or peer blocks
+        // (which still look massively heavier), depending on timing.
+        if let Some(ref db) = self.db {
+            let _ = db.save_cumulative_work(height, self.cumulative_work);
+            let _ = db.set_metadata("cumulative_work", &self.cumulative_work.to_string());
+        }
         self.fast_sync_base_height = height;
         // Save commitment count at snapshot time for correct position calculation
         self.fast_sync_commitment_offset = self.state.commitment_count();
