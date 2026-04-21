@@ -63,7 +63,7 @@ pub fn is_ip_whitelisted(ip: &str) -> bool {
 }
 
 /// Network name for identification
-pub const NETWORK_NAME: &str = "tsn-testnet-v7";
+pub const NETWORK_NAME: &str = "tsn-testnet-v8";
 
 /// Hardcoded checkpoints for fast-sync verification.
 /// After downloading blocks in trusted mode, the node verifies that these
@@ -308,4 +308,4 @@ pub const HARDCODED_CHECKPOINTS: &[(u64, &str)] = &[];
 /// Previous value: "bf18bbaad9d19045abb926425f652dffb84a9bf010a9555cd863d7b1e08ca539"
 /// Deterministic hash computed from (NETWORK_NAME, GENESIS_DIFFICULTY, BLOCK_REWARD).
 /// See `print_genesis_hash` test in `src/main.rs` to recompute after any bump.
-pub const EXPECTED_GENESIS_HASH: &str = "141fea5448a9a0affe4caa9991c041a6b5fcf70db7ac1674f650e5d92821dabc";
+pub const EXPECTED_GENESIS_HASH: &str = "a04ec137c129bd93b65d7e5a7c91e47f651398b6a3093526fb909fc381651c7b";
