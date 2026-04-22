@@ -1,6 +1,6 @@
 [package]
 name = "tsn"
-version = "2.4.3"
+version = "2.5.0"
 edition = "2021"
 description = "TSN (Trust Stack Network) - A privacy-preserving post-quantum cryptocurrency"
 license = "MIT"
@@ -127,6 +127,12 @@ zeroize = { version = "1.8", features = ["derive"] }
 ratatui = "0.27"
 crossterm = "0.28"
 
+# Cortex node — WASM runtime for dApp service modules (v2.5.0 Phase 1)
+# wasmtime is the Bytecode Alliance's mainstream WASM runtime: deterministic,
+# well-audited, supports fuel metering for job quotas. Default features give
+# us the sandboxed interpreter; we don't need WASI or async for Phase 1.
+wasmtime = { version = "24", default-features = false, features = ["cranelift", "runtime", "parallel-compilation"] }
+
 [[bin]]
 name = "tsn-miner-monitor"
 path = "src/bin/miner_monitor.rs"
@@ -159,6 +165,8 @@ opt-level = 3
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
+# WAT parser for Cortex WASM runtime tests (lets us keep tests human-readable)
+wat = "1"
 
 [features]
 # Feature pour activer les modules de démonstration vulnérables (TESTS UNIQUEMENT)

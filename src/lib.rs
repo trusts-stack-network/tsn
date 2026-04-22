@@ -1,6 +1,7 @@
 pub mod config;
 pub mod consensus;
 pub mod core;
+pub mod cortex;
 pub mod crypto;
 pub mod explorer;
 pub mod faucet;

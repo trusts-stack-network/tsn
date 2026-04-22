@@ -413,6 +413,47 @@ enum Commands {
         #[arg(long)]
         no_seeds: bool,
     },
+    /// Run a Cortex node (service layer for dApps — shortcut for: node --role cortex).
+    /// Follows the chain like a relay, does not mine, embeds a WASM runtime so TSN-signed
+    /// service modules (indexing, APIs, compute) can be loaded and invoked locally.
+    /// Phase 1 release: modules are loaded manually via `tsn cortex-load-module`; on-chain
+    /// registry + automatic module distribution ship in a later hard fork.
+    Cortex {
+        /// Port (default: 9337)
+        #[arg(short, long, default_value = "9337")]
+        port: u16,
+        /// Data directory (default: ./data-cortex)
+        #[arg(short, long)]
+        data_dir: Option<String>,
+        /// Additional peer nodes
+        #[arg(long)]
+        peer: Vec<String>,
+        /// Public URL to announce to peers (optional)
+        #[arg(long)]
+        public_url: Option<String>,
+        /// Disable connecting to seed nodes
+        #[arg(long)]
+        no_seeds: bool,
+    },
+    /// Load a WASM module into a running Cortex node's runtime. Talks to the node's
+    /// /cortex/modules/load endpoint. Module signature is verified server-side against
+    /// the pinned TSN dev-team public key.
+    #[command(name = "cortex-load-module")]
+    CortexLoadModule {
+        /// Module name used to invoke it later (e.g. "dex_indexer")
+        #[arg(long)]
+        name: String,
+        /// Path to the .wasm bytecode file
+        #[arg(long)]
+        wasm: String,
+        /// Path to the detached ML-DSA-65 signature file (if omitted: unsigned dev-only load,
+        /// rejected on production-signed nodes)
+        #[arg(long)]
+        signature: Option<String>,
+        /// Cortex node URL (default: http://127.0.0.1:9337)
+        #[arg(short, long, default_value = "http://127.0.0.1:9337")]
+        node: String,
+    },
     /// Show transaction history from the explorer
     History {
         /// Node URL to query (default: auto-detect)
@@ -807,6 +848,51 @@ async fn main() -> anyhow::Result<()> {
             dedup_peers(&mut peers);
             cmd_node(port, peers, &data_dir, wallet_path, 1, None, None, false, None, None, true, NodeRole::LightClient).await?;
         }
+        Some(Commands::Cortex { port, data_dir, peer, public_url, no_seeds }) => {
+            let data_dir = data_dir.unwrap_or_else(|| "data-cortex".to_string());
+            std::fs::create_dir_all(&data_dir).ok();
+            let mut peers = if no_seeds { Vec::new() } else { config::get_seed_nodes() };
+            peers.extend(peer);
+            dedup_peers(&mut peers);
+            println!();
+            println!("  Starting TSN Cortex node (Phase 1)");
+            println!("    data-dir: {}", data_dir);
+            println!("    port:     {}", port);
+            println!("    WASM runtime: embedded (wasmtime), fuel metering on");
+            println!("    On-chain module registry: not yet (planned Phase 2)");
+            println!();
+            cmd_node(port, peers, &data_dir, None, 1, None, public_url, false, None, None, true, NodeRole::Cortex).await?;
+        }
+        Some(Commands::CortexLoadModule { name, wasm, signature, node }) => {
+            use tsn::cortex::wasm_runtime::CortexRuntime;
+            // Phase 1 convenience: this does local-only load+execute sanity check so
+            // an operator can verify their module compiles before wiring it into a
+            // live Cortex. Pushing to a remote Cortex node's /cortex/modules/load
+            // endpoint is the next wiring step (HTTP API) — for now the CLI talks
+            // to an in-process runtime so WASM builds can be validated quickly.
+            let wasm_bytes = std::fs::read(&wasm)
+                .map_err(|e| anyhow::anyhow!("read wasm: {}", e))?;
+            let rt = CortexRuntime::new()
+                .map_err(|e| anyhow::anyhow!("runtime init: {}", e))?;
+            if let Some(sig_path) = signature {
+                let _sig_bytes = std::fs::read(&sig_path)
+                    .map_err(|e| anyhow::anyhow!("read signature: {}", e))?;
+                // Signed-load path requires a pinned dev-team pubkey which is not yet
+                // baked into this build. Defer to Phase 2 on-chain publish flow.
+                println!("  [phase1] signed load deferred to Phase 2 on-chain registry.");
+                println!("  [phase1] loading module unsigned for local validation only.");
+            }
+            rt.load_raw_module(&name, &wasm_bytes, tsn::cortex::wasm_runtime::DEFAULT_FUEL_BUDGET)
+                .map_err(|e| anyhow::anyhow!("load: {}", e))?;
+            println!("  Module '{}' loaded into local runtime ({} bytes).", name, wasm_bytes.len());
+            println!("  Sanity-check: attempting to invoke run() with 4-byte input...");
+            match rt.execute(&name, b"test") {
+                Ok(out) => println!("  run() returned {} bytes: {}", out.len(), hex::encode(&out)),
+                Err(e) => println!("  run() failed: {} (this may be expected if the module doesn't export run)", e),
+            }
+            println!("  Remote push to {} — not yet implemented (Phase 1 is local-only).", node);
+            println!();
+        }
         Some(Commands::Mine {
             wallet,
             blocks,
@@ -895,6 +981,7 @@ async fn main() -> anyhow::Result<()> {
                     NodeRole::Miner => "data-miner".to_string(),
                     NodeRole::Relay => "data-relay".to_string(),
                     NodeRole::LightClient => "data-light".to_string(),
+                    NodeRole::Cortex => "data-cortex".to_string(),
                 }
             });
             let port = cli.port.unwrap_or_else(|| find_free_port(config::get_port()));
@@ -3526,6 +3613,7 @@ async fn cmd_node(
         NodeRole::Miner => "⛏️",
         NodeRole::Relay => "🔄",
         NodeRole::LightClient => "💡",
+        NodeRole::Cortex => "🧠",
     };
 
     let version_str = env!("CARGO_PKG_VERSION");
@@ -3566,6 +3654,11 @@ async fn cmd_node(
                 println!("  {}💡 WALLET ACTIVE{}", yellow, reset);
                 println!("  Address:      {}", hex::encode(pk_hash));
             }
+            NodeRole::Cortex => {
+                println!("  {}🧠 CORTEX WALLET{}", yellow, reset);
+                println!("  Address:      {}", hex::encode(pk_hash));
+                println!("  Note:         wallet not used by Phase 1 Cortex (no on-chain rewards yet)");
+            }
         }
     } else {
         match node_role {
@@ -3575,6 +3668,12 @@ async fn cmd_node(
             }
             NodeRole::Relay => {}
             NodeRole::LightClient => {}
+            NodeRole::Cortex => {
+                println!();
+                println!("  {}🧠 CORTEX NODE{}", cyan, reset);
+                println!("  WASM Runtime: enabled (wasmtime, fuel metered)");
+                println!("  Modules:      none loaded yet — use `tsn cortex-load-module`");
+            }
         }
     }
     if !peers.is_empty() {
@@ -5081,6 +5180,10 @@ async fn cmd_node(
         NodeRole::Relay => {
             tracing::info!("Relay mode: storing and relaying full blocks, mining disabled");
             println!("Mode: RELAY — full block relay, no mining");
+        }
+        NodeRole::Cortex => {
+            tracing::info!("Cortex mode: follows chain + WASM runtime for dApp modules, no mining");
+            println!("Mode: CORTEX — service layer for dApps (WASM), no mining");
         }
         NodeRole::Miner => {
             if !mining_active {

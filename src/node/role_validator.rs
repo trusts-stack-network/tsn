@@ -190,6 +190,7 @@ impl RoleValidator {
             NodeRole::Miner => self.validate_miner(proof),
             NodeRole::Relay => self.validate_relay(proof),
             NodeRole::LightClient => RoleValidation::Valid, // Light clients need no proof
+            NodeRole::Cortex => RoleValidation::Valid, // Phase 1: no on-chain role attestation yet
         };
 
         if validation.is_valid() {
@@ -317,6 +318,7 @@ impl RoleValidator {
         let mut miners = 0;
         let mut relays = 0;
         let mut light_clients = 0;
+        let mut cortex = 0;
         let mut banned = 0;
 
         for info in self.peer_roles.values() {
@@ -328,6 +330,7 @@ impl RoleValidator {
                 NodeRole::Miner => miners += 1,
                 NodeRole::Relay => relays += 1,
                 NodeRole::LightClient => light_clients += 1,
+                NodeRole::Cortex => cortex += 1,
             }
         }
 
@@ -336,6 +339,7 @@ impl RoleValidator {
             miners,
             relays,
             light_clients,
+            cortex,
             banned,
         }
     }
@@ -359,6 +363,8 @@ pub struct RoleValidatorStats {
     pub miners: usize,
     pub relays: usize,
     pub light_clients: usize,
+    #[serde(default)]
+    pub cortex: usize,
     pub banned: usize,
 }
 

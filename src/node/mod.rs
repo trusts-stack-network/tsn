@@ -7,11 +7,16 @@ use serde::{Deserialize, Serialize};
 /// - **Miner**: Full node that mines blocks, relays, and stores the full chain.
 /// - **Relay**: Stores and relays full blocks but does not mine.
 /// - **LightClient**: Syncs headers only; minimal storage and bandwidth.
+/// - **Cortex**: Service-layer node for dApps (indexing, APIs, compute). Follows the chain
+///   like a relay but exposes a WASM runtime for signed TSN modules. Does not mine. Phase 1:
+///   node follows chain + runtime is embedded, modules are loaded locally (off-chain distribution).
+///   Phase 2 (future testnet): on-chain registry + tx types for module publication. Phase 3: jobs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeRole {
     Miner,
     Relay,
     LightClient,
+    Cortex,
 }
 
 impl NodeRole {
@@ -21,6 +26,7 @@ impl NodeRole {
             "miner" => Some(Self::Miner),
             "relay" => Some(Self::Relay),
             "light" | "lightclient" | "light_client" | "light-client" => Some(Self::LightClient),
+            "cortex" => Some(Self::Cortex),
             _ => None,
         }
     }
@@ -32,12 +38,17 @@ impl NodeRole {
 
     /// Whether this role relays full blocks to peers.
     pub fn can_relay(&self) -> bool {
-        matches!(self, Self::Miner | Self::Relay)
+        matches!(self, Self::Miner | Self::Relay | Self::Cortex)
     }
 
     /// Whether this role stores the full blockchain (not just headers).
     pub fn stores_full_chain(&self) -> bool {
         !matches!(self, Self::LightClient)
+    }
+
+    /// Whether this role runs the Cortex WASM service runtime.
+    pub fn runs_cortex(&self) -> bool {
+        matches!(self, Self::Cortex)
     }
 
     /// Human-readable description of the role.
@@ -46,6 +57,7 @@ impl NodeRole {
             Self::Miner => "Full node with mining capability",
             Self::Relay => "Relay node — stores and forwards blocks, no mining",
             Self::LightClient => "Light client — header-only sync, minimal storage",
+            Self::Cortex => "Cortex node — service layer for dApps (WASM modules), no mining",
         }
     }
 }
@@ -56,6 +68,7 @@ impl std::fmt::Display for NodeRole {
             Self::Miner => write!(f, "miner"),
             Self::Relay => write!(f, "relay"),
             Self::LightClient => write!(f, "light"),
+            Self::Cortex => write!(f, "cortex"),
         }
     }
 }

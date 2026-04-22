@@ -1906,10 +1906,51 @@ impl ShieldedBlockchain {
                 );
                 return est_total;
             }
+
+            // v2.4.4 (fork-fix iter 5) — db.get_cumulative_work(est_base_h)
+            // returned None, typically because est_base_h is ABOVE our local
+            // tip (we haven't reached that height yet). This is the scenario
+            // that blocked EPYC1 in the 00:30 incident: peer is 4 blocks
+            // ahead, walk hits block-missing after 1 step because the parent
+            // block is only on the peer's side, est_base_h > local_tip →
+            // lookup fails → previously we returned accumulated=~40M (just
+            // the block's own difficulty), vs local_work=34G, so every peer
+            // block was rejected as LESS_WORK even though the peer's chain
+            // was strictly ahead.
+            //
+            // Better estimate: the fork shares ancestry with us somewhere in
+            // history (we just can't reach it because of the LRU/DB gaps),
+            // so its cumulative work is AT LEAST our `local_work` at the
+            // shared ancestor, plus forward motion. Conservative proxy:
+            //   local_work − (tip_delta × our_current_difficulty)
+            //     + accumulated_difficulty
+            // This brings fork_work into the same order of magnitude as
+            // local_work, letting should_prefer_candidate do its job (peer
+            // with more blocks at similar difficulty → reorg triggers,
+            // reorganize_to_block then fetches the missing blocks via
+            // find_common_ancestor_headers / rollback path).
+            //
+            // Anti-abuse: bounded by tip_delta <= MAX_REORG_DEPTH. A fake
+            // solo-fork deeper than 100 blocks still falls through to the
+            // accumulated-only path and gets rejected.
+            let proxy_unit = self.difficulty as u128;
+            let peer_estimate = self
+                .cumulative_work
+                .saturating_sub((tip_delta as u128).saturating_mul(proxy_unit))
+                .saturating_add(accumulated_difficulty);
+            tracing::warn!(
+                "SYNC_DEBUG: calculate_chain_work walk incomplete ({:?}) at depth={}, \
+                 no DB entry at est_base_h={} (above local_tip={}), using proxy estimate {} \
+                 (local_work={}, tip_delta={}, proxy_unit={})",
+                walk_incomplete_reason, depth, est_base_h, local_tip_h,
+                peer_estimate, self.cumulative_work, tip_delta, proxy_unit
+            );
+            return peer_estimate;
         }
 
         tracing::warn!(
-            "SYNC_DEBUG: calculate_chain_work walk incomplete ({:?}) at depth={}, no prefix estimate (tip_delta={} > MAX_REORG_DEPTH={}), using accumulated={}",
+            "SYNC_DEBUG: calculate_chain_work walk incomplete ({:?}) at depth={}, \
+             tip_delta={} > MAX_REORG_DEPTH={}, using accumulated={} (anti-long-range)",
             walk_incomplete_reason, depth, tip_delta, crate::config::MAX_REORG_DEPTH, accumulated_difficulty
         );
         accumulated_difficulty
