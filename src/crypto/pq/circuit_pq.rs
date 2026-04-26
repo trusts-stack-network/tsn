@@ -377,11 +377,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 /// Maximum number of spends supported per transaction.
-/// Bumped from 10 to 25 in v2.4.0: larger wallets can consolidate in fewer
-/// rounds and the prover has capacity for it. The STARK proving/verifying
-/// time scales roughly linearly with num_spends; at 25 the prover budget
-/// stays within acceptable bounds for interactive send operations.
-pub const MAX_SPENDS: usize = 25;
+/// v2.8.1: bumped from 25 to 50 to reach Zcash-Sapling-class capacity.
+/// A wallet with hundreds of small mining-reward notes can now batch a
+/// 10K send in a single transaction (1 STARK proof) instead of cascading
+/// through several auto-consolidation rounds. Proof time grows roughly
+/// linearly with num_spends; 50 is the largest shape that keeps an
+/// interactive send under ~15s on a typical 8-core CPU.
+pub const MAX_SPENDS: usize = 50;
 
 /// Maximum number of outputs supported per transaction
 pub const MAX_OUTPUTS: usize = 4;

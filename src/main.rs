@@ -46,13 +46,11 @@ struct Cli {
     #[arg(long, global = false)]
     no_seeds: bool,
 
-    /// v2.8.0 — auto-consolidate wallet notes in the background once the
-    /// unspent-note count exceeds the threshold. Default ON: when a wallet
-    /// is far above threshold (just bootstrapped, long-idle miner) the
-    /// worker now runs a small parallel burst per tick (max 4 batches) to
-    /// catch up quickly, then settles into one round per `--consolidation-
-    /// interval-secs`. Use `--auto-consolidate=false` to disable.
-    #[arg(long, global = false, default_value_t = true)]
+    /// v2.8.1 — accepted for backwards-compat but no longer wired up.
+    /// The background worker has been removed; consolidation is the user's
+    /// responsibility, matching how Zcash, Penumbra, Aleo and Aztec all
+    /// handle a fragmented mining wallet.
+    #[arg(long, global = false, default_value_t = false, hide = true)]
     auto_consolidate: bool,
 
     /// v2.6.0 — background consolidation fires when `unspent_notes_count` goes
@@ -1874,15 +1872,14 @@ fn resolve_pq_commitment(
     }
 }
 
-/// v2.3.0 auto-consolidation: maximum number of spends per transaction that
-/// the STARK prover can handle (mirrors MAX_SPENDS in circuit_pq.rs). The
-/// consolidation loop uses MAX_SPENDS_PER_TX - 1 as batch size to keep one
-/// slot free for flexibility at the final tx.
+/// Maximum number of spends per transaction (mirrors MAX_SPENDS in
+/// circuit_pq.rs).
 ///
-/// Bumped from 10 to 25 in v2.4.0 (Phase 4). Larger wallets can now pack
-/// ~2.5x more notes per tx, cutting consolidation rounds and the user-visible
-/// "auto_consolidate" latency proportionally.
-pub const MAX_SPENDS_PER_TX: usize = 25;
+/// v2.8.1: bumped from 25 to 50. A typical 10K send from a mining wallet
+/// now fits in one transaction with ~10-20 inputs, eliminating the cascade
+/// of consolidation rounds that previously made the user-visible latency
+/// 100s+. Comparable to Zcash Sapling's practical 50-80 input limit.
+pub const MAX_SPENDS_PER_TX: usize = 50;
 pub const CONSOLIDATION_BATCH: usize = MAX_SPENDS_PER_TX - 1;
 
 /// v2.3.1: GET with exponential backoff on HTTP 429 (Too Many Requests).
@@ -2110,10 +2107,24 @@ async fn send_single_tx(
         change_randomness = Some(cr);
     }
 
-    // Generate STARK proof
-    let prover = TransactionProver::new();
-    let proof = prover.prove(&spend_witnesses, &output_witnesses, fee_base)
-        .map_err(|e| anyhow::anyhow!("Proof generation failed: {}", e))?;
+    // Generate STARK proof. v2.8.1: hand the prove call to the blocking
+    // threadpool so concurrent `auto_consolidate_parallel` futures actually
+    // run their proofs in parallel instead of serialising on the
+    // current-thread tokio runtime. Without this, four "parallel" batches
+    // sharing one CPU thread took ~4× the wallclock of a single proof and
+    // routinely tripped the 30s HTTP submit timeout that one sibling would
+    // see while the others were still proving.
+    let proof = {
+        let sw = spend_witnesses.clone();
+        let ow = output_witnesses.clone();
+        tokio::task::spawn_blocking(move || {
+            let prover = TransactionProver::new();
+            prover.prove(&sw, &ow, fee_base)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Proof task join: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Proof generation failed: {}", e))?
+    };
 
     // Build spend descriptions (sign each nullifier with ML-DSA-65)
     let mut spends = Vec::new();
@@ -2509,9 +2520,12 @@ async fn auto_consolidate(
         }
 
         eprint!("    waiting for mining... ");
+        // v2.8.1: 90s cap. A nullifier should land within 1-2 blocks (~20s);
+        // 30 minutes only ever masked unrelated network failures with a
+        // multi-minute hang.
         wait_nullifiers_mined(
             &nullifiers, node_url, client,
-            std::time::Duration::from_secs(1800),
+            std::time::Duration::from_secs(90),
         ).await?;
         eprintln!("confirmed");
 
@@ -2677,9 +2691,10 @@ async fn auto_consolidate_parallel(
     }
 
     eprint!("    waiting for all nullifiers... ");
+    // v2.8.1: 90s cap, see auto_consolidate above.
     wait_nullifiers_mined(
         &all_nullifiers, node_url, client,
-        std::time::Duration::from_secs(1800),
+        std::time::Duration::from_secs(90),
     ).await?;
     eprintln!("confirmed ({} nullifiers)", all_nullifiers.len());
 
@@ -2893,11 +2908,8 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
             / CONSOLIDATION_BATCH;
         let mut parallel_bad_positions = pre_orphan_positions.clone();
         if parallel_rounds_target >= 2 {
-            // v2.8.0 — drop fan-out from 8 to 4. With 8 batches we observed
-            // half the submits failing (HTTP saturation on the chosen seed
-            // and CPU thrash from 8 parallel STARK proofs); 4 keeps each
-            // batch comfortably inside the 120s client timeout and within
-            // the per-IP submit rate limit (Phase 1.3, 8 v2 tx / 60s).
+            // v2.8.0: fan-out 4 — 8 saturated the per-IP submit rate limit
+            // (Phase 1.3 = 8 v2 tx / 60s) and thrashed the prover CPU.
             match auto_consolidate_parallel(
                 &mut wallet, wallet_path, node_url, fee_base, total_needed, &client,
                 parallel_bad_positions.clone(), 4,
@@ -2914,15 +2926,35 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
             }
         }
 
-        // Serial mop-up. If the parallel path already consolidated enough
-        // notes to fit the greedy selection, this loop exits on its first
-        // iteration (count <= CONSOLIDATION_BATCH).
-        let rounds = auto_consolidate(
-            &mut wallet, wallet_path, node_url, fee_base, total_needed, &client,
-            parallel_bad_positions,
-        ).await?;
-        if rounds > 0 {
-            println!("  Serial consolidation follow-up ({} additional rounds).", rounds);
+        // v2.8.1: only fall back to serial consolidation when the greedy
+        // selection still does not fit in one final tx after the parallel
+        // round. Most sends now skip this entirely — the parallel path
+        // already produced enough big notes.
+        let still_needed = {
+            let unspent = wallet.unspent_notes();
+            let mut sorted: Vec<&tsn::wallet::WalletNote> = unspent
+                .iter()
+                .copied()
+                .filter(|n| !parallel_bad_positions.contains(&n.position))
+                .collect();
+            sorted.sort_by(|a, b| b.note.value.cmp(&a.note.value));
+            let mut acc = 0u64;
+            let mut c = 0usize;
+            for n in &sorted {
+                if acc >= total_needed { break; }
+                acc += n.note.value;
+                c += 1;
+            }
+            c
+        };
+        if still_needed > CONSOLIDATION_BATCH {
+            let rounds = auto_consolidate(
+                &mut wallet, wallet_path, node_url, fee_base, total_needed, &client,
+                parallel_bad_positions,
+            ).await?;
+            if rounds > 0 {
+                println!("  Serial consolidation follow-up ({} additional rounds).", rounds);
+            }
         }
         println!();
     }
@@ -3198,8 +3230,12 @@ async fn sync_local_tree_pq(
         starting, target, target.saturating_sub(starting)
     );
 
-    const BATCH: u64 = 5_000; // half of `MAX_BULK_POSITIONS` to keep response under 500KB
-    const PARALLEL: usize = 1; // serial: 1 outstanding request avoids saturating the node
+    // v2.8.1 — pipelined bulk fetch. Four batches in flight cuts the cold
+    // bootstrap from ~50s (serial × 5KB pages × 100 ms RTT) to <15s on a
+    // 20K-leaf tree without saturating the node's submit-rate or HTTP
+    // backlog (the seed-side witness LRU cache absorbs concurrent reads).
+    const BATCH: u64 = 5_000;
+    const PARALLEL: usize = 4;
     let url = format!("{}/leaves/bulk", node_url);
     let mut next = wallet.local_tree_size();
     while next < target {
@@ -5185,153 +5221,37 @@ async fn cmd_node(
         }
     }
 
+    // v2.8.1 — pre-build the STARK circuits for every shape this network
+    // accepts (1..=MAX_SPENDS spends × 1..=MAX_OUTPUTS outputs). Without
+    // this, the first block carrying a fresh shape paid ~1-2s of circuit
+    // build inside `verify_proof`, blocking block import. We swallow the
+    // count; the cache fills in the background and any miss is recovered
+    // on demand.
+    tokio::task::spawn_blocking(|| {
+        let built = tsn::crypto::pq::proof_pq::warmup_global_circuits();
+        tracing::info!("Circuit cache warmed: {} shapes", built);
+    });
+
     // v2.6.0 — keep AppState.chain_info_cache fresh every 200ms so GET
     // /chain/info never blocks on the blockchain RwLock. See api.rs for the
     // full rationale.
     tsn::network::api::spawn_chain_info_refresher(state.clone());
 
-    // v2.6.4 — Background Auto-Consolidation Worker (BACW).
+    // v2.8.1 — BACW (Background Auto-Consolidation Worker) removed.
     //
-    // The mining wallet accumulates one coinbase note per block. After a few
-    // hundred blocks a `tsn send` has to consolidate dozens of small notes
-    // into spendable units, with each round costing one block's wait — the
-    // user-perceived send latency degrades from ~10s to several minutes.
+    // Earlier versions ran a background worker that periodically consolidated
+    // small notes in the mining wallet. None of the production shielded
+    // protocols (Zcash Sapling/Orchard, Penumbra, Aleo, Aztec) do this — they
+    // explicitly warn that aggressive consolidation kills concurrency.
+    // Fragmentation is the normal state of a mining wallet; users rebalance
+    // periodically with explicit consolidation calls when they need to.
     //
-    // BACW runs in the background while the node is up. When the unspent
-    // note count crosses `consolidation_threshold`, BACW acquires the
-    // wallet mutex (the same `Arc<Mutex<ShieldedWallet>>` that CLI commands
-    // use, so serialization is automatic) and runs ONE consolidation round
-    // using `auto_consolidate`. It then releases the mutex and waits for
-    // the next interval. Over time the wallet stabilises near the threshold
-    // and any user-initiated `tsn send` finishes in ~10s — the Zcash-class
-    // UX promised since the v2.5 wallet rewrite.
-    //
-    // Lock contention notes: the wallet mutex is also held briefly by the
-    // miner loop on each new block (to scan for incoming notes) and by the
-    // balance/history HTTP handlers. A consolidation round holds the lock
-    // for the duration of the proof + submit + confirmation, which can be
-    // up to ~30s. During that window those callers wait — acceptable for
-    // a background maintenance task.
-    if auto_consolidate {
-        if let (Some(ws), Some(wallet_path_str)) = (wallet_service.clone(), mine_wallet.clone()) {
-            let threshold = consolidation_threshold;
-            let interval = std::time::Duration::from_secs(consolidation_interval_secs.max(60));
-            let bacw_node_url = format!("http://127.0.0.1:{}", port);
-            // BACW runs on its own OS thread with a `current_thread` tokio runtime.
-            // Reason: `auto_consolidate` (the consolidation loop reused from the
-            // CLI send path) holds `ThreadRng` and `&ShieldedWallet` references
-            // across `.await` boundaries — both `!Send`. A `tokio::spawn` requires
-            // the future to be `Send`, which would force a refactor of
-            // `auto_consolidate` to swap its RNG and rework the wallet borrow
-            // pattern. A dedicated single-thread runtime sidesteps the
-            // restriction without touching the existing send/consolidate logic.
-            std::thread::Builder::new()
-                .name("tsn-bacw".to_string())
-                .spawn(move || {
-                    let rt = match tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                    {
-                        Ok(r) => r,
-                        Err(e) => {
-                            tracing::error!("BACW: failed to build runtime: {}", e);
-                            return;
-                        }
-                    };
-                    rt.block_on(async move {
-                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                        let mut tick = tokio::time::interval(interval);
-                        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                        tick.tick().await; // consume the immediate first tick
-                        let fee_base: u64 = 100_000; // 0.0001 TSN per consolidation round
-                        let bacw_client = reqwest::Client::builder()
-                            .timeout(std::time::Duration::from_secs(60))
-                            .build()
-                            .unwrap_or_default();
-
-                        loop {
-                            tick.tick().await;
-                            let unspent = ws.unspent_count().await;
-                            if unspent <= threshold {
-                                continue;
-                            }
-                            tracing::info!(
-                                "BACW: wallet has {} unspent notes (threshold {}), running one consolidation round",
-                                unspent, threshold
-                            );
-                            let mut wallet = ws.wallet.lock().await;
-                            let balance = wallet.balance();
-                            if balance < fee_base.saturating_mul(10) {
-                                tracing::warn!("BACW: balance {} too low for safe consolidation, skipping round", balance);
-                                continue;
-                            }
-                            // v2.8.0 — two-mode operation. When the wallet
-                            // is far above threshold (bootstrap mode), run
-                            // a small parallel burst (max 4 batches per
-                            // tick) to catch up quickly. In steady state
-                            // (`unspent` close to `threshold`), do exactly
-                            // one round per tick — the v2.6.8 behaviour —
-                            // so we never flood the mempool faster than
-                            // blocks absorb tx.
-                            let bootstrap_mode = unspent > threshold.saturating_mul(4);
-                            let bacw_label = wallet_path_str.clone();
-                            let outcome: Result<usize, anyhow::Error> = if bootstrap_mode {
-                                // Aim high so `auto_consolidate_parallel`
-                                // takes the parallel fast path; we cap the
-                                // number of batches per tick at 4.
-                                let total_needed = balance.saturating_sub(fee_base.saturating_mul(100));
-                                let parallel_res = crate::auto_consolidate_parallel(
-                                    &mut *wallet,
-                                    &bacw_label,
-                                    &bacw_node_url,
-                                    fee_base,
-                                    total_needed,
-                                    &bacw_client,
-                                    std::collections::HashSet::new(),
-                                    4,
-                                ).await;
-                                match parallel_res {
-                                    Ok((n, _)) => Ok(n),
-                                    Err(e) => Err(e),
-                                }
-                            } else {
-                                let total_needed = fee_base.saturating_mul(2);
-                                crate::auto_consolidate(
-                                    &mut *wallet,
-                                    &bacw_label,
-                                    &bacw_node_url,
-                                    fee_base,
-                                    total_needed,
-                                    &bacw_client,
-                                    std::collections::HashSet::new(),
-                                ).await
-                            };
-                            match outcome {
-                                Ok(rounds) if rounds > 0 => {
-                                    tracing::info!(
-                                        "BACW: consolidation done ({} round(s), bootstrap_mode={}, unspent_before={})",
-                                        rounds, bootstrap_mode, unspent
-                                    );
-                                }
-                                Ok(_) => {
-                                    tracing::debug!("BACW: no round needed at this tick");
-                                }
-                                Err(e) => {
-                                    tracing::warn!("BACW: consolidation round failed: {}", e);
-                                }
-                            }
-                            drop(wallet); // release lock before sleeping on jitter
-                            // jitter 0-30s so concurrent miners don't thunder
-                            let jitter_ms: u64 = (std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_nanos() as u64).unwrap_or(0)) % 30_000;
-                            tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
-                        }
-                    });
-                })
-                .ok();
-        }
-    }
+    // The send latency win that BACW was supposed to deliver actually comes
+    // from (a) skipping the synchronous `wait_nullifiers_mined` between rounds
+    // (Phase A.1) and (b) a higher MAX_SPENDS so a typical 10K send fits in
+    // a single transaction (Phase B.1). With those in place a `tsn send` no
+    // longer needs a pre-warmed wallet.
+    let _ = (auto_consolidate, consolidation_threshold, consolidation_interval_secs);
 
     // ========================================================================
     // CHECKPOINT VALIDATION AT STARTUP

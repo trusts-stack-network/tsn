@@ -28,6 +28,21 @@ use super::circuit_pq::{CircuitCache, TransactionCircuit, C, D, F};
 use super::commitment_pq::NoteCommitmentPQ;
 use super::merkle_pq::MerkleWitnessPQ;
 
+/// v2.8.1 — Process-wide circuit cache. `verify_proof` and the prover share
+/// this so a circuit shape (num_spends, num_outputs) is built at most once
+/// per process. Without it, every block validation paid a fresh ~1-2s
+/// `TransactionCircuit::build()` for the same handful of common shapes.
+/// `warmup_global_circuits` pre-builds them at node startup.
+pub static GLOBAL_CIRCUIT_CACHE: once_cell::sync::Lazy<CircuitCache> =
+    once_cell::sync::Lazy::new(CircuitCache::new);
+
+/// Pre-build the circuit shapes that show up on every block on a healthy
+/// network: 1-25 spends paired with 1-4 outputs. Returns the number of new
+/// circuits actually built.
+pub fn warmup_global_circuits() -> usize {
+    GLOBAL_CIRCUIT_CACHE.warmup(super::circuit_pq::MAX_SPENDS, super::circuit_pq::MAX_OUTPUTS)
+}
+
 /// Error type for proof generation/verification.
 #[derive(Debug, Error)]
 pub enum ProofError {
@@ -149,15 +164,18 @@ impl OutputWitnessPQ {
 
 /// Transaction prover using Plonky2.
 pub struct TransactionProver {
-    /// Cache of pre-built circuits
-    circuit_cache: CircuitCache,
+    /// Cache of pre-built circuits.
+    /// v2.8.1: now an `Arc<CircuitCache>` so callers can share `GLOBAL_CIRCUIT_CACHE`
+    /// across CLI invocations and the node verifier.
+    circuit_cache: std::sync::Arc<CircuitCache>,
 }
 
 impl TransactionProver {
-    /// Create a new prover with pre-built circuits.
+    /// Create a new prover with its own (empty) circuit cache. The first
+    /// `prove()` call for each shape pays a one-time circuit build.
     pub fn new() -> Self {
         Self {
-            circuit_cache: CircuitCache::new(),
+            circuit_cache: std::sync::Arc::new(CircuitCache::new()),
         }
     }
 
@@ -395,9 +413,13 @@ pub fn verify_proof(
         proof.proof_bytes.len()
     );
 
-    // Build circuit for this shape to get verifier data
-    let circuit = TransactionCircuit::new(num_spends, num_outputs);
-    let (circuit_data, _) = circuit.build();
+    // v2.8.1 — share the process-wide cache instead of rebuilding the
+    // circuit on every block. The first verifier pays the build cost; the
+    // rest of the network's blocks for that shape come back instantly.
+    let cached = GLOBAL_CIRCUIT_CACHE
+        .get_or_build(num_spends, num_outputs)
+        .ok_or_else(|| ProofError::UnsupportedShape(num_spends, num_outputs))?;
+    let circuit_data = &cached.0;
 
     tracing::debug!(
         "Circuit built: num_public_inputs={}",
