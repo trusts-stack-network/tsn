@@ -191,6 +191,74 @@ impl BlockHeaderHashPrefix {
     }
 }
 
+/// v2.5.3 — endorsement attached by a relay to a block. Proves the relay signed
+/// the block's header hash (post-PoW), making the relay eligible for a share of
+/// this block's 3% relay pool reward. Collected by the miner via POST /relay/endorse
+/// with a 3s timeout, capped at `MAX_ENDORSEMENTS_PER_BLOCK` (5) per block.
+///
+/// Endorsements are NOT included in the PoW header hash — they are attached
+/// after mining and carried alongside the block. Validation is first-seen-wins:
+/// the endorsement set of the first block received at a given height is what
+/// the relay pool accumulator uses.
+///
+/// Size: pub_key (1952 B) + signature (3309 B) ≈ 5.2 kB per endorsement.
+/// Max per block: 5 × 5.2 kB = ~26 kB attached to each block.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Endorsement {
+    /// ML-DSA-65 public key of the endorsing relay (1952 bytes). The pk_hash
+    /// used in payout entries is derived via `crypto::note::compute_pk_hash`
+    /// (domain-separated Blake2s256), matching the wallet layer exactly.
+    #[serde(with = "hex_bytes")]
+    pub pub_key: Vec<u8>,
+    /// ML-DSA-65 signature over `block.hash()` (the full block hash, which
+    /// for this version coincides with the PoW header hash).
+    #[serde(with = "hex_bytes")]
+    pub signature: Vec<u8>,
+}
+
+impl Endorsement {
+    /// Derive pk_hash using the same domain-separated Blake2s256 as the rest
+    /// of the TSN wallet layer (`crypto::note::compute_pk_hash`). This is the
+    /// identifier under which the relay receives its share of the 3% pool at
+    /// payout height — it MUST equal `wallet.pk_hash()` for the recipient, or
+    /// the credited balance would land on an address nobody controls.
+    ///
+    /// v2.5.4 — previous revision used a raw Blake2s256 without the
+    /// `"TSN_PkHash"` domain separator, producing a ghost pk_hash that did
+    /// not match any wallet address. Fixed here so the payout lands on the
+    /// relay's actual address.
+    pub fn pk_hash(&self) -> [u8; 32] {
+        crate::crypto::note::compute_pk_hash(&self.pub_key)
+    }
+
+    /// Verify this endorsement's signature against a block hash. Returns true
+    /// only if (a) pub_key has the right length, (b) signature has the right
+    /// length, (c) ML-DSA-65 verify succeeds.
+    pub fn verify(&self, block_hash: &[u8; BLOCK_HASH_SIZE]) -> bool {
+        if self.pub_key.len() != crate::crypto::keys::PUBLIC_KEY_SIZE
+            || self.signature.len() != crate::crypto::keys::SIGNATURE_SIZE
+        {
+            return false;
+        }
+        crate::crypto::signature::verify_mldsa65(&self.pub_key, block_hash, &self.signature)
+    }
+}
+
+/// Maximum number of relay endorsements that can be attached to a single block.
+/// At ~5.2 kB per endorsement, 5 gives ~26 kB attached payload — acceptable.
+pub const MAX_ENDORSEMENTS_PER_BLOCK: usize = 5;
+
+mod hex_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(v: &Vec<u8>, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(&hex::encode(v))
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Vec<u8>, D::Error> {
+        let s = String::deserialize(de)?;
+        hex::decode(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 /// A complete shielded block with header, transactions, and coinbase.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShieldedBlock {
@@ -213,6 +281,12 @@ pub struct ShieldedBlock {
     /// eligible relay nodes.
     #[serde(default)]
     pub relay_payout: Option<crate::consensus::relay_pool::RelayPayout>,
+    /// v2.5.3 — relay endorsements attached after PoW, signing `block.hash()`.
+    /// Each endorsement makes its signer eligible for an equal share of this
+    /// block's 3% relay-pool slice (distributed at payout height). Not part of
+    /// the PoW header hash — validated separately.
+    #[serde(default)]
+    pub endorsements: Vec<Endorsement>,
 }
 
 impl ShieldedBlock {
@@ -255,6 +329,7 @@ impl ShieldedBlock {
             contract_receipts: Vec::new(),
             coinbase,
             relay_payout: None,
+            endorsements: Vec::new(),
         }
     }
 
@@ -299,6 +374,7 @@ impl ShieldedBlock {
             contract_receipts: Vec::new(),
             coinbase,
             relay_payout: None,
+            endorsements: Vec::new(),
         }
     }
 
@@ -382,6 +458,7 @@ impl ShieldedBlock {
             contract_receipts: Vec::new(),
             coinbase,
             relay_payout: None,
+            endorsements: Vec::new(),
         }
     }
 

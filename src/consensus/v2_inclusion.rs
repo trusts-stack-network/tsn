@@ -197,16 +197,33 @@ pub fn enforce_at_acceptance(
         return EnforcementOutcome::RejectV2Violation { error, now_banned };
     }
 
-    // Branch 2 — local ban policy. Records an offense but never rejects.
-    let grace_secs = V2_GRACE_BLOCKS.saturating_mul(crate::consensus::TARGET_BLOCK_TIME_SECS);
-    let old_enough = mempool.v2_count_older_than(grace_secs, now_secs);
-    let expected = expected_min_v2(old_enough);
-    if committed < expected {
-        if is_attributed {
-            let err = V2InclusionError::UnderCommitted { header_value: committed, expected };
-            banned_miners.record_offense(&miner_pk, current_height, err.to_string());
-        }
-    } else if is_attributed {
+    // v2.6.2 — Branch 2 (mempool-derived "expected" check) REMOVED from
+    // consensus enforcement.
+    //
+    // The previous implementation called `mempool.v2_count_older_than(...)`
+    // and compared `committed` against `expected_min_v2(old_enough)`.
+    // The mempool is per-node state — two honest validators with
+    // different gossip histories can derive different `expected` values
+    // for the same block. A miner that committed `min_v2_count=0` while
+    // some validator's mempool happened to show 8 pending v2 txs would
+    // be flagged as "UnderCommitted" on that validator only, while
+    // other validators accepted the block.
+    //
+    // On 2026-04-25 a 10K send triggered exactly this: EPYC2 and seed-3
+    // had different mempool views, banned the legitimate miner, rejected
+    // all subsequent blocks from it, and forked the network. The 10K
+    // transaction was reorg'd out during reconciliation.
+    //
+    // Branch 1 above (the deterministic `committed <= included` check)
+    // stays — it is a pure function of the block contents and binds the
+    // miner to its own header commitment.
+    //
+    // The economic incentive to drain the v2 mempool moves to non-consensus
+    // mechanisms (fee pressure, miner reward bonus, off-chain reputation),
+    // none of which can fork the chain.
+    let _ = mempool;
+    let _ = now_secs;
+    if is_attributed {
         banned_miners.record_compliant_block(&miner_pk, current_height);
     }
 
@@ -317,6 +334,7 @@ mod tests {
             contract_receipts: vec![],
             coinbase,
             relay_payout: None,
+            endorsements: Vec::new(),
         }
     }
 

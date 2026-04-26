@@ -284,7 +284,7 @@ impl TsnMetrics {
     pub fn update_metrics(&self, state: &AppState, start_time: Instant) {
         // === BLOCKCHAIN METRICS ===
         {
-            let blockchain = state.blockchain.read().unwrap();
+            let blockchain = state.blockchain.read().await;
             self.block_height.set(blockchain.height() as f64);
             self.blocks_total.inc_by(blockchain.height());
         }

@@ -2,8 +2,8 @@
 //!
 //! Supports both V1 (legacy) and V2 (post-quantum) transactions.
 
-use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tracing::{info, warn};
 
@@ -19,11 +19,53 @@ const MIN_TX_FEE: u64 = 1000;
 /// Maximum age of a transaction in seconds (1 hour).
 const MAX_TX_AGE_SECS: u64 = 3600;
 
+/// v2.7.0 Phase 1.4 — cost-bounded mempool (Zcash ZIP-401 style).
+/// Total mempool weight cap, in arbitrary "weight units". Once the running
+/// total reaches this, lower-fee txs are evicted to make room.
+pub const MEMPOOL_COST_LIMIT: u64 = 80_000_000;
+/// Floor for the per-tx weight contribution. A V2 STARK proof tx is already
+/// 250+ KB, so this floor only matters for tiny V1 spends; it makes single-byte
+/// dust look as expensive as a small block of bytes.
+pub const MEMPOOL_MIN_WEIGHT: u64 = 10_000;
+/// Penalty added to the weight of any tx whose `fee < CONVENTIONAL_FEE`. The
+/// effect is to reserve mempool capacity for properly-fee'd txs under load.
+pub const MEMPOOL_LOW_FEE_PENALTY: u64 = 40_000;
+/// Conventional fee floor — txs at or above this fee are not penalised.
+pub const CONVENTIONAL_FEE: u64 = MIN_TX_FEE * 5;
+/// Capacity of the `RecentlyEvicted` cache. Entries above this drop on LRU.
+pub const RECENTLY_EVICTED_CAPACITY: usize = 40_000;
+/// Time-to-live for a `RecentlyEvicted` entry. Within the TTL the same hash
+/// is rejected on re-submission, blocking trivial re-flood attacks.
+pub const RECENTLY_EVICTED_TTL_SECS: u64 = 60 * 60;
+/// v2.7.0 Phase 1.5 — ZIP-317-style mining template caps. The "actions" of
+/// a tx are its spend+output count; the network bounds the total count of
+/// underpaying actions per block to keep validation time predictable.
+pub const BLOCK_UNPAID_ACTION_LIMIT: usize = 50;
+/// v2.7.0 Phase 1.5 — ceiling on the count of high-fee V2 transactions a
+/// single block template considers. High-fee txs are taken in fee-rate order;
+/// excess txs roll over to subsequent blocks.
+pub const BLOCK_HIGH_FEE_TX_LIMIT: usize = 200;
+
+/// Compute the ZIP-401-style weight of a transaction. The weight floors at
+/// `MEMPOOL_MIN_WEIGHT`, plus a `MEMPOOL_LOW_FEE_PENALTY` if the fee is below
+/// the conventional floor.
+fn tx_weight(size: usize, fee: u64) -> u64 {
+    let base = (size as u64).max(MEMPOOL_MIN_WEIGHT);
+    if fee < CONVENTIONAL_FEE {
+        base.saturating_add(MEMPOOL_LOW_FEE_PENALTY)
+    } else {
+        base
+    }
+}
+
 /// Transaction metadata for eviction decisions.
 #[derive(Debug, Clone)]
 struct TxMeta {
     fee: u64,
     added_at: u64,
+    /// v2.7.0 Phase 1.4 — cached weight contribution to the mempool cost
+    /// budget. Stored at insert so `total_cost` is an O(1) sum.
+    cost: u64,
 }
 
 /// The mempool holds pending shielded transactions waiting to be mined.
@@ -41,6 +83,17 @@ pub struct Mempool {
     pending_nullifiers: HashSet<[u8; 32]>,
     /// Transaction metadata for eviction (fee + timestamp).
     tx_meta: HashMap<[u8; 32], TxMeta>,
+    /// v2.7.0 Phase 1.4 — cumulative cost of all entries in `tx_meta` (sum
+    /// of `TxMeta::cost`). Maintained incrementally on insert/remove so the
+    /// hot path doesn't re-iterate the map.
+    total_cost: u64,
+    /// v2.7.0 Phase 1.4 — RecentlyEvicted hashes with the instant they were
+    /// evicted at. Re-submission of any of these inside the TTL is rejected,
+    /// so a peer cannot trivially re-flood the mempool with the same tx.
+    /// FIFO order preserved by `recently_evicted_order` lets us prune the
+    /// oldest entry in O(1) when the cap is reached.
+    recently_evicted: HashMap<[u8; 32], Instant>,
+    recently_evicted_order: VecDeque<[u8; 32]>,
 }
 
 impl Mempool {
@@ -52,7 +105,47 @@ impl Mempool {
             contract_calls: HashMap::new(),
             pending_nullifiers: HashSet::new(),
             tx_meta: HashMap::new(),
+            total_cost: 0,
+            recently_evicted: HashMap::new(),
+            recently_evicted_order: VecDeque::new(),
         }
+    }
+
+    /// v2.7.0 Phase 1.4 — record a freshly-evicted hash in the RecentlyEvicted
+    /// cache. Drops the oldest entry if at capacity.
+    fn mark_evicted(&mut self, hash: [u8; 32]) {
+        if self.recently_evicted.contains_key(&hash) {
+            return;
+        }
+        if self.recently_evicted.len() >= RECENTLY_EVICTED_CAPACITY {
+            if let Some(oldest) = self.recently_evicted_order.pop_front() {
+                self.recently_evicted.remove(&oldest);
+            }
+        }
+        self.recently_evicted.insert(hash, Instant::now());
+        self.recently_evicted_order.push_back(hash);
+    }
+
+    /// v2.7.0 Phase 1.4 — true if the hash was evicted in the last
+    /// `RECENTLY_EVICTED_TTL_SECS` seconds. Lazily prunes expired entries.
+    fn is_recently_evicted(&mut self, hash: &[u8; 32]) -> bool {
+        let now = Instant::now();
+        let ttl = std::time::Duration::from_secs(RECENTLY_EVICTED_TTL_SECS);
+        if let Some(at) = self.recently_evicted.get(hash) {
+            if now.duration_since(*at) <= ttl {
+                return true;
+            }
+            // Expired — drop it.
+            self.recently_evicted.remove(hash);
+            // Lazy: leave the order queue alone; expired hashes drop on next
+            // capacity prune.
+        }
+        false
+    }
+
+    /// v2.7.0 Phase 1.4 — current total weight of the mempool.
+    pub fn total_cost(&self) -> u64 {
+        self.total_cost
     }
 
     fn now_secs() -> u64 {
@@ -65,21 +158,32 @@ impl Mempool {
             + self.contract_deploys.len() + self.contract_calls.len()
     }
 
-    /// Evict the lowest-fee transaction to make room. Returns true if eviction succeeded.
-    fn evict_lowest_fee(&mut self) -> bool {
-        // Find the tx with the lowest fee
+    /// Evict the lowest-fee transaction to make room. Returns the evicted
+    /// hash on success — the caller can record it in RecentlyEvicted.
+    fn evict_lowest_fee(&mut self) -> Option<[u8; 32]> {
+        // Find the tx with the lowest fee. Tie-break on highest weight (drop
+        // the bulkiest first) to free as much budget as possible per eviction.
         let lowest = self.tx_meta.iter()
-            .min_by_key(|(_, meta)| meta.fee)
+            .min_by(|(_, a), (_, b)| {
+                a.fee.cmp(&b.fee)
+                    .then_with(|| b.cost.cmp(&a.cost))
+            })
             .map(|(hash, _)| *hash);
 
         if let Some(hash) = lowest {
             self.remove(&hash);
             self.remove_v2(&hash);
             self.remove_contract_tx(&hash);
-            self.tx_meta.remove(&hash);
-            true
+            // remove() / remove_v2() already remove the meta entry and
+            // decrement total_cost; this is a defensive cleanup for txs that
+            // were not in any of the typed maps (shouldn't happen).
+            if let Some(meta) = self.tx_meta.remove(&hash) {
+                self.total_cost = self.total_cost.saturating_sub(meta.cost);
+            }
+            self.mark_evicted(hash);
+            Some(hash)
         } else {
-            false
+            None
         }
     }
 
@@ -96,7 +200,12 @@ impl Mempool {
             self.remove(hash);
             self.remove_v2(hash);
             self.remove_contract_tx(hash);
-            self.tx_meta.remove(hash);
+            if let Some(meta) = self.tx_meta.remove(hash) {
+                self.total_cost = self.total_cost.saturating_sub(meta.cost);
+            }
+            // Expired entries are not RecentlyEvicted candidates — they died
+            // by age, not by replacement. A re-submission is fine and may
+            // legitimately succeed if anchors are still valid.
         }
         if count > 0 {
             info!("Mempool: evicted {} expired transactions", count);
@@ -113,6 +222,15 @@ impl Mempool {
             return false;
         }
 
+        // v2.7.0 Phase 1.4 — RecentlyEvicted gate.
+        if self.is_recently_evicted(&hash) {
+            warn!(
+                "Mempool: rejected tx {} — recently evicted (TTL {}s)",
+                hex::encode(&hash[..8]), RECENTLY_EVICTED_TTL_SECS
+            );
+            return false;
+        }
+
         // Enforce minimum fee
         if tx.fee < MIN_TX_FEE {
             warn!("Mempool: rejected tx {} — fee {} < min {}", hex::encode(&hash[..4]), tx.fee, MIN_TX_FEE);
@@ -126,17 +244,25 @@ impl Mempool {
             }
         }
 
-        // Enforce size limit — evict expired first, then lowest-fee
-        if self.total_count() >= MAX_MEMPOOL_SIZE {
+        let cost = tx_weight(tx.size(), tx.fee);
+
+        // v2.7.0 Phase 1.4 — combined size + cost cap. Evict expired first,
+        // then lowest-fee until both caps are satisfied or eviction fails.
+        if self.total_count() >= MAX_MEMPOOL_SIZE
+            || self.total_cost.saturating_add(cost) > MEMPOOL_COST_LIMIT
+        {
             self.evict_expired();
-            if self.total_count() >= MAX_MEMPOOL_SIZE {
-                // Only accept if fee is higher than the lowest in pool
+            while self.total_count() >= MAX_MEMPOOL_SIZE
+                || self.total_cost.saturating_add(cost) > MEMPOOL_COST_LIMIT
+            {
                 let min_fee = self.tx_meta.values().map(|m| m.fee).min().unwrap_or(0);
                 if tx.fee <= min_fee {
-                    warn!("Mempool full: rejected tx {} (fee {} <= min {})", hex::encode(&hash[..4]), tx.fee, min_fee);
+                    warn!("Mempool full: rejected tx {} (fee {} <= min {}, cost_after={})", hex::encode(&hash[..4]), tx.fee, min_fee, self.total_cost.saturating_add(cost));
                     return false;
                 }
-                self.evict_lowest_fee();
+                if self.evict_lowest_fee().is_none() {
+                    return false;
+                }
             }
         }
 
@@ -148,7 +274,8 @@ impl Mempool {
         }
 
         self.v1_transactions.insert(hash, tx);
-        self.tx_meta.insert(hash, TxMeta { fee, added_at: Self::now_secs() });
+        self.tx_meta.insert(hash, TxMeta { fee, added_at: Self::now_secs(), cost });
+        self.total_cost = self.total_cost.saturating_add(cost);
         true
     }
 
@@ -163,6 +290,15 @@ impl Mempool {
         }
         if self.v2_transactions.contains_key(&hash) {
             warn!("Mempool: rejected v2 tx {} — hash already in v2 mempool (duplicate submit)", hex::encode(&hash[..8]));
+            return false;
+        }
+
+        // v2.7.0 Phase 1.4 — RecentlyEvicted gate.
+        if self.is_recently_evicted(&hash) {
+            warn!(
+                "Mempool: rejected v2 tx {} — recently evicted (TTL {}s)",
+                hex::encode(&hash[..8]), RECENTLY_EVICTED_TTL_SECS
+            );
             return false;
         }
 
@@ -186,16 +322,30 @@ impl Mempool {
             }
         }
 
-        // Enforce size limit
-        if self.total_count() >= MAX_MEMPOOL_SIZE {
+        let size = match &tx {
+            Transaction::V2(v2) => v2.size(),
+            Transaction::V1(v1) => v1.size(),
+            // Other variants do not expose a size accessor; charge the floor.
+            _ => MEMPOOL_MIN_WEIGHT as usize,
+        };
+        let cost = tx_weight(size, fee);
+
+        // v2.7.0 Phase 1.4 — combined size + cost cap, weighted eviction.
+        if self.total_count() >= MAX_MEMPOOL_SIZE
+            || self.total_cost.saturating_add(cost) > MEMPOOL_COST_LIMIT
+        {
             self.evict_expired();
-            if self.total_count() >= MAX_MEMPOOL_SIZE {
+            while self.total_count() >= MAX_MEMPOOL_SIZE
+                || self.total_cost.saturating_add(cost) > MEMPOOL_COST_LIMIT
+            {
                 let min_fee = self.tx_meta.values().map(|m| m.fee).min().unwrap_or(0);
                 if fee <= min_fee {
-                    warn!("Mempool full: rejected v2 tx {} (fee {} <= min {})", hex::encode(&hash[..4]), fee, min_fee);
+                    warn!("Mempool full: rejected v2 tx {} (fee {} <= min {}, cost_after={})", hex::encode(&hash[..4]), fee, min_fee, self.total_cost.saturating_add(cost));
                     return false;
                 }
-                self.evict_lowest_fee();
+                if self.evict_lowest_fee().is_none() {
+                    return false;
+                }
             }
         }
 
@@ -205,7 +355,8 @@ impl Mempool {
         }
 
         self.v2_transactions.insert(hash, tx);
-        self.tx_meta.insert(hash, TxMeta { fee, added_at: Self::now_secs() });
+        self.tx_meta.insert(hash, TxMeta { fee, added_at: Self::now_secs(), cost });
+        self.total_cost = self.total_cost.saturating_add(cost);
         true
     }
 
@@ -216,7 +367,9 @@ impl Mempool {
             for nullifier in tx.nullifiers() {
                 self.pending_nullifiers.remove(&nullifier.0);
             }
-            self.tx_meta.remove(hash);
+            if let Some(meta) = self.tx_meta.remove(hash) {
+                self.total_cost = self.total_cost.saturating_sub(meta.cost);
+            }
             Some(tx)
         } else {
             None
@@ -230,7 +383,9 @@ impl Mempool {
             for nullifier in tx.nullifiers() {
                 self.pending_nullifiers.remove(&nullifier);
             }
-            self.tx_meta.remove(hash);
+            if let Some(meta) = self.tx_meta.remove(hash) {
+                self.total_cost = self.total_cost.saturating_sub(meta.cost);
+            }
             Some(tx)
         } else {
             None
@@ -285,6 +440,70 @@ impl Mempool {
         txs.sort_by(|a, b| b.fee.cmp(&a.fee));
         txs.truncate(limit);
         txs
+    }
+
+    /// v2.7.0 Phase 1.5 — Build the V2 transaction set for a block template
+    /// using a ZIP-317-style two-phase selection:
+    ///   1. **High-fee phase** — every tx whose `fee >= CONVENTIONAL_FEE` is
+    ///      considered, ranked by descending fee-per-action (= fee divided by
+    ///      spend+output count, roughly proportional to validation cost). The
+    ///      first `max_high_fee_tx` are admitted unconditionally.
+    ///   2. **Underpaying phase** — remaining tx with `fee < CONVENTIONAL_FEE`
+    ///      are admitted in fee-per-action order until the cumulative action
+    ///      count reaches `max_unpaid_actions`. This keeps validation cost
+    ///      bounded under spam while still letting low-fee tx eventually
+    ///      land.
+    /// The returned vector is ordered so that high-fee tx appear first, which
+    /// also matches the order in which validators replay them when computing
+    /// state_root.
+    pub fn get_shielded_v2_for_block(
+        &self,
+        max_high_fee_tx: usize,
+        max_unpaid_actions: usize,
+    ) -> Vec<crate::core::ShieldedTransactionV2> {
+        use crate::core::Transaction as TxEnum;
+
+        fn actions(tx: &crate::core::ShieldedTransactionV2) -> usize {
+            tx.spends.len() + tx.outputs.len()
+        }
+        // fee per action, scaled to keep precision in integer space.
+        fn fee_rate(tx: &crate::core::ShieldedTransactionV2) -> u128 {
+            let a = actions(tx).max(1) as u128;
+            (tx.fee as u128).saturating_mul(1_000_000) / a
+        }
+
+        let mut high: Vec<crate::core::ShieldedTransactionV2> = Vec::new();
+        let mut low: Vec<crate::core::ShieldedTransactionV2> = Vec::new();
+        for tx in self.v2_transactions.values() {
+            if let TxEnum::V2(v2) = tx {
+                if v2.fee >= CONVENTIONAL_FEE {
+                    high.push(v2.clone());
+                } else {
+                    low.push(v2.clone());
+                }
+            }
+        }
+
+        high.sort_by(|a, b| fee_rate(b).cmp(&fee_rate(a)));
+        if high.len() > max_high_fee_tx {
+            high.truncate(max_high_fee_tx);
+        }
+
+        low.sort_by(|a, b| fee_rate(b).cmp(&fee_rate(a)));
+        let mut budget = max_unpaid_actions;
+        let mut admitted_low: Vec<crate::core::ShieldedTransactionV2> = Vec::new();
+        for tx in low.into_iter() {
+            let cost = actions(&tx);
+            if cost > budget {
+                continue;
+            }
+            budget -= cost;
+            admitted_low.push(tx);
+        }
+
+        let mut out = high;
+        out.append(&mut admitted_low);
+        out
     }
 
     /// Number of transactions in the mempool.
@@ -407,6 +626,9 @@ impl Mempool {
         self.contract_calls.clear();
         self.pending_nullifiers.clear();
         self.tx_meta.clear();
+        self.total_cost = 0;
+        // RecentlyEvicted is intentionally preserved across `clear()` so a
+        // mempool flush (e.g. after a reorg) doesn't reopen the spam window.
     }
 
     /// Re-validate all V1 transactions against the current chain state.
@@ -426,6 +648,30 @@ impl Mempool {
             // Check nullifiers aren't spent
             for nullifier in tx.nullifiers() {
                 if state.is_nullifier_spent(nullifier) {
+                    invalid_hashes.push(*hash);
+                    break;
+                }
+            }
+        }
+
+        // v2.5.4 Bug #7 fix — V2 transactions were NOT revalidated here, so a
+        // zombie V2 tx whose nullifier was mined in a concurrent block stayed
+        // in the mempool forever and was re-selected on every block template,
+        // causing every subsequent mined block to fail locally with "Nullifier
+        // already spent" (observed on EPYC2 miner after consolidation). Mirror
+        // the V1 check for V2 spends.
+        for (hash, tx) in &self.v2_transactions {
+            // The mempool's `v2_transactions` map stores the `Transaction`
+            // enum; extract the underlying `ShieldedTransactionV2` variant.
+            let v2 = match tx {
+                crate::core::Transaction::V2(v2) => v2,
+                _ => continue,
+            };
+            for spend in &v2.spends {
+                // V2 spend.nullifier is [u8; 32]; wrap into Nullifier for the
+                // common spent-set check.
+                let n = crate::crypto::nullifier::Nullifier(spend.nullifier);
+                if state.is_nullifier_spent(&n) {
                     invalid_hashes.push(*hash);
                     break;
                 }

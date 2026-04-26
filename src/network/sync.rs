@@ -87,8 +87,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
     let peer_info: PeerChainInfo = response.json().await?;
 
     let (local_height, local_hash, local_genesis) = {
-        let chain = state.blockchain.read()
-            .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+        let chain = state.blockchain.read().await;
         let genesis = chain.info().genesis_hash;
         (chain.height(), hex::encode(chain.latest_hash()), genesis)
     };
@@ -139,8 +138,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
     // Detect this early and reset before wasting cycles.
     {
         let (fsb, cw) = {
-            let chain = state.blockchain.read()
-                .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+            let chain = state.blockchain.read().await;
             (chain.fast_sync_base_height(), chain.cumulative_work())
         };
         if fsb > 0 && cw <= crate::config::GENESIS_DIFFICULTY as u128 {
@@ -149,8 +147,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                  Snapshot restore is corrupted — blocks don't exist. Resetting for fresh sync.",
                 fsb, cw
             );
-            let mut chain = state.blockchain.write()
-                .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+            let mut chain = state.blockchain.write().await;
             chain.reset_for_snapshot_resync();
             return Ok(0); // Will re-sync from scratch on next cycle
         }
@@ -162,8 +159,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
     // caused flip-flop between miners at same height. The fix: use work as
     // tiebreaker, with a 5% tolerance for fast-sync estimation differences.
     let local_work = {
-        let chain = state.blockchain.read()
-            .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+        let chain = state.blockchain.read().await;
         chain.cumulative_work()
     };
     let peer_work = peer_info.cumulative_work;
@@ -215,8 +211,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
         let height_diff = local_height.saturating_sub(peer_info.height);
         if height_diff <= 100 {
             // Peer is slightly behind — check if we share the same block at peer's height
-            let chain = state.blockchain.read()
-                .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+            let chain = state.blockchain.read().await;
             let local_hash_at_peer_height = chain.get_block_by_height(peer_info.height)
                 .map(|b| hex::encode(b.hash()));
             drop(chain);
@@ -317,15 +312,40 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
             );
         }
 
-        let _reorg_guard = state.reorg_lock.write().await;
+        // v2.5.2 — observable lock acquisition. Previous version could stall
+        // here indefinitely under hot-race (P2P receivers continuously holding
+        // reorg_lock.read()). With a timeout the caller can abort and retry
+        // on another peer instead of hanging the whole sync path.
+        let lock_start = std::time::Instant::now();
+        warn!("SYNC_DEBUG: STEP8_ACQUIRE_REORG_LOCK peer={} local_h={}", peer_id(peer_url), local_height);
+        let _reorg_guard = match tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            state.reorg_lock.write(),
+        ).await {
+            Ok(guard) => {
+                warn!(
+                    "SYNC_DEBUG: STEP8_REORG_LOCK_ACQUIRED peer={} wait_ms={}",
+                    peer_id(peer_url), lock_start.elapsed().as_millis()
+                );
+                guard
+            }
+            Err(_) => {
+                warn!(
+                    "SYNC_DEBUG: STEP8_REORG_LOCK_TIMEOUT peer={} waited=15000ms — aborting this sync attempt",
+                    peer_id(peer_url)
+                );
+                return Err(SyncError::HttpError("reorg_lock write timeout".into()));
+            }
+        };
 
         // Check fast_sync_base BEFORE searching, to detect fallback ancestors
         let fast_sync_base = {
-            let chain = state.blockchain.read()
-                .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+            let chain = state.blockchain.read().await;
             chain.fast_sync_base_height()
         };
 
+        warn!("SYNC_DEBUG: STEP8_FIND_ANCESTOR_START peer={} local_h={} peer_h={}", peer_id(peer_url), local_height, peer_info.height);
+        let ancestor_start = std::time::Instant::now();
         match find_common_ancestor_headers(&state, &client, peer_url, local_height, peer_info.height).await {
             Ok(ancestor) => {
                 // v2.1.3: The old ANCESTOR_IS_FALLBACK guard has been REMOVED.
@@ -340,7 +360,10 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                     );
                 }
 
-                warn!("SYNC_DEBUG: ANCESTOR_FOUND height={} peer={}", ancestor, peer_id(peer_url));
+                warn!(
+                    "SYNC_DEBUG: ANCESTOR_FOUND height={} peer={} find_ms={}",
+                    ancestor, peer_id(peer_url), ancestor_start.elapsed().as_millis()
+                );
                 info!("Common ancestor found at height {} via headers", ancestor);
 
                 // Cancel mining during reorg (this is a REAL rollback — cancel is justified)
@@ -352,8 +375,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 }
 
                 // Rollback to ancestor
-                let mut chain = state.blockchain.write()
-                    .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+                let mut chain = state.blockchain.write().await;
                 if let Err(e) = chain.rollback_to_height(ancestor) {
                     let err_msg = format!("{}", e);
                     if err_msg.contains("below finalized height") {
@@ -401,6 +423,10 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 post_orphan_height
             }
             Err(_) => {
+                warn!(
+                    "SYNC_DEBUG: STEP8_FIND_ANCESTOR_ERR peer={} find_ms={}",
+                    peer_id(peer_url), ancestor_start.elapsed().as_millis()
+                );
                 // No ancestor found — check peer checkpoints before drastic action
                 if verify_peer_checkpoints(&client, peer_url).await {
                     // PATCH D: Suppress reset during post-fast-sync warm-up window.
@@ -417,8 +443,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                     if let Some(cancel) = state.mining_cancel.read().unwrap().as_ref() {
                         cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
-                    let mut chain = state.blockchain.write()
-                        .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+                    let mut chain = state.blockchain.write().await;
                     chain.reset_for_snapshot_resync();
                     return Ok(0);
                 } else {
@@ -479,7 +504,14 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
             // that under-commits relative to the local mempool is rejected
             // here rather than in the chain's internal validator, so we can
             // also update the ban set atomically with the decision.
-            {
+            // v2.6.0 — acquire blockchain first (tokio await), then the std
+            // mempool / banned guards. Since those std guards are !Send, they
+            // must never cross an await boundary. By reading the chain height
+            // before opening the mempool/banned locks, the std guards live in
+            // a purely sync block and the whole enforcement finishes before
+            // any further await.
+            let current_height = state.blockchain.read().await.height();
+            let enforcement_rejected = {
                 let mempool = state.mempool.read()
                     .map_err(|e| SyncError::LockPoisoned(format!("mempool lock: {}", e)))?;
                 let mut banned = state.banned_miners.write()
@@ -487,10 +519,6 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs()).unwrap_or(0);
-                let chain_ro = state.blockchain.read()
-                    .map_err(|e| SyncError::LockPoisoned(format!("chain read: {}", e)))?;
-                let current_height = chain_ro.height();
-                drop(chain_ro);
                 let outcome = crate::consensus::v2_inclusion::enforce_at_acceptance(
                     &block, &mempool, &mut *banned, current_height, now,
                 );
@@ -498,20 +526,23 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                     if let Some(path) = &state.banned_miners_path {
                         let _ = banned.save_to_disk(path);
                     }
-                    warn!(
-                        "SYNC_DEBUG: BLOCK_RESULT idx={}/{} result=REJECTED(policy) reason={}",
-                        idx + 1, batch_size,
-                        outcome.reason().unwrap_or_default()
-                    );
-                    continue;
+                    Some(outcome.reason().unwrap_or_default().to_string())
+                } else {
+                    if let Some(path) = &state.banned_miners_path {
+                        let _ = banned.save_to_disk(path);
+                    }
+                    None
                 }
-                if let Some(path) = &state.banned_miners_path {
-                    let _ = banned.save_to_disk(path);
-                }
+            };
+            if let Some(reason) = enforcement_rejected {
+                warn!(
+                    "SYNC_DEBUG: BLOCK_RESULT idx={}/{} result=REJECTED(policy) reason={}",
+                    idx + 1, batch_size, reason
+                );
+                continue;
             }
 
-            let mut chain = state.blockchain.write()
-                .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+            let mut chain = state.blockchain.write().await;
             debug!(
                 "SYNC_DEBUG: BLOCK_ATTEMPT idx={}/{} block={} height={} prev={}",
                 idx + 1, batch_size, block_hash_hex, block_h,
@@ -593,8 +624,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                         state.last_reorg_height.store(ancestor, std::sync::atomic::Ordering::Relaxed);
                         state.reorg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                        let mut chain = state.blockchain.write()
-                            .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+                        let mut chain = state.blockchain.write().await;
                         if let Err(e) = chain.rollback_to_height(ancestor) {
                             warn!("Header recovery rollback failed: {}", e);
                             break;
@@ -621,8 +651,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                             // Exception: if cumulative_work is at genesis level, the snapshot
                             // is broken (blocks don't actually exist) — ALLOW the reset.
                             let recovery_fsb = {
-                                let c = state.blockchain.read()
-                                    .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+                                let c = state.blockchain.read().await;
                                 (c.fast_sync_base_height(), c.height(), c.cumulative_work())
                             };
                             let (fsb, cur_h, cw) = recovery_fsb;
@@ -638,8 +667,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                             if let Some(cancel) = state.mining_cancel.read().unwrap().as_ref() {
                                 cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                             }
-                            let mut chain = state.blockchain.write()
-                                .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+                            let mut chain = state.blockchain.write().await;
                             chain.reset_for_snapshot_resync();
                             return Ok(0);
                         } else {
@@ -666,8 +694,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
     if synced > 0 {
         // Check checkpoints with read lock, collect violation info, then drop lock
         let checkpoint_violation = {
-            let chain = state.blockchain.read()
-                .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+            let chain = state.blockchain.read().await;
             let mut violation = None;
             for &(cp_height, cp_hash) in crate::config::HARDCODED_CHECKPOINTS {
                 if cp_height <= chain.height() {
@@ -702,8 +729,7 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
             if let Some(cancel) = state.mining_cancel.read().unwrap().as_ref() {
                 cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            let mut chain_w = state.blockchain.write()
-                .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+            let mut chain_w = state.blockchain.write().await;
             let _ = chain_w.rollback_to_height(rollback_to);
             return Err(SyncError::InvalidResponse(
                 format!("Peer chain violates checkpoint at height {}", cp_height)
@@ -770,10 +796,7 @@ async fn detect_fork_via_headers(
         return ForkDetection::NoFork;
     }
 
-    let chain = match state.blockchain.read() {
-        Ok(c) => c,
-        Err(_) => return ForkDetection::NoFork,
-    };
+    let chain = state.blockchain.read().await;
 
     // Check each header — find the HIGHEST height where hashes match (ancestor)
     // and the LOWEST height where they mismatch (divergence point).
@@ -803,10 +826,7 @@ async fn detect_fork_via_headers(
             // treat this as a fork with ancestor = fast_sync_base or start of window.
             // Step 8 (find_common_ancestor_headers) will do the precise search.
             let fast_sync_base = {
-                let chain = match state.blockchain.read() {
-                    Ok(c) => c,
-                    Err(_) => return ForkDetection::Incompatible,
-                };
+                let chain = state.blockchain.read().await;
                 chain.fast_sync_base_height()
             };
             if fast_sync_base > 0 && start <= fast_sync_base {
@@ -840,10 +860,7 @@ async fn detect_fork_legacy(
     local_height: u64,
 ) -> ForkDetection {
     let local_hash = {
-        let chain = match state.blockchain.read() {
-            Ok(c) => c,
-            Err(_) => return ForkDetection::NoFork,
-        };
+        let chain = state.blockchain.read().await;
         hex::encode(chain.latest_hash())
     };
 
@@ -870,10 +887,7 @@ async fn detect_fork_legacy(
     while low <= high {
         let mid = low + (high - low) / 2;
         let local_hash_at_mid = {
-            let chain = match state.blockchain.read() {
-                Ok(c) => c,
-                Err(_) => break,
-            };
+            let chain = state.blockchain.read().await;
             chain.get_hash_at_height(mid).map(|h| hex::encode(h))
         };
 
@@ -924,8 +938,7 @@ async fn find_common_ancestor_headers(
                 return Err(SyncError::InvalidResponse("Peer returned 0 headers".into()));
             }
 
-            let chain = state.blockchain.read()
-                .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+            let chain = state.blockchain.read().await;
 
             let fast_sync_base = chain.fast_sync_base_height();
 
@@ -978,8 +991,7 @@ async fn find_common_ancestor_legacy(
 ) -> Result<u64, SyncError> {
     let check_depth = 100u64.min(start_height);
     let fast_sync_base = {
-        let chain = state.blockchain.read()
-            .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+        let chain = state.blockchain.read().await;
         chain.fast_sync_base_height()
     };
 
@@ -989,8 +1001,7 @@ async fn find_common_ancestor_legacy(
         // The null-hash checks below already handle missing block data safely.
 
         let local_hash = {
-            let chain = state.blockchain.read()
-                .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+            let chain = state.blockchain.read().await;
             match chain.get_block_by_height(height) {
                 Some(b) => {
                     let h = hex::encode(b.hash());
@@ -1027,8 +1038,7 @@ async fn find_common_ancestor_legacy(
     if peer_valid {
         // PATCH D: Suppress reset during post-fast-sync warm-up window.
         let (fsb, cur_h) = {
-            let c = state.blockchain.read()
-                .map_err(|e| SyncError::LockPoisoned(format!("read lock: {}", e)))?;
+            let c = state.blockchain.read().await;
             (c.fast_sync_base_height(), c.height())
         };
         let delta = cur_h.saturating_sub(fsb);
@@ -1044,8 +1054,7 @@ async fn find_common_ancestor_legacy(
         if let Some(cancel) = state.mining_cancel.read().unwrap().as_ref() {
             cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        let mut chain = state.blockchain.write()
-            .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+        let mut chain = state.blockchain.write().await;
         chain.reset_for_snapshot_resync();
         return Ok(0);
     }
@@ -1183,11 +1192,31 @@ async fn attempt_snapshot_sync(
             }
         }
         if !verified {
-            // No other peer could confirm — only accept from seed nodes
+            // No other peer could confirm — only accept from seed nodes,
+            // OR from an operator-declared trusted peer (passed via --peer
+            // on the CLI and therefore present in `state.peers`). The CLI
+            // flag is an explicit act of trust by the node operator, which
+            // is the same guarantee a hardcoded seed provides.
+            //
+            // v2.5.4 Bug — the previous revision deadlocked the whole
+            // testnet if every seed was wiped at once: every seed was at
+            // h=0 and none could cross-verify, so they all refused the
+            // only peer with a chain (the miner EPYC1). Accepting an
+            // operator-trusted peer here breaks that deadlock during a
+            // coordinated network reset.
             let is_seed = crate::config::SEED_NODES.iter().any(|s| peer_url.starts_with(s));
-            if !is_seed {
+            let is_trusted_cli = state.peers.read().unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .any(|p| p == peer_url);
+            if !is_seed && !is_trusted_cli {
                 warn!("Rejecting snapshot from non-seed {} — no cross-verification possible", peer_id(peer_url));
                 return Err(SyncError::InvalidResponse("Cannot cross-verify snapshot from non-seed".into()));
+            }
+            if !is_seed && is_trusted_cli {
+                info!(
+                    "Accepting snapshot from {} — peer is operator-trusted (CLI --peer), no cross-verification available",
+                    peer_id(peer_url)
+                );
             }
         }
     }
@@ -1278,8 +1307,7 @@ async fn attempt_snapshot_sync(
     let lwma_seed = fetch_pre_snapshot_lwma_headers(&client, peer_url, snap_height).await;
 
     // Import the snapshot
-    let mut chain = state.blockchain.write()
-        .map_err(|e| SyncError::LockPoisoned(format!("write lock: {}", e)))?;
+    let mut chain = state.blockchain.write().await;
     chain.import_snapshot_at_height(snapshot, snap_height, block_hash, diff, next_diff, snap_work);
     if !lwma_seed.is_empty() {
         info!(
@@ -1365,8 +1393,15 @@ pub async fn broadcast_block_with_id(block: &ShieldedBlock, peers: &[String], cl
             if let Some(ref id) = pid {
                 req = req.header("X-TSN-PeerID", id.as_str());
             }
+            // v2.6.1 — 30s timeout (was 3s). v2 transactions carry a Plonky3
+            // STARK proof + ML-DSA-65 signature ≈ 500 KB each; with
+            // V2_INCLUSION_CAP = 16, blocks can reach 8 MB. 3s was too tight on
+            // residential uplinks (10K send on 2026-04-25 silently lost the
+            // HTTP fallback path because the 4 MB block POST timed out before
+            // the seed could read it). Also raise the failure log to warn so
+            // a silent fallback failure cannot recur unnoticed.
             let result = req
-                .timeout(std::time::Duration::from_secs(3))
+                .timeout(std::time::Duration::from_secs(30))
                 .json(&block)
                 .send()
                 .await
@@ -1374,7 +1409,7 @@ pub async fn broadcast_block_with_id(block: &ShieldedBlock, peers: &[String], cl
                 .map_err(SyncError::from);
 
             if let Err(ref e) = result {
-                debug!("Failed to broadcast to {}: {}", peer_label, sanitize_error(e));
+                warn!("Failed to broadcast block to {}: {}", peer_label, sanitize_error(e));
             }
             result
         }));
@@ -1387,6 +1422,103 @@ pub async fn broadcast_block_with_id(block: &ShieldedBlock, peers: &[String], cl
         }
     }
     results
+}
+
+// ============ v2.5.3 — Relay endorsement collection ============
+
+/// Collect ML-DSA-65 endorsements from a set of peers over a block hash.
+///
+/// For each peer, POST `/relay/endorse` with the 32-byte hex-encoded hash.
+/// Returned endorsements are verified locally against the block hash and
+/// deduped by pk_hash. The miner's own pk_hash is filtered out (self-endorsement
+/// would be pointless — the miner is already getting the 97% block reward).
+///
+/// Capped at `MAX_ENDORSEMENTS_PER_BLOCK` (5). If more peers respond valid,
+/// the first 5 in response order win; a future tightening could score by
+/// historical relay quality.
+///
+/// Timeout: 3s per peer in parallel. One slow peer does not starve the set.
+///
+/// This function never fails — if every peer is unreachable or returns junk,
+/// the returned Vec is simply empty and the miner still produces a valid
+/// block (no endorsements means 100% of this block's 3% slice rolls into
+/// `unallocated` and eventually drops to `DEV_TREASURY` at payout height).
+pub async fn collect_endorsements(
+    block_hash: &[u8; crate::core::BLOCK_HASH_SIZE],
+    peers: &[String],
+    client: &reqwest::Client,
+    miner_pk_hash: &[u8; 32],
+) -> Vec<crate::core::Endorsement> {
+    use crate::core::{Endorsement, MAX_ENDORSEMENTS_PER_BLOCK};
+
+    let hash_hex = hex::encode(block_hash);
+    let mut handles = Vec::new();
+    for peer in peers {
+        if !super::is_contactable_peer(peer) {
+            continue;
+        }
+        let url = format!("{}/relay/endorse", peer);
+        let client = client.clone();
+        let body = serde_json::json!({ "header_hash": hash_hex.clone() });
+        let peer_label = peer_id(peer);
+        handles.push(tokio::spawn(async move {
+            let resp = client
+                .post(&url)
+                .header("X-TSN-Version", env!("CARGO_PKG_VERSION"))
+                .header("X-TSN-Network", crate::config::NETWORK_NAME)
+                .header("X-TSN-Genesis", crate::config::EXPECTED_GENESIS_HASH)
+                .timeout(std::time::Duration::from_secs(3))
+                .json(&body)
+                .send()
+                .await;
+            let resp = match resp {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    debug!(
+                        "endorse: {} returned status {}",
+                        peer_label,
+                        r.status().as_u16()
+                    );
+                    return None;
+                }
+                Err(e) => {
+                    debug!("endorse: {} failed: {}", peer_label, sanitize_error(&e));
+                    return None;
+                }
+            };
+            let body: serde_json::Value = match resp.json().await {
+                Ok(b) => b,
+                Err(_) => return None,
+            };
+            let pub_key_hex = body.get("pub_key").and_then(|v| v.as_str())?;
+            let signature_hex = body.get("signature").and_then(|v| v.as_str())?;
+            let pub_key = hex::decode(pub_key_hex).ok()?;
+            let signature = hex::decode(signature_hex).ok()?;
+            Some(Endorsement { pub_key, signature })
+        }));
+    }
+
+    let mut accepted: Vec<Endorsement> = Vec::with_capacity(MAX_ENDORSEMENTS_PER_BLOCK);
+    let mut seen_pk_hashes: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+    // Miner does not endorse its own blocks.
+    seen_pk_hashes.insert(*miner_pk_hash);
+
+    for h in handles {
+        if accepted.len() >= MAX_ENDORSEMENTS_PER_BLOCK {
+            break;
+        }
+        let Ok(Some(end)) = h.await else { continue };
+        if !end.verify(block_hash) {
+            debug!("endorse: dropping invalid signature");
+            continue;
+        }
+        let pkh = end.pk_hash();
+        if !seen_pk_hashes.insert(pkh) {
+            continue;
+        }
+        accepted.push(end);
+    }
+    accepted
 }
 
 // ============ Sync Loop ============
@@ -1588,11 +1720,14 @@ pub async fn fetch_pre_snapshot_lwma_headers(
             return Vec::new();
         }
     };
-    // Keep only heights strictly below snap_height (the snapshot's own header
-    // is handled by `import_snapshot_at_height`), in ascending height order.
+    // v2.5.2 — include the snapshot tip itself (h == snap_height). Without it,
+    // `next_difficulty()` at the snapshot tip falls back to `self.difficulty`
+    // because `lookup_at(snap_height)` finds no block (import doesn't save the
+    // tip block data) and `pre_snapshot_lwma` filtered it out. That stale
+    // fallback then triggers "Invalid difficulty" on the next received block.
     let mut triples: Vec<(u64, u64, u64)> = headers
         .into_iter()
-        .filter(|h| h.height < snap_height)
+        .filter(|h| h.height <= snap_height)
         .map(|h| (h.height, h.difficulty, h.timestamp))
         .collect();
     triples.sort_by_key(|(h, _, _)| *h);

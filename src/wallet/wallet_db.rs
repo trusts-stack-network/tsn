@@ -157,6 +157,87 @@ impl WalletDb {
             .execute("INSERT OR IGNORE INTO schema_version VALUES (2)", [])
             .map_err(|e| WalletError::DbError(format!("Failed to record schema v2: {}", e)))?;
 
+        // v2.5.4 schema v3: track the blockchain `genesis_hash` seen at scan
+        // time, on top of the network name. Two different chains can share
+        // the same NETWORK_NAME if the same name is re-used across local
+        // wipes (e.g. a dev resets data/ to retrigger bootstrap) — the
+        // network_name check alone will not catch that. Storing the
+        // genesis_hash lets the open path detect any divergence and archive
+        // obsolete notes BEFORE they get interleaved with the current chain.
+        let has_genesis_hash: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('scan_state') WHERE name = 'genesis_hash'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_genesis_hash {
+            self.conn
+                .execute(
+                    "ALTER TABLE scan_state ADD COLUMN genesis_hash TEXT NOT NULL DEFAULT ''",
+                    [],
+                )
+                .map_err(|e| WalletError::DbError(format!("Failed to add genesis_hash column: {}", e)))?;
+        }
+        self.conn
+            .execute("INSERT OR IGNORE INTO schema_version VALUES (3)", [])
+            .map_err(|e| WalletError::DbError(format!("Failed to record schema v3: {}", e)))?;
+
+        // v2.7.4 schema v4: persist the wallet's local Poseidon/Goldilocks
+        // commitment tree snapshot so it survives restarts. Stored as a
+        // bincode-encoded `CommitmentTreeSnapshot` blob in scan_state.
+        let has_tree_snapshot: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('scan_state') WHERE name = 'tree_snapshot'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_tree_snapshot {
+            self.conn
+                .execute(
+                    "ALTER TABLE scan_state ADD COLUMN tree_snapshot BLOB",
+                    [],
+                )
+                .map_err(|e| WalletError::DbError(format!("Failed to add tree_snapshot column: {}", e)))?;
+        }
+        self.conn
+            .execute("INSERT OR IGNORE INTO schema_version VALUES (4)", [])
+            .map_err(|e| WalletError::DbError(format!("Failed to record schema v4: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// v2.7.4 Phase C — load the persisted local commitment-tree snapshot.
+    /// Returns `Ok(None)` when the column is empty (fresh wallet) or when
+    /// decoding fails (treated as soft reset).
+    pub fn load_tree_snapshot(&self) -> Result<Option<crate::crypto::pq::merkle_pq::CommitmentTreeSnapshot>, WalletError> {
+        let row: Option<Vec<u8>> = self.conn.query_row(
+            "SELECT tree_snapshot FROM scan_state WHERE id = 1",
+            [],
+            |r| r.get::<_, Option<Vec<u8>>>(0),
+        ).map_err(|e| WalletError::DbError(format!("Failed to read tree_snapshot: {}", e)))?;
+        let Some(bytes) = row else { return Ok(None); };
+        if bytes.is_empty() { return Ok(None); }
+        match bincode::deserialize::<crate::crypto::pq::merkle_pq::CommitmentTreeSnapshot>(&bytes) {
+            Ok(snap) => Ok(Some(snap)),
+            Err(e) => {
+                tracing::warn!("tree_snapshot decode failed, starting fresh: {}", e);
+                Ok(None)
+            }
+        }
+    }
+
+    /// v2.7.4 Phase C — persist the wallet's local commitment-tree snapshot.
+    pub fn save_tree_snapshot(&self, snap: &crate::crypto::pq::merkle_pq::CommitmentTreeSnapshot) -> Result<(), WalletError> {
+        let bytes = bincode::serialize(snap)
+            .map_err(|e| WalletError::DbError(format!("tree_snapshot encode failed: {}", e)))?;
+        self.conn.execute(
+            "UPDATE scan_state SET tree_snapshot = ?1 WHERE id = 1",
+            params![bytes],
+        ).map_err(|e| WalletError::DbError(format!("Failed to write tree_snapshot: {}", e)))?;
         Ok(())
     }
 
@@ -493,6 +574,33 @@ impl WalletDb {
                 params![name],
             )
             .map_err(|e| WalletError::DbError(format!("Failed to set network_name: {}", e)))?;
+        Ok(())
+    }
+
+    /// v2.5.4: return the genesis_hash this wallet was last synced against.
+    /// Empty string for pre-v2.5.4 wallets.
+    pub fn genesis_hash(&self) -> Result<String, WalletError> {
+        let hash: String = self
+            .conn
+            .query_row(
+                "SELECT genesis_hash FROM scan_state WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| WalletError::DbError(format!("Failed to get genesis_hash: {}", e)))?;
+        Ok(hash)
+    }
+
+    /// v2.5.4: record which chain genesis_hash this wallet is synced against.
+    /// Called after every successful scan so a local data/ wipe is detected
+    /// at the next `open()` and the obsolete notes are archived.
+    pub fn set_genesis_hash(&self, hash: &str) -> Result<(), WalletError> {
+        self.conn
+            .execute(
+                "UPDATE scan_state SET genesis_hash = ?1 WHERE id = 1",
+                params![hash],
+            )
+            .map_err(|e| WalletError::DbError(format!("Failed to set genesis_hash: {}", e)))?;
         Ok(())
     }
 

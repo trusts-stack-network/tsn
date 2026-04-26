@@ -109,10 +109,23 @@ mod hex_array_32 {
 
 /// The running relay-pool accumulator. Lives in the consensus state and is
 /// advanced by each accepted block.
+///
+/// v2.5.3 hard-fork rework: the pool now tracks per-recipient shares rather
+/// than a single lump sum. On every accepted block, `accumulate_from_block`
+/// splits the block's 3% slice equally across the block's endorsement signers
+/// (pk_hash derived from each endorsement's ML-DSA-65 pub_key). Unassigned
+/// amounts (block with zero endorsements, or division residues) accumulate in
+/// `unallocated` and flow to DEV_TREASURY at payout time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RelayPool {
-    /// Coins accumulated since the last payout (atomic units).
-    pub balance: u64,
+    /// Residual slice that has no recipient attribution — blocks mined with
+    /// zero endorsements, and integer-division residues. Flows to DEV_TREASURY
+    /// at payout time.
+    #[serde(alias = "balance")]
+    pub unallocated: u64,
+    /// Per-relay cumulative share since last payout. Key = Blake2s256(pub_key).
+    #[serde(default)]
+    pub per_recipient: BTreeMap<[u8; 32], u64>,
     /// The block height at which the previous payout was made (0 = never).
     pub last_payout_height: u64,
 }
@@ -122,9 +135,61 @@ impl RelayPool {
         Self::default()
     }
 
-    /// Accumulate another block's 3% share into the pool.
+    /// Total coins held in the pool (sum of unallocated + all per-recipient).
+    /// Equivalent to the legacy `balance` field semantically.
+    pub fn total(&self) -> u64 {
+        let recipients: u64 = self.per_recipient.values().copied().sum();
+        self.unallocated.saturating_add(recipients)
+    }
+
+    /// Legacy alias for callers that still read the aggregate amount.
+    pub fn balance(&self) -> u64 {
+        self.total()
+    }
+
+    /// Accumulate a block's 3% slice, attributing equal shares to each
+    /// endorsement signer. If the block carried no endorsements, the full
+    /// slice lands in `unallocated` (flows to DEV_TREASURY at payout).
+    /// Integer-division residues also go to `unallocated`.
+    ///
+    /// This is the v2.5.3 replacement for `accumulate(amount)` — callers with
+    /// access to the block's endorsement list MUST use this variant; the
+    /// legacy `accumulate` is kept for codepaths that do not yet carry the
+    /// block context (e.g. pre-v2.5.3 replays) and treats every amount as
+    /// unallocated.
+    pub fn accumulate_from_block(&mut self, block_3pct: u64, endorsement_pk_hashes: &[[u8; 32]]) {
+        if block_3pct == 0 {
+            return;
+        }
+        // Deduplicate — a malicious block that carries the same pk_hash twice
+        // must not double-count. Validation is expected to reject such blocks
+        // but defense-in-depth here is cheap.
+        let mut unique: std::collections::BTreeSet<[u8; 32]> = std::collections::BTreeSet::new();
+        for pk in endorsement_pk_hashes {
+            unique.insert(*pk);
+        }
+        if unique.is_empty() {
+            self.unallocated = self.unallocated.saturating_add(block_3pct);
+            return;
+        }
+        let n = unique.len() as u64;
+        let share = block_3pct / n;
+        let distributed = share.saturating_mul(n);
+        let residue = block_3pct.saturating_sub(distributed);
+        for pk in &unique {
+            let slot = self.per_recipient.entry(*pk).or_insert(0);
+            *slot = slot.saturating_add(share);
+        }
+        if residue > 0 {
+            self.unallocated = self.unallocated.saturating_add(residue);
+        }
+    }
+
+    /// Legacy single-lump accumulator — the amount is treated as unallocated
+    /// (no per-recipient attribution). Kept for pre-v2.5.3 replay paths; new
+    /// code should call `accumulate_from_block` instead.
     pub fn accumulate(&mut self, amount: u64) {
-        self.balance = self.balance.saturating_add(amount);
+        self.unallocated = self.unallocated.saturating_add(amount);
     }
 
     /// Returns true if a payout is due at `current_height`. Payouts happen
@@ -136,16 +201,76 @@ impl RelayPool {
             && current_height > self.last_payout_height
     }
 
-    /// Drain the pool — returns the accumulated balance and resets it to 0.
-    /// Caller is responsible for constructing the `RelayPayout` tx and
-    /// updating `last_payout_height` after on-chain confirmation.
+    /// Drain the pool — returns the total accumulated amount and resets both
+    /// `unallocated` and `per_recipient` to empty. Caller is responsible for
+    /// constructing the `RelayPayout` tx and updating `last_payout_height`
+    /// after on-chain confirmation.
     pub fn drain(&mut self, current_height: u64) -> u64 {
-        let amount = self.balance;
-        self.balance = 0;
+        let amount = self.total();
+        self.unallocated = 0;
+        self.per_recipient.clear();
         self.last_payout_height = current_height;
         amount
     }
+
+    /// v2.5.3 — build the payout transaction from the current per-recipient
+    /// state. Applies the 30% cap per relay per window (overflow flows to
+    /// DEV_TREASURY). If every relay's accumulated share is zero and there
+    /// are no recipients, the full `unallocated` slice goes to DEV_TREASURY.
+    ///
+    /// Returns the built `RelayPayout`. The pool itself is NOT drained here —
+    /// callers (see state.rs::apply_relay_payout) must apply the payout AND
+    /// call `drain` to reset the accumulator.
+    pub fn build_payout_v2(
+        &self,
+        current_height: u64,
+        dev_treasury_pk_hash: [u8; 32],
+    ) -> RelayPayout {
+        let total = self.total();
+        let cap = total.saturating_mul(CAP_PERCENT_PER_RELAY as u64) / 100;
+
+        let mut entries: Vec<PayoutEntry> = Vec::new();
+        let mut dev_overflow: u64 = self.unallocated;
+
+        for (pk, amt) in &self.per_recipient {
+            let capped = std::cmp::min(*amt, cap);
+            let overflow = amt.saturating_sub(capped);
+            if capped > 0 {
+                entries.push(PayoutEntry { recipient: *pk, amount: capped });
+            }
+            dev_overflow = dev_overflow.saturating_add(overflow);
+        }
+
+        if dev_overflow > 0 {
+            // If DEV_TREASURY already appears as a recipient (unlikely but
+            // possible if a relay publishes with the dev pk), merge amounts.
+            if let Some(existing) = entries.iter_mut().find(|e| e.recipient == dev_treasury_pk_hash) {
+                existing.amount = existing.amount.saturating_add(dev_overflow);
+            } else {
+                entries.push(PayoutEntry {
+                    recipient: dev_treasury_pk_hash,
+                    amount: dev_overflow,
+                });
+            }
+        }
+
+        // Deterministic ordering — two independent nodes must produce byte-
+        // identical payouts.
+        entries.sort_by_key(|e| e.recipient);
+
+        let distributed: u64 = entries.iter().map(|e| e.amount).sum();
+        RelayPayout {
+            height: current_height,
+            pool_total: distributed,
+            entries,
+        }
+    }
 }
+
+/// v2.5.3 — maximum share of the pool any single relay can collect in one
+/// payout window. Overflow above this cap flows to DEV_TREASURY. Prevents
+/// a single well-connected relay from monopolising the reward.
+pub const CAP_PERCENT_PER_RELAY: u8 = 30;
 
 /// A single payout entry — how much `recipient` receives.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -401,7 +526,9 @@ mod tests {
     #[test]
     fn accumulator_starts_empty() {
         let p = RelayPool::new();
-        assert_eq!(p.balance, 0);
+        assert_eq!(p.balance(), 0);
+        assert_eq!(p.unallocated, 0);
+        assert!(p.per_recipient.is_empty());
         assert_eq!(p.last_payout_height, 0);
     }
 
@@ -410,15 +537,132 @@ mod tests {
         let mut p = RelayPool::new();
         p.accumulate(150);
         p.accumulate(50);
-        assert_eq!(p.balance, 200);
+        assert_eq!(p.balance(), 200);
+        assert_eq!(p.unallocated, 200); // legacy accumulate = all unallocated
     }
 
     #[test]
     fn accumulator_saturates_on_overflow() {
         let mut p = RelayPool::new();
-        p.balance = u64::MAX - 10;
+        p.unallocated = u64::MAX - 10;
         p.accumulate(100);
-        assert_eq!(p.balance, u64::MAX);
+        assert_eq!(p.balance(), u64::MAX);
+    }
+
+    // ---- v2.5.3 per-block accumulator ----
+
+    #[test]
+    fn accumulate_from_block_no_endorsements_all_unallocated() {
+        let mut p = RelayPool::new();
+        p.accumulate_from_block(1000, &[]);
+        assert_eq!(p.unallocated, 1000);
+        assert!(p.per_recipient.is_empty());
+    }
+
+    #[test]
+    fn accumulate_from_block_splits_across_endorsers() {
+        let mut p = RelayPool::new();
+        let pks = vec![pk(1), pk(2), pk(3), pk(4)];
+        p.accumulate_from_block(1000, &pks);
+        // 1000 / 4 = 250 each, no residue
+        for k in &pks {
+            assert_eq!(*p.per_recipient.get(k).unwrap(), 250);
+        }
+        assert_eq!(p.unallocated, 0);
+        assert_eq!(p.balance(), 1000);
+    }
+
+    #[test]
+    fn accumulate_from_block_residue_goes_to_unallocated() {
+        let mut p = RelayPool::new();
+        let pks = vec![pk(1), pk(2), pk(3)];
+        p.accumulate_from_block(1000, &pks);
+        // 1000 / 3 = 333 each, residue 1
+        for k in &pks {
+            assert_eq!(*p.per_recipient.get(k).unwrap(), 333);
+        }
+        assert_eq!(p.unallocated, 1);
+        assert_eq!(p.balance(), 1000);
+    }
+
+    #[test]
+    fn accumulate_from_block_dedup_duplicates() {
+        // A malicious block that carries the same pk_hash twice must not
+        // double-count; shares are distributed over the UNIQUE set.
+        let mut p = RelayPool::new();
+        let pks = vec![pk(1), pk(1), pk(2)];
+        p.accumulate_from_block(1000, &pks);
+        // unique set = {pk(1), pk(2)} → 500 each
+        assert_eq!(*p.per_recipient.get(&pk(1)).unwrap(), 500);
+        assert_eq!(*p.per_recipient.get(&pk(2)).unwrap(), 500);
+        assert_eq!(p.balance(), 1000);
+    }
+
+    #[test]
+    fn accumulate_from_block_across_multiple_blocks() {
+        let mut p = RelayPool::new();
+        p.accumulate_from_block(1000, &[pk(1), pk(2)]);         // 500+500
+        p.accumulate_from_block(1000, &[pk(1)]);                 // 1000 to pk(1)
+        p.accumulate_from_block(600, &[]);                       // 600 to unallocated
+        assert_eq!(*p.per_recipient.get(&pk(1)).unwrap(), 1500);
+        assert_eq!(*p.per_recipient.get(&pk(2)).unwrap(), 500);
+        assert_eq!(p.unallocated, 600);
+        assert_eq!(p.balance(), 2600);
+    }
+
+    // ---- v2.5.3 build_payout_v2 ----
+
+    #[test]
+    fn build_payout_v2_empty_pool_still_lists_dev() {
+        let p = RelayPool::new();
+        let payout = p.build_payout_v2(1000, pk(99));
+        assert_eq!(payout.height, 1000);
+        // Empty pool → 0 entries (no dev_treasury entry when dev_overflow=0)
+        assert_eq!(payout.pool_total, 0);
+        assert!(payout.entries.is_empty());
+    }
+
+    #[test]
+    fn build_payout_v2_zero_endorsements_all_to_dev() {
+        let mut p = RelayPool::new();
+        p.accumulate_from_block(1500, &[]); // no endorsers
+        let dev = pk(99);
+        let payout = p.build_payout_v2(1000, dev);
+        assert_eq!(payout.entries.len(), 1);
+        assert_eq!(payout.entries[0].recipient, dev);
+        assert_eq!(payout.entries[0].amount, 1500);
+    }
+
+    #[test]
+    fn build_payout_v2_cap_30pct_redirects_overflow_to_dev() {
+        // Single relay earns 90% → cap at 30% → overflow 60% to dev.
+        let mut p = RelayPool::new();
+        p.per_recipient.insert(pk(1), 900);
+        p.per_recipient.insert(pk(2), 100);
+        let dev = pk(99);
+        let payout = p.build_payout_v2(1000, dev);
+        // total=1000, cap=300. pk(1) gets capped=300, overflow=600.
+        // pk(2) gets 100 (< cap).
+        // dev gets 600.
+        let a = payout.entries.iter().find(|e| e.recipient == pk(1)).unwrap();
+        let b = payout.entries.iter().find(|e| e.recipient == pk(2)).unwrap();
+        let d = payout.entries.iter().find(|e| e.recipient == dev).unwrap();
+        assert_eq!(a.amount, 300);
+        assert_eq!(b.amount, 100);
+        assert_eq!(d.amount, 600);
+    }
+
+    #[test]
+    fn build_payout_v2_deterministic_order_by_pk() {
+        let mut p = RelayPool::new();
+        p.per_recipient.insert(pk(50), 100);
+        p.per_recipient.insert(pk(10), 100);
+        p.per_recipient.insert(pk(30), 100);
+        let payout = p.build_payout_v2(1000, pk(99));
+        // Must be sorted by recipient
+        for window in payout.entries.windows(2) {
+            assert!(window[0].recipient <= window[1].recipient);
+        }
     }
 
     #[test]
@@ -442,11 +686,23 @@ mod tests {
     #[test]
     fn drain_resets_balance_and_records_height() {
         let mut p = RelayPool::new();
-        p.balance = 12345;
+        p.unallocated = 12345;
         let drained = p.drain(1000);
         assert_eq!(drained, 12345);
-        assert_eq!(p.balance, 0);
+        assert_eq!(p.balance(), 0);
+        assert_eq!(p.unallocated, 0);
         assert_eq!(p.last_payout_height, 1000);
+    }
+
+    #[test]
+    fn drain_clears_per_recipient_too() {
+        let mut p = RelayPool::new();
+        p.accumulate_from_block(1000, &[pk(1), pk(2)]);
+        let drained = p.drain(2000);
+        assert_eq!(drained, 1000);
+        assert!(p.per_recipient.is_empty());
+        assert_eq!(p.unallocated, 0);
+        assert_eq!(p.last_payout_height, 2000);
     }
 
     // ---- Eligibility ----

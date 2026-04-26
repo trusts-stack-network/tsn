@@ -13,6 +13,8 @@ use axum::{
 };
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
+use std::time::Duration;
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
 };
@@ -35,16 +37,23 @@ const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 
 /// Rate limit: requests per second per IP (public routes)
 /// Set high enough that explorer + normal usage never gets blocked.
-const RATE_LIMIT_RPS: u64 = 200;
+///
+/// v2.5.4 — bumped from 200→500 rps and 500→2000 burst because a wallet
+/// with 100+ notes saturates the burst on the fallback path (per-position
+/// witness fetch) when `/leaves/bulk` is unavailable or itself throttled.
+/// 127.0.0.1 shares the quota with other local processes polling the node,
+/// so the old budget was consumed by scanning loops + explorer polling
+/// simultaneously and the wallet send was then starved.
+const RATE_LIMIT_RPS: u64 = 500;
 
 /// Rate limit: burst size for public routes
-const RATE_LIMIT_BURST: u32 = 500;
+const RATE_LIMIT_BURST: u32 = 2000;
 
 /// Rate limit: requests per second per IP (sync routes — higher for node sync)
-const SYNC_RATE_LIMIT_RPS: u64 = 200;
+const SYNC_RATE_LIMIT_RPS: u64 = 500;
 
 /// Rate limit: burst size for sync routes
-const SYNC_RATE_LIMIT_BURST: u32 = 400;
+const SYNC_RATE_LIMIT_BURST: u32 = 1000;
 
 /// v2.3.0 Phase 1 — dedup windows (seconds).
 /// Same (peer, height, hash) tip received within this window is skipped.
@@ -68,10 +77,27 @@ pub const VERSION_BAN_INITIAL_SECS: u64 = 3600;
 pub const VERSION_BAN_CAPACITY: usize = 10_000;
 /// Dedup interval (seconds) between WARN log lines for the same offending IP.
 pub const VERSION_BAN_LOG_DEDUP_SECS: u64 = 300;
+/// v2.7.0 Phase 1.1 — capacity of the witness LRU cache. Each entry stores
+/// the response for one position keyed by `position`, paired with the chain
+/// height at which it was computed. Cap chosen to comfortably absorb a 4000+
+/// note wallet doing parallel consolidation without thrash.
+pub const WITNESS_CACHE_CAPACITY: usize = 4096;
+/// v2.7.0 Phase 1.3 — sliding-window length for the per-IP submit rate limit.
+pub const SUBMIT_RATE_WINDOW_SECS: u64 = 60;
+/// v2.7.0 Phase 1.3 — max V2 submissions accepted from a single source IP
+/// inside `SUBMIT_RATE_WINDOW_SECS`. Excess submissions return 429.
+/// Shielded TSN transactions have no public sender field (the pk hash lives
+/// inside the STARK proof), so the only "sender" available at the transport
+/// boundary is the source IP. Peer-to-peer gossip relays bypass this gate;
+/// it only constrains direct HTTP clients (`tsn send`, dApps).
+pub const SUBMIT_RATE_MAX_PER_IP: usize = 8;
+/// v2.7.0 Phase 1.3 — capacity of the per-IP rate-limit table (LRU eviction
+/// keeps memory bounded under DoS).
+pub const SUBMIT_RATE_TRACKER_CAPACITY: usize = 4096;
 
 /// Shared application state for the API.
 pub struct AppState {
-    pub blockchain: RwLock<ShieldedBlockchain>,
+    pub blockchain: TokioRwLock<ShieldedBlockchain>,
     pub mempool: RwLock<Mempool>,
     /// Phase 3 / v2.4.0 — soft ban set for miners that repeatedly violate
     /// the V2 inclusion rule. Persisted to `banned_miners_path` when set.
@@ -104,6 +130,16 @@ pub struct AppState {
     pub last_reorg_height: std::sync::atomic::AtomicU64,
     /// Semaphore limiting concurrent snapshot downloads (max 3)
     pub snapshot_semaphore: Arc<tokio::sync::Semaphore>,
+    /// v2.6.7 — Semaphore limiting concurrent v2 transaction submissions.
+    /// v2 tx submit holds the blockchain read lock during proof verification
+    /// and signature/nullifier checks (~100ms-1s per tx). Without a bound,
+    /// a burst of 10+ submissions (e.g. Phase 3.2 parallel consolidation
+    /// from a single sender) saturates the HTTP worker pool and starves
+    /// /chain/info, /tip and other read endpoints, freezing the node for
+    /// minutes (observed 2026-04-25). When the semaphore is full new
+    /// submits return 503 with retry-after, letting the client backoff
+    /// instead of building unbounded queues server-side.
+    pub tx_submit_semaphore: Arc<tokio::sync::Semaphore>,
     /// Cached pre-compressed snapshot (refreshed every 100 blocks)
     pub snapshot_cache: TokioRwLock<Option<CachedSnapshot>>,
     /// Orphan/fork counter for monitoring network health
@@ -171,6 +207,47 @@ pub struct AppState {
     /// `GET /events/stream`. Clones per SSE client; a slow client lagging
     /// more than 256 events drops the oldest (broadcast semantics).
     pub activity_bus: std::sync::Arc<super::activity::ActivityBus>,
+    /// v2.5.4 — Microcache for `/network/status` responses (3 s TTL).
+    /// The handler performs 5 × 2 outbound HTTP fetches to each seed; without
+    /// this cache, under sustained explorer polling the handlers pile up and
+    /// their accepted sockets stay in CLOSE-WAIT until the seed exhausts its
+    /// file-descriptor budget. The cache makes steady-state invocation O(1).
+    pub network_status_cache: std::sync::RwLock<Option<NetworkStatusCache>>,
+    /// v2.6.0 — Lock-free snapshot of `chain.info()` served by GET /chain/info.
+    /// A background task (spawn_chain_info_refresher) briefly acquires
+    /// `blockchain.read()` every 200ms to recompute and store here. HTTP
+    /// handlers read via `chain_info_cache.load()` — a single atomic pointer
+    /// swap, zero contention with the write lock held during block imports.
+    /// This is the fix for the "node invisible in explorer during long reorgs"
+    /// failure mode: even when `blockchain.write()` is held for seconds, any
+    /// /chain/info caller still responds in microseconds with the previous
+    /// snapshot. Worst-case staleness is refresh interval + writer hold time.
+    pub chain_info_cache: arc_swap::ArcSwap<crate::core::ChainInfo>,
+    /// v2.7.0 Phase 1.1 — LRU cache for `/witness/v2/position/{N}` responses.
+    /// Without this cache, each lookup re-traverses the Poseidon Merkle tree
+    /// under `blockchain.read()` (~10-50ms hot, more under contention). A
+    /// wallet with N notes fires N concurrent lookups when sending; all of
+    /// them serialise on the read lock and starve other handlers, producing
+    /// HTTP 408 timeouts and Recv-Q saturation. The cache stores responses
+    /// keyed by position together with the chain height at which they were
+    /// computed; on hit at the current height the response is returned with
+    /// zero blockchain access. New blocks bump the chain height and lazily
+    /// invalidate stale entries on next access (the entry is recomputed and
+    /// replaced). This is correct because the Merkle path of any leaf may
+    /// shift when new commitments are appended, so any previously cached
+    /// witness is only valid against the height at which it was built.
+    pub witness_cache: std::sync::Arc<std::sync::Mutex<lru::LruCache<u64, (u64, WitnessResponseV2)>>>,
+    /// v2.7.0 Phase 1.3 — Per-IP submit rate limiter (sliding window). Each
+    /// entry stores recent V2 submission instants for one IP; excess submissions
+    /// inside `SUBMIT_RATE_WINDOW_SECS` return 429. The LruCache bounds memory
+    /// under DoS (oldest IPs are evicted when capacity is reached).
+    pub submit_rate: std::sync::Arc<std::sync::Mutex<lru::LruCache<std::net::IpAddr, std::collections::VecDeque<std::time::Instant>>>>,
+}
+
+/// v2.5.4 — cached `/network/status` payload with absolute expiry instant.
+pub struct NetworkStatusCache {
+    pub body: serde_json::Value,
+    pub expires_at: std::time::Instant,
 }
 
 /// v2.3.6 — Tracks a peer that sent an outdated `X-TSN-Version` header.
@@ -490,6 +567,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/peers", get(get_peers))
         .route("/peers", post(add_peer))
         .route("/peers/p2p", get(get_p2p_peers))
+        .route("/peers/p2p/aggregate", get(get_p2p_peers_aggregate))
         .route("/peers/detailed", get(get_peers_detailed))
         .route("/network/status", get(network_status))
         .route("/tx/relay", post(receive_transaction))
@@ -566,6 +644,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/wallet/address", get(wallet_address_api))
         .route("/wallet/scan", post(wallet_scan_api))
         .route("/wallet/rescan", post(wallet_rescan_api))
+        // v2.5.3 — relay pool endorsement endpoint. A miner calls this on
+        // each peer after finding a valid PoW to collect signatures over
+        // the block hash; the collected endorsements are attached to the
+        // block and grant each signer an equal share of that block's 3%
+        // relay-pool slice at the next payout height.
+        .route("/relay/endorse", post(relay_endorse_api))
         .route("/faucet/status/:pk_hash", get(faucet_status))
         .route("/faucet/claim", post(faucet_claim))
         .route("/faucet/game-claim", post(faucet_game_claim))
@@ -579,10 +663,21 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .layer(rate_limit_layer);
 
     // Merge all route groups
+    //
+    // v2.5.5 Bug #1 fix — TimeoutLayer is the root cause fix for CLOSE-WAIT
+    // accumulation. Without it, a handler that hangs (slow peer request,
+    // backpressured state lock, network-bound reqwest without its own
+    // timeout) keeps the hyper connection alive forever. When the client
+    // disconnects mid-handler, hyper holds the half-closed socket in
+    // CLOSE-WAIT until the handler returns. With 30s request timeout,
+    // stuck handlers are aborted and the connection is released. Combined
+    // with SO_KEEPALIVE on the listener (main.rs), this eliminates the
+    // accumulation observed on seed-2 (4036 CLOSE-WAIT after 51 days).
     let api_routes = sync_routes
         .merge(explorer_routes)
         .merge(admin_routes)
         .merge(limited_routes)
+        .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE));
 
     let ui_routes = Router::new()
@@ -607,7 +702,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
 /// GET /health — lightweight health check, never rate limited.
 async fn health_check(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let height = state.blockchain.read().unwrap_or_else(|e| e.into_inner()).height();
+    let height = state.blockchain.read().await.height();
     let peers = state.peers.read().unwrap_or_else(|e| e.into_inner()).len();
     Json(serde_json::json!({
         "status": "ok",
@@ -618,8 +713,39 @@ async fn health_check(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
 }
 
 async fn chain_info(State(state): State<Arc<AppState>>) -> Json<ChainInfo> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
-    Json(chain.info())
+    // v2.6.0 — lock-free: single atomic pointer load, no contention with
+    // blockchain.write() held during block imports / reorgs. The refresher
+    // task (spawn_chain_info_refresher) keeps this snapshot within 200ms of
+    // the live chain state.
+    Json((**state.chain_info_cache.load()).clone())
+}
+
+/// v2.6.0 — Periodically refresh `AppState.chain_info_cache` from the live
+/// blockchain, so GET /chain/info serves from a lock-free atomic snapshot
+/// instead of blocking on the chain RwLock during long imports.
+///
+/// 200ms tick is short enough that explorer polls always see fresh data, yet
+/// long enough that the refresher's brief read lock never dominates the
+/// blockchain RwLock contention budget. If a block import holds the write
+/// lock for longer than 200ms, the refresher simply skips ticks — callers
+/// continue to read the last-known-good snapshot with zero delay.
+pub fn spawn_chain_info_refresher(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            // tokio::sync::RwLock: `.read().await` yields cooperatively when a
+            // writer holds the lock — it does NOT pin the tokio worker thread
+            // like std::sync::RwLock did. So HTTP handlers stay responsive
+            // even while a long block import/reorg is in progress.
+            let info = {
+                let chain = state.blockchain.read().await;
+                chain.info()
+            };
+            state.chain_info_cache.store(std::sync::Arc::new(info));
+        }
+    });
 }
 
 /// Sync progress status response.
@@ -634,7 +760,7 @@ struct SyncStatusResponse {
 
 /// GET /sync/status — returns current sync progress.
 async fn sync_status(State(state): State<Arc<AppState>>) -> Json<SyncStatusResponse> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let local_height = chain.height();
     drop(chain);
 
@@ -681,7 +807,11 @@ async fn version_info() -> Json<VersionInfoResponse> {
 
 /// Node identity and status.
 async fn node_info(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let height = state.blockchain.read().unwrap_or_else(|e| e.into_inner()).height();
+    // v2.7.2 Phase 2.1 — lock-free read via the ArcSwap snapshot, never blocks
+    // even when the miner thread is holding `blockchain.write()` during a
+    // multi-block import or reorg. Without this, /node/info timed out for tens
+    // of seconds during fast-sync, hiding the node from the explorer.
+    let height = state.chain_info_cache.load().height;
     let peer_id = state.p2p_peer_id.read().unwrap_or_else(|e| e.into_inner()).clone();
     let http_peers = state.peers.read().unwrap_or_else(|e| e.into_inner()).len();
 
@@ -720,7 +850,7 @@ struct RoadmapStatusResponse {
 
 /// GET /api/roadmap — returns dynamic roadmap status with real-time metrics.
 async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatusResponse> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let chain_info = chain.info();
     let height = chain.height();
     drop(chain);
@@ -834,7 +964,7 @@ async fn miner_stats(State(state): State<Arc<AppState>>) -> Json<MinerStats> {
 
 /// Network health endpoint — exposes fork/orphan stats and peer versions.
 async fn network_health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let height = chain.height();
     let difficulty = chain.info().difficulty;
     let cumulative_work = chain.cumulative_work();
@@ -899,6 +1029,10 @@ struct BlockResponse {
     // Encrypted note data for miner monitoring (encrypted, so privacy-preserving)
     coinbase_ephemeral_pk: String,
     coinbase_ciphertext: String,
+    /// v2.5.3 — list of relay pk_hashes (Blake2s256 of pub_key) that signed
+    /// this block's header. Each signer received an equal share of the 3%
+    /// relay-pool slice for this block.
+    endorsements: Vec<String>,
 }
 
 async fn get_block(
@@ -910,7 +1044,7 @@ async fn get_block(
         .try_into()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let block = chain.get_block(&hash_bytes).ok_or(StatusCode::NOT_FOUND)?;
 
     // Find block height
@@ -925,7 +1059,7 @@ async fn get_block_by_height(
     State(state): State<Arc<AppState>>,
     Path(height): Path<u64>,
 ) -> Result<Json<BlockResponse>, StatusCode> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let block = chain
         .get_block_by_height(height)
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -952,6 +1086,7 @@ fn block_to_response(block: &ShieldedBlock, height: u64) -> BlockResponse {
         miner_pk_hash: hex::encode(block.coinbase.miner_pk_hash),
         coinbase_ephemeral_pk: hex::encode(&block.coinbase.encrypted_note.ephemeral_pk),
         coinbase_ciphertext: hex::encode(&block.coinbase.encrypted_note.ciphertext),
+        endorsements: block.endorsements.iter().map(|e| hex::encode(e.pk_hash())).collect(),
     }
 }
 
@@ -990,7 +1125,7 @@ async fn list_blocks_paginated(
     State(state): State<Arc<AppState>>,
     Query(params): Query<BlockListParams>,
 ) -> Json<BlockListResponse> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let chain_height = chain.height();
     let total = chain_height + 1; // heights 0..=chain_height
 
@@ -1068,7 +1203,7 @@ async fn get_transaction(
     }
 
     // Search in blockchain
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let current_height = chain.height();
     for h in (0..=current_height).rev() {
         if let Some(block) = chain.get_block_by_height(h) {
@@ -1133,7 +1268,7 @@ async fn get_recent_transactions(
     }
 
     // Get recent confirmed transactions from recent blocks
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let current_height = chain.height();
     let start_height = current_height.saturating_sub(500);
 
@@ -1194,7 +1329,7 @@ async fn submit_transaction(
 
     // Validate transaction
     {
-        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let chain = state.blockchain.read().await;
         if let Some(params) = chain.verifying_params() {
             // Full validation with proof verification
             chain
@@ -1255,8 +1390,80 @@ struct SubmitTxV2Request {
 /// Submit a V2 (post-quantum) shielded transaction.
 async fn submit_transaction_v2(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     Json(req): Json<SubmitTxV2Request>,
 ) -> Result<Json<SubmitTxResponse>, (StatusCode, String)> {
+    // v2.7.0 Phase 1.3 — per-IP rate limit (sliding 60s window, max 8). One
+    // misbehaving client (or a buggy parallel-consolidation loop) can no
+    // longer monopolise the tx-submit semaphore; well-behaved clients keep
+    // their slots. Peer-to-peer relays use a different ingress path.
+    {
+        let ip = addr.ip();
+        let now = std::time::Instant::now();
+        let window = std::time::Duration::from_secs(SUBMIT_RATE_WINDOW_SECS);
+        let mut tracker = state
+            .submit_rate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Touch the entry (LRU) and prune events outside the window.
+        let dq = tracker.get_or_insert_mut(ip, std::collections::VecDeque::new);
+        while let Some(front) = dq.front() {
+            if now.duration_since(*front) > window {
+                dq.pop_front();
+            } else {
+                break;
+            }
+        }
+        if dq.len() >= SUBMIT_RATE_MAX_PER_IP {
+            warn!(
+                "submit_transaction_v2: rate-limit hit ip={} count={}",
+                ip,
+                dq.len()
+            );
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "Rate limit: max {} V2 submissions per {}s per IP",
+                    SUBMIT_RATE_MAX_PER_IP, SUBMIT_RATE_WINDOW_SECS
+                ),
+            ));
+        }
+        dq.push_back(now);
+    }
+
+    // v2.6.7 — bound concurrent v2 tx validations.
+    // Validation holds the blockchain read lock and runs Plonky3 STARK proof
+    // verification + ML-DSA-65 signature checks + nullifier set lookups,
+    // each costing ~100ms-1s. Without a bound, a burst of 10+ submissions
+    // (e.g. Phase 3.2 parallel consolidation) saturates the HTTP worker
+    // pool and freezes the node for minutes. Try-acquire with a short
+    // timeout: if the slot is full, return 503 + Retry-After=2s so the
+    // client backs off, letting the HTTP server stay responsive for read
+    // endpoints (/chain/info, /tip).
+    // v2.7.0 Phase 1.2 — semaphore capacity bumped to 16, so the wait at the
+    // gate is much shorter; cap the wait at 50 ms to fail fast under sustained
+    // overload (the client retries with Retry-After=2s).
+    let permit = match tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        state.tx_submit_semaphore.clone().acquire_owned(),
+    )
+    .await
+    {
+        Ok(Ok(p)) => p,
+        Ok(Err(_)) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "tx submit semaphore closed".to_string(),
+            ));
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "tx submit queue full, retry-after 2s".to_string(),
+            ));
+        }
+    };
+
     let tx = req.transaction;
     let hash = hex::encode(tx.hash());
 
@@ -1265,17 +1472,46 @@ async fn submit_transaction_v2(
     // Wrap in Transaction enum for validation and mempool
     let wrapped_tx = Transaction::V2(tx.clone());
 
-    // Validate V2 transaction
+    // v2.7.0 Phase 2.1 — Two-stage validation.
+    //
+    // Stage A (CPU only, ~300-500ms): STARK proof verify + ML-DSA-65 sigs +
+    // proof-vs-tx self-consistency. Runs in `spawn_blocking` so it does NOT
+    // pin a tokio worker, and crucially does NOT hold `blockchain.read()`.
+    // While Stage A runs, /chain/info, /tip, /sync/blocks and /witness/v2
+    // all stay responsive even under burst load.
+    //
+    // Stage B (state-dependent, ~5-10ms): anchor recency + nullifier
+    // double-spend. Acquires the read lock briefly; releases immediately
+    // before mempool insert.
+    let tx_for_verify = tx.clone();
+    let public_inputs = tokio::task::spawn_blocking(move || {
+        crate::core::ShieldedState::validate_transaction_v2_proof_only(&tx_for_verify)
+    })
+    .await
+    .map_err(|e| {
+        warn!("V2 verify thread panicked: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "verify worker panic".to_string(),
+        )
+    })?
+    .map_err(|e| {
+        warn!("V2 proof validation failed: {}", e);
+        (StatusCode::BAD_REQUEST, e.to_string())
+    })?;
+
     {
-        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let chain = state.blockchain.read().await;
         chain
             .state()
-            .validate_transaction_v2(&tx)
+            .validate_transaction_v2_state_check(&public_inputs)
             .map_err(|e| {
-                warn!("V2 transaction validation failed: {}", e);
+                warn!("V2 state check failed: {}", e);
                 (StatusCode::BAD_REQUEST, e.to_string())
             })?;
     }
+    // Permit released here so the semaphore frees up before relay/broadcast.
+    drop(permit);
 
     // Add to mempool
     let added = {
@@ -1449,7 +1685,7 @@ async fn receive_block(
     // that race with watchdog resets (which hold reorg_lock.write()).
     let _reorg_guard = state.reorg_lock.read().await;
     let (accepted, status) = {
-        let mut chain = state.blockchain.write().unwrap_or_else(|e| e.into_inner());
+        let mut chain = state.blockchain.write().await;
         let old_height = chain.height();
         let old_tip = chain.latest_hash();
 
@@ -1565,7 +1801,7 @@ async fn get_blocks_since(
     Path(since_height): Path<u64>,
     Query(params): Query<BlocksSinceParams>,
 ) -> Json<Vec<ShieldedBlock>> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let current_height = chain.height();
     // Default limit of 50 blocks per request to avoid HTTP timeouts
     let max_blocks: u64 = params.limit.unwrap_or(50).min(200) as u64;
@@ -1610,7 +1846,7 @@ async fn get_headers_since(
     Path(since_height): Path<u64>,
     Query(params): Query<HeadersSinceParams>,
 ) -> Json<Vec<crate::core::CompactHeader>> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let limit = params.limit.unwrap_or(500).min(1000);
     let headers = chain.get_compact_headers_since(since_height, limit);
     Json(headers)
@@ -1656,7 +1892,7 @@ async fn get_peers(State(state): State<Arc<AppState>>) -> Json<PeersResponse> {
 
 /// Get P2P peers connected via libp2p (identified by PeerID).
 async fn get_p2p_peers(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let local_height = state.blockchain.read().unwrap_or_else(|e| e.into_inner()).height();
+    let local_height = state.blockchain.read().await.height();
     // Read directly from shared peer list — instant, no channel wait, no HTTP calls
     let peers = state.p2p_shared_peers.read().unwrap_or_else(|e| e.into_inner())
         .as_ref()
@@ -1669,67 +1905,194 @@ async fn get_p2p_peers(State(state): State<Arc<AppState>>) -> Json<serde_json::V
     }))
 }
 
+/// v2.7.1 Phase 2 — Aggregate `/peers/p2p` from every seed and merge by
+/// `peer_id`. The Rust nodes only ever publish the peers they have personally
+/// dialled (seed-1 sees the cortex, others don't, etc.), so a single seed's
+/// view is always partial. Merging gives the explorer the union of every
+/// node's view in one call. Cached for 5s to keep the explorer's polling rate
+/// from amplifying into 5× outbound HTTP per refresh.
+async fn get_p2p_peers_aggregate(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    use std::collections::HashMap;
+
+    let local_height = state.blockchain.read().await.height();
+    // Local view first.
+    let local_peers = state.p2p_shared_peers.read().unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|sp| sp.read().unwrap_or_else(|e| e.into_inner()).clone())
+        .unwrap_or_default();
+
+    // Collect remote views in parallel; tolerate any failure.
+    let client = state.http_client.clone();
+    let remote_futures = crate::config::SEED_NODES.iter().map(|seed_url| {
+        let client = client.clone();
+        let url = format!("{}/peers/p2p", seed_url);
+        async move {
+            match client.get(&url).timeout(std::time::Duration::from_secs(2)).send().await {
+                Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+                    Ok(v) => v.get("peers").cloned().unwrap_or_default(),
+                    Err(_) => serde_json::Value::Null,
+                },
+                _ => serde_json::Value::Null,
+            }
+        }
+    });
+    let remote_results = futures::future::join_all(remote_futures).await;
+
+    // Merge by peer_id; later entries with `height` populated win over `null`.
+    let mut by_id: HashMap<String, serde_json::Value> = HashMap::new();
+    let key_of = |p: &serde_json::Value| -> Option<String> {
+        p.get("peer_id").and_then(|v| v.as_str()).map(String::from)
+    };
+    let merge = |existing: serde_json::Value, incoming: serde_json::Value| -> serde_json::Value {
+        // Pick the entry whose `height` is non-null, fallback to existing.
+        let inc_h = incoming.get("height").map(|v| !v.is_null()).unwrap_or(false);
+        let ex_h = existing.get("height").map(|v| !v.is_null()).unwrap_or(false);
+        match (inc_h, ex_h) {
+            (true, false) => incoming,
+            (false, true) => existing,
+            // Both have heights or both null — prefer the higher height (or
+            // existing on tie / both null).
+            _ => {
+                let inc = incoming.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
+                let ex = existing.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
+                if inc > ex { incoming } else { existing }
+            }
+        }
+    };
+
+    for p in local_peers.iter() {
+        let v = serde_json::to_value(p).unwrap_or(serde_json::Value::Null);
+        if let Some(k) = key_of(&v) {
+            by_id.entry(k).and_modify(|e| *e = merge(e.clone(), v.clone())).or_insert(v);
+        }
+    }
+    for remote in remote_results.into_iter() {
+        if let serde_json::Value::Array(peers) = remote {
+            for v in peers {
+                if let Some(k) = key_of(&v) {
+                    by_id.entry(k).and_modify(|e| *e = merge(e.clone(), v.clone())).or_insert(v);
+                }
+            }
+        }
+    }
+
+    // v2.7.4 — for each merged peer, compute `height_age_secs` from
+    // `height_updated_at` and null out the height if it is older than 30
+    // seconds. Without this, the explorer happily displays a P2P peer's
+    // last-seen height from minutes ago and reports it as "525 blocks
+    // behind" while the peer itself is actually fully synced. Setting
+    // height to null lets the existing `height == null` UI path render
+    // "P2P refreshing" / "Synced" instead of a misleading lag.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    const STALE_THRESHOLD_SECS: u64 = 30;
+    let mut merged: Vec<serde_json::Value> = by_id.into_values().collect();
+    for v in merged.iter_mut() {
+        if let Some(obj) = v.as_object_mut() {
+            let updated_at = obj
+                .get("height_updated_at")
+                .and_then(|x| x.as_u64());
+            let age = updated_at.map(|t| now_secs.saturating_sub(t));
+            if let Some(a) = age {
+                obj.insert("height_age_secs".into(), serde_json::json!(a));
+                if a > STALE_THRESHOLD_SECS {
+                    obj.insert("height".into(), serde_json::Value::Null);
+                }
+            } else {
+                // Never observed a height for this peer.
+                obj.insert("height_age_secs".into(), serde_json::Value::Null);
+                obj.insert("height".into(), serde_json::Value::Null);
+            }
+        }
+    }
+    Json(serde_json::json!({
+        "count": merged.len(),
+        "peers": merged,
+        "local_height": local_height,
+        "aggregated_from": crate::config::SEED_NODES.len() + 1,
+    }))
+}
+
 /// Aggregated network status for the explorer.
 /// Fetches real heights from all seed nodes via HTTP (server-side, no CORS issues).
 /// Returns P2P peers with raw heights (no faking). Computes statuses.
 async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    // v2.5.4 — microcache + parallel fetch. The previous revision sequentially
+    // polled each of the 5 seeds for `/tip` and `/node/info` (2s timeout each),
+    // giving a worst case of ~20 s per handler invocation under a flood. Those
+    // slow handlers accumulated CLOSE-WAIT sockets (the client side cuts its
+    // end but our handler is still stuck waiting on downstream I/O before it
+    // can drop the accepted socket) until seed3/seed4 ran out of file
+    // descriptors. Parallelizing turns 5×2 ≈ 20 s into max(2 s, 2 s) = 2 s,
+    // and the 3-second response cache makes the handler effectively O(1) under
+    // sustained polling (the explorer refreshes every 10 s per client).
+    {
+        let cache = state.network_status_cache.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref cached) = *cache {
+            if cached.expires_at > std::time::Instant::now() {
+                return Json(cached.body.clone());
+            }
+        }
+    }
+
     let local_tip = {
-        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let chain = state.blockchain.read().await;
         (chain.height(), hex::encode(chain.latest_hash()))
     };
     let tip_height = local_tip.0;
     let tip_hash = local_tip.1;
 
-    // Fetch real height from each seed node via HTTP (server-side, 2s timeout)
-    let client = &state.http_client;
-    let mut seeds = Vec::new();
+    // Fetch real height from each seed node via HTTP — in parallel, 1s timeout
+    let client = state.http_client.clone();
     let seed_names = ["nexus", "seed-1", "seed-2", "seed-3", "seed-4"];
-    for (i, seed_url) in crate::config::SEED_NODES.iter().enumerate() {
-        let name = seed_names.get(i).unwrap_or(&"seed");
-        let ip = seed_url.trim_start_matches("http://").split(':').next().unwrap_or("?");
-        let tip_url = format!("{}/tip", seed_url);
-        let info_url = format!("{}/node/info", seed_url);
-
-        let mut seed_info = serde_json::json!({
-            "name": name,
-            "ip": ip,
-            "height": null,
-            "version": null,
-            "online": false,
-            "status": "offline",
-            "lag": null,
-        });
-
-        // Try /tip first (lighter)
-        if let Ok(resp) = client.get(&tip_url)
-            .timeout(std::time::Duration::from_secs(2)).send().await {
-            if let Ok(data) = resp.json::<serde_json::Value>().await {
-                let h = data["height"].as_u64();
-                seed_info["height"] = serde_json::json!(h);
-                seed_info["online"] = serde_json::json!(true);
-                if let Some(h) = h {
-                    let lag = tip_height.saturating_sub(h);
-                    seed_info["lag"] = serde_json::json!(lag);
-                    seed_info["status"] = serde_json::json!(
-                        if lag <= 5 { "fresh" }
-                        else if lag <= 50 { "stale" }
-                        else { "behind" }
-                    );
+    let seed_futures = crate::config::SEED_NODES.iter().enumerate().map(|(i, seed_url)| {
+        let client = client.clone();
+        let name = seed_names.get(i).copied().unwrap_or("seed").to_string();
+        let seed_url = (*seed_url).to_string();
+        async move {
+            let ip = seed_url.trim_start_matches("http://").split(':').next().unwrap_or("?").to_string();
+            let tip_url = format!("{}/tip", seed_url);
+            let info_url = format!("{}/node/info", seed_url);
+            let mut seed_info = serde_json::json!({
+                "name": name,
+                "ip": ip,
+                "height": null,
+                "version": null,
+                "online": false,
+                "status": "offline",
+                "lag": null,
+            });
+            let tip_fut = client.get(&tip_url).timeout(std::time::Duration::from_secs(1)).send();
+            let info_fut = client.get(&info_url).timeout(std::time::Duration::from_secs(1)).send();
+            let (tip_res, info_res) = tokio::join!(tip_fut, info_fut);
+            if let Ok(resp) = tip_res {
+                if let Ok(data) = resp.json::<serde_json::Value>().await {
+                    let h = data["height"].as_u64();
+                    seed_info["height"] = serde_json::json!(h);
+                    seed_info["online"] = serde_json::json!(true);
+                    if let Some(h) = h {
+                        let lag = tip_height.saturating_sub(h);
+                        seed_info["lag"] = serde_json::json!(lag);
+                        seed_info["status"] = serde_json::json!(
+                            if lag <= 5 { "fresh" }
+                            else if lag <= 50 { "stale" }
+                            else { "behind" }
+                        );
+                    }
                 }
             }
-        }
-        // Try /node/info for version + peer_id
-        if seed_info["online"].as_bool() == Some(true) {
-            if let Ok(resp) = client.get(&info_url)
-                .timeout(std::time::Duration::from_secs(2)).send().await {
+            if let Ok(resp) = info_res {
                 if let Ok(data) = resp.json::<serde_json::Value>().await {
                     seed_info["version"] = data["version"].clone();
                     seed_info["peer_id"] = data["peer_id"].clone();
                 }
             }
+            seed_info
         }
-        seeds.push(seed_info);
-    }
+    });
+    let mut seeds: Vec<serde_json::Value> = futures::future::join_all(seed_futures).await;
 
     // Collect seed PeerIDs AND seed IPs for dedup against P2P list
     let seed_peer_ids: std::collections::HashSet<String> = seeds.iter()
@@ -1790,6 +2153,10 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
                 "lag": lag,
                 "status": status,
                 "height_age_secs": height_age_secs,
+                // v2.5.4 Bug #9 — expose the miner's stable pk_hash so the
+                // explorer can show the same name in the Network tile and
+                // in Recent Blocks (both derive from the same identifier).
+                "miner_pk_hash": p.miner_pk_hash,
             })
         }).collect()
     };
@@ -1829,13 +2196,20 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
             }
         }
     }
-    let (http_miners, http_relays): (Vec<serde_json::Value>, Vec<serde_json::Value>) = {
+    let (http_miners, http_relays, http_cortex): (Vec<serde_json::Value>, Vec<serde_json::Value>, Vec<serde_json::Value>) = {
         let info = state.peer_info.read().unwrap_or_else(|e| e.into_inner());
         let mut miners = Vec::new();
         let mut relays = Vec::new();
+        let mut cortex = Vec::new();
         for p in info.values() {
             if p2p_peer_ids_set.contains(&p.peer_id) { continue; }
             if now_secs.saturating_sub(p.last_seen) >= 120 { continue; }
+            // v2.5.2 — skip peers with unknown version. A "?" version means the
+            // peer either never sent X-TSN-Version or is on a pre-v2.3.6 protocol.
+            // Showing it in the explorer with `tsn/?/relay` is noise; once a
+            // proper tip broadcast with headers lands, the entry becomes usable
+            // and reappears naturally.
+            if p.version == "?" || p.version.is_empty() { continue; }
             let lag = tip_height.saturating_sub(p.height);
             let age = now_secs.saturating_sub(p.last_seen);
             let status = if age > 60 { "stale" }
@@ -1870,17 +2244,29 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
                         "source": "http",
                     }))
                 }
+                "cortex" => {
+                    cortex.push(serde_json::json!({
+                        "peer_id": p.peer_id,
+                        "height": p.height,
+                        "protocol": format!("tsn/{}/cortex", p.version),
+                        "lag": lag,
+                        "status": status,
+                        "height_age_secs": age,
+                        "source": "http",
+                    }))
+                }
                 _ => {}
             }
         }
-        (miners, relays)
+        (miners, relays, cortex)
     };
 
-    // Merge: P2P peers (libp2p) + HTTP miners + HTTP relays.
+    // Merge: P2P peers (libp2p) + HTTP miners + HTTP relays + HTTP cortex.
     // Frontend uses protocol string `tsn/<version>/<role>` to colour-code each.
     let mut all_peers = p2p_peers;
     all_peers.extend(http_miners);
     all_peers.extend(http_relays);
+    all_peers.extend(http_cortex);
 
     // v2.3.7 — consensus_height: median of online seed heights (plus local tip).
     // This is the stable canonical view of the network. Individual seeds oscillate
@@ -1918,14 +2304,23 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
     for s in seeds.iter_mut() { tag_solo_fork(s); }
     for p in all_peers.iter_mut() { tag_solo_fork(p); }
 
-    Json(serde_json::json!({
+    let body = serde_json::json!({
         "tip_height": tip_height,
         "tip_hash": tip_hash,
         "consensus_height": consensus_height,
         "quorum": quorum,
         "seeds": seeds,
         "peers": all_peers,
-    }))
+    });
+    // Store in 3s microcache so sustained polling stops pinning handlers.
+    {
+        let mut cache = state.network_status_cache.write().unwrap_or_else(|e| e.into_inner());
+        *cache = Some(NetworkStatusCache {
+            body: body.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3),
+        });
+    }
+    Json(body)
 }
 
 /// Returns detailed info about HTTP peers with stale cleanup (>5min offline removed).
@@ -1948,7 +2343,7 @@ async fn get_peers_detailed(State(state): State<Arc<AppState>>) -> Json<serde_js
         })).collect()
     };
 
-    let local_h = state.blockchain.read().unwrap().height();
+    let local_h = state.blockchain.read().await.height();
     Json(serde_json::json!({
         "local_height": local_h,
         "peers": peers,
@@ -2082,7 +2477,7 @@ async fn receive_transaction(
 
     // Validate transaction
     {
-        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let chain = state.blockchain.read().await;
         if let Some(params) = chain.verifying_params() {
             chain
                 .state()
@@ -2242,7 +2637,7 @@ async fn get_outputs_since(
     Path(since_height): Path<u64>,
     Query(params): Query<OutputsSinceParams>,
 ) -> Json<OutputsSinceResponse> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let current_height = chain.height();
     let commitment_root = hex::encode(chain.commitment_root());
     let end_height = match params.limit {
@@ -2420,7 +2815,7 @@ async fn check_nullifiers(
         &req.nullifiers
     };
 
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let nullifier_set = chain.state().nullifier_set();
 
     let mut spent = Vec::new();
@@ -2464,7 +2859,7 @@ async fn get_witness(
         .try_into()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let commitment_tree = chain.state().commitment_tree();
 
     // Find the position of this commitment in the tree
@@ -2500,7 +2895,7 @@ async fn get_witness_by_position(
     State(state): State<Arc<AppState>>,
     Path(position): Path<u64>,
 ) -> Result<Json<WitnessResponse>, StatusCode> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let commitment_tree = chain.state().commitment_tree();
 
     let _commitment = commitment_tree.get_commitment(position)
@@ -2520,63 +2915,78 @@ async fn get_witness_by_position(
 
 /// Response for V2 witness endpoint.
 /// Uses Poseidon/Goldilocks Merkle tree (quantum-resistant).
-#[derive(Serialize)]
-struct WitnessResponseV2 {
+#[derive(Clone, Serialize)]
+pub struct WitnessResponseV2 {
     /// The current V2 commitment tree root (hex).
-    root: String,
+    pub root: String,
     /// The Merkle path (sibling hashes from leaf to root, hex encoded).
-    path: Vec<String>,
+    pub path: Vec<String>,
     /// Path indices (0 = left, 1 = right).
-    indices: Vec<u8>,
+    pub indices: Vec<u8>,
     /// Position in the tree.
-    position: u64,
+    pub position: u64,
     /// The actual leaf commitment at this position (hex). For debugging.
     #[serde(skip_serializing_if = "Option::is_none")]
-    leaf: Option<String>,
+    pub leaf: Option<String>,
 }
 
 /// Get V2 witness by position (for quantum-resistant transactions).
 /// Uses Poseidon/Goldilocks Merkle tree instead of BN254.
+///
+/// v2.7.0 Phase 1.1 — A `lru::LruCache` keyed by `position` short-circuits
+/// the lookup when the cached entry was computed at the current tip height.
+/// On miss (or stale entry), the handler acquires `blockchain.read()` once,
+/// computes root + path + leaf, and stores the result. Cache invalidation is
+/// height-driven: any append to the commitment tree increments the chain
+/// height, which makes existing entries fail the `cached_height == current`
+/// check and forces a recompute. This keeps the cache correct even though
+/// internal Merkle siblings shift on every append.
 async fn get_witness_by_position_v2(
     State(state): State<Arc<AppState>>,
     Path(position): Path<u64>,
 ) -> Result<Json<WitnessResponseV2>, StatusCode> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    // O(1) read of the latest height — no lock contention.
+    let current_height = state.chain_info_cache.load().height;
+
+    // Fast path: cache hit at the current height.
+    {
+        let mut cache = state.witness_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_height, response)) = cache.get(&position) {
+            if *cached_height == current_height {
+                return Ok(Json(response.clone()));
+            }
+        }
+    }
+
+    // Miss or stale — compute under the read lock.
+    let chain = state.blockchain.read().await;
     let commitment_tree_pq = chain.state().commitment_tree_pq();
 
     let witness = commitment_tree_pq.witness(position)
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // Debug: Verify the path is internally consistent
-    // Get the commitment at this position from the tree's leaves
-    // Note: This requires accessing internal state, so we re-verify via path
-    let path_verifies = {
-        // We need to get the actual commitment bytes at this position
-        // For now, we'll trust the tree structure
-        // TODO: Add leaf access for verification
-        true
-    };
-
-    tracing::debug!(
-        "V2 witness for position {}: root={}, path_len={}, verifies={}",
-        position,
-        hex::encode(&witness.root),
-        witness.path.siblings.len(),
-        path_verifies
-    );
-
-    // Include the actual leaf commitment from the tree for debugging
     let leaf_hex = commitment_tree_pq.leaf_at(position)
         .map(|l| hex::encode(l))
         .unwrap_or_default();
 
-    Ok(Json(WitnessResponseV2 {
+    let response = WitnessResponseV2 {
         root: hex::encode(witness.root),
         path: witness.path.siblings.iter().map(|h| hex::encode(h)).collect(),
         indices: witness.path.indices.clone(),
         position: witness.position,
         leaf: Some(leaf_hex),
-    }))
+    };
+
+    // Drop the chain read lock before taking the cache mutex to keep both
+    // critical sections short.
+    drop(chain);
+
+    {
+        let mut cache = state.witness_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.put(position, (current_height, response.clone()));
+    }
+
+    Ok(Json(response))
 }
 
 /// Bulk leaf lookup: POST body = {"positions": [u64, ...]} → returns
@@ -2605,7 +3015,7 @@ async fn get_leaves_bulk(
     if req.positions.len() > MAX_BULK_POSITIONS {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let commitment_tree_pq = chain.state().commitment_tree_pq();
     let leaves: Vec<BulkLeafEntry> = req.positions.into_iter().map(|position| {
         BulkLeafEntry {
@@ -2704,7 +3114,7 @@ async fn debug_poseidon_pq_test() -> Json<serde_json::Value> {
 async fn debug_list_commitments(
     State(state): State<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let commitment_tree = chain.state().commitment_tree();
     let tree_size = commitment_tree.size();
 
@@ -2729,7 +3139,7 @@ async fn debug_list_commitments(
 async fn debug_merkle_pq(
     State(state): State<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let tree_pq = chain.state().commitment_tree_pq();
 
     let size = tree_pq.size();
@@ -2933,7 +3343,7 @@ async fn faucet_claim(
 
     // Get witnesses from blockchain state
     let witnesses: HashMap<u64, _> = {
-        let blockchain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let blockchain = state.blockchain.read().await;
         let shielded_state = blockchain.state();
         positions
             .iter()
@@ -3017,7 +3427,7 @@ async fn faucet_game_claim(
 
     // Get witnesses from blockchain state
     let witnesses: HashMap<u64, _> = {
-        let blockchain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let blockchain = state.blockchain.read().await;
         let shielded_state = blockchain.state();
         positions
             .iter()
@@ -3169,25 +3579,33 @@ async fn receive_tip(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    {
+    // v2.6.0 — split the dedup check from the chain read to keep the
+    // std::Mutex<LruCache> guard (!Send) out of scope while we .await the
+    // tokio blockchain RwLock. Holding a std guard across await makes the
+    // whole handler future !Send and axum rejects it.
+    let is_dup = {
         let mut cache = state.seen_tips.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(&seen_at) = cache.get(&tip_key) {
-            if now_secs.saturating_sub(seen_at) < TIP_DEDUP_SECS {
-                debug!("dedup: tip h={} hash={} already seen from {} ({}s ago)",
-                    req.height, hash16, peer_id(&peer_url), now_secs - seen_at);
-                let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
-                let local_height = chain.height();
-                let local_hash = hex::encode(chain.latest_hash());
-                drop(chain);
-                return Ok(Json(TipResponse {
-                    height: local_height,
-                    hash: local_hash,
-                    peer_count: state.sync_gate.peer_count(),
-                    network_tip_height: state.sync_gate.network_tip_height(),
-                }));
-            }
+        let is_dup = cache.get(&tip_key)
+            .map(|&seen_at| now_secs.saturating_sub(seen_at) < TIP_DEDUP_SECS)
+            .unwrap_or(false);
+        if !is_dup {
+            cache.put(tip_key, now_secs);
         }
-        cache.put(tip_key, now_secs);
+        is_dup
+    };
+    if is_dup {
+        debug!("dedup: tip h={} hash={} already seen from {} ({}s ago)",
+            req.height, hash16, peer_id(&peer_url), now_secs - now_secs);
+        let (local_height, local_hash) = {
+            let chain = state.blockchain.read().await;
+            (chain.height(), hex::encode(chain.latest_hash()))
+        };
+        return Ok(Json(TipResponse {
+            height: local_height,
+            hash: local_hash,
+            peer_count: state.sync_gate.peer_count(),
+            network_tip_height: state.sync_gate.network_tip_height(),
+        }));
     }
 
     // Use the hash as a pseudo peer-id (we don't have real peer IDs in HTTP mode)
@@ -3209,7 +3627,7 @@ async fn receive_tip(
     }
 
     // Return our own tip info
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let local_height = chain.height();
     let local_hash = hex::encode(chain.latest_hash());
     drop(chain);
@@ -3226,7 +3644,7 @@ async fn receive_tip(
 async fn get_tip(
     State(state): State<Arc<AppState>>,
 ) -> Json<TipResponse> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let local_height = chain.height();
     let local_hash = hex::encode(chain.latest_hash());
     drop(chain);
@@ -3261,7 +3679,7 @@ struct SnapshotInfoResponse {
 /// tip value — when the snapshot lagged the tip, the receiver adopted a wildly
 /// inflated cw and then rejected every further block with LESS_WORK.
 async fn snapshot_info(State(state): State<Arc<AppState>>) -> Json<SnapshotInfoResponse> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     match chain.export_snapshot() {
         Some((data, height, hash)) => {
             let snap_work = chain
@@ -3307,7 +3725,7 @@ async fn snapshot_download(
     // alone would keep serving the stale cache to fast-syncing peers, causing
     // them to land on an old height and trigger cascading wipes.
     const CACHE_STALE_GAP: u64 = 500;
-    let chain_height = state.blockchain.read().unwrap_or_else(|e| e.into_inner()).height();
+    let chain_height = state.blockchain.read().await.height();
     {
         let cache = state.snapshot_cache.read().await;
         if let Some(ref cached) = *cache {
@@ -3349,7 +3767,7 @@ async fn snapshot_download(
     // Cache miss — generate on the fly (first request or cache expired)
     // Isolate std::sync::RwLock access in a non-async block to keep future Send
     let (data, height, hash) = {
-        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let chain = state.blockchain.read().await;
         chain.export_snapshot()
             .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
     };
@@ -3626,13 +4044,17 @@ async fn contract_deploy(
         public_key,
     };
 
-    // Add to mempool
-    let mut mempool = state.mempool.write().unwrap_or_else(|e| e.into_inner());
-    mempool.add_contract_deploy(deploy_tx.clone());
-    drop(mempool);
+    // Add to mempool — inner scope so the std::sync::RwLockWriteGuard (!Send)
+    // is fully out of the future's live set before we .await the blockchain
+    // tokio lock. An explicit drop() would not be enough: the binding name
+    // still shows up in the Send analysis and makes the handler !Send.
+    {
+        let mut mempool = state.mempool.write().unwrap_or_else(|e| e.into_inner());
+        mempool.add_contract_deploy(deploy_tx.clone());
+    }
 
     // Execute immediately for the response (preview)
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let height = chain.height();
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3732,7 +4154,7 @@ async fn contract_query(
         (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e})))
     })?;
 
-    let _chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let _chain = state.blockchain.read().await;
     let _height = _chain.height();
     drop(_chain);
 
@@ -3862,8 +4284,7 @@ async fn admin_force_resync(
     }
     tracing::warn!("ADMIN: Force resync triggered via API from {}", remote_ip);
     log_node_error(&state, "admin_force_resync", &format!("Force resync triggered from {}", remote_ip));
-    let mut chain = state.blockchain.write()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Lock error: {}", e)))?;
+    let mut chain = state.blockchain.write().await;
     chain.reset_for_snapshot_resync();
     let mut bans = state.banned_peers.write().unwrap();
     bans.clear();
@@ -3986,9 +4407,12 @@ fn is_local_or_private(ip: std::net::IpAddr) -> bool {
 
 /// Helper: log an error to the telemetry error_log
 pub fn log_node_error(state: &AppState, error_type: &str, message: &str) {
-    let height = state.blockchain.read()
-        .map(|c| c.height())
-        .unwrap_or(0);
+    // v2.6.0 — blockchain is now a tokio::sync::RwLock which can't be
+    // blockingly read from sync code without risking a deadlock if the
+    // caller is inside a tokio worker. try_read() returns immediately;
+    // when the lock is held by a writer we just log height=0 rather than
+    // wait.
+    let height = state.blockchain.try_read().map(|c| c.height()).unwrap_or(0);
     let error = NodeError {
         error_type: error_type.to_string(),
         message: message.chars().take(200).collect(),
@@ -4070,7 +4494,7 @@ async fn snapshot_trigger_export(
     // 2. Cross-confirmation by 2+ independent seeds proves the height is canonical
     // 3. Post-import state_root verification proves the state is consistent
     let (data, height, block_hash, state_root, peer_id_str) = {
-        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let chain = state.blockchain.read().await;
         let tip = chain.height();
         let max_reorg = crate::config::MAX_REORG_DEPTH;
         if tip <= max_reorg + 100 {
@@ -4231,7 +4655,7 @@ async fn snapshot_confirm(
 
     // Check our chain at the requested height
     let (block_hash_match, state_root_match) = {
-        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let chain = state.blockchain.read().await;
         let local_hash = chain.get_hash_at_height(manifest.height)
             .map(|h| hex::encode(h));
         let bh_match = local_hash.as_deref() == Some(&manifest.block_hash);
@@ -4272,7 +4696,7 @@ async fn mining_metrics(
     State(state): State<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
     use std::sync::atomic::Ordering::Relaxed;
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     Json(serde_json::json!({
         "height": chain.height(),
         "empty_batches": state.metric_empty_batches.load(Relaxed),
@@ -4282,7 +4706,7 @@ async fn mining_metrics(
         "commitment_mismatches": state.metric_commitment_mismatches.load(Relaxed),
         "reorg_count": state.reorg_count.load(Relaxed),
         "orphan_count": state.orphan_count.load(Relaxed),
-        "relay_pool_balance": chain.relay_pool().balance,
+        "relay_pool_balance": chain.relay_pool().balance(),
         "relay_pool_last_payout_height": chain.relay_pool().last_payout_height,
     }))
 }
@@ -4298,7 +4722,7 @@ async fn mining_metrics(
 async fn mining_template(
     State(state): State<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let tip = chain.latest_hash();
     let height = chain.height() + 1;
     let difficulty = chain.next_difficulty();
@@ -4333,7 +4757,7 @@ async fn mining_submit(
 /// GET /relay/pool/status — live accumulator state + countdown to next payout.
 async fn relay_pool_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     use crate::consensus::relay_pool::PAYOUT_INTERVAL;
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let pool = chain.relay_pool();
     let current_height = chain.height();
     let total_paid = chain.state().relay_pool_total_paid();
@@ -4343,11 +4767,26 @@ async fn relay_pool_status(State(state): State<Arc<AppState>>) -> Json<serde_jso
     let next_payout_height = ((anchor / PAYOUT_INTERVAL) + 1) * PAYOUT_INTERVAL;
     let blocks_until = next_payout_height.saturating_sub(current_height);
     // Total collected over the chain's lifetime = pending + already paid.
-    let total_accumulated = pool.balance.saturating_add(total_paid);
+    let pool_balance = pool.balance();
+    let total_accumulated = pool_balance.saturating_add(total_paid);
     let divisor = 10f64.powi(crate::config::COIN_DECIMALS as i32);
+    // v2.5.3 — expose unallocated vs per-recipient split so the explorer and
+    // debug tooling can see where endorsements landed before the h%1000 drain.
+    let per_recipient: Vec<serde_json::Value> = pool
+        .per_recipient
+        .iter()
+        .map(|(pk, amt)| serde_json::json!({
+            "pk_hash": hex::encode(pk),
+            "amount_atomic": amt,
+            "amount_tsn": *amt as f64 / divisor,
+        }))
+        .collect();
     Json(serde_json::json!({
-        "balance_atomic": pool.balance,
-        "balance_tsn": pool.balance as f64 / divisor,
+        "balance_atomic": pool_balance,
+        "balance_tsn": pool_balance as f64 / divisor,
+        "unallocated_atomic": pool.unallocated,
+        "unallocated_tsn": pool.unallocated as f64 / divisor,
+        "per_recipient": per_recipient,
         "total_paid_atomic": total_paid,
         "total_paid_tsn": total_paid as f64 / divisor,
         "total_accumulated_atomic": total_accumulated,
@@ -4371,7 +4810,7 @@ async fn relay_balance_of(
     }
     let mut pk = [0u8; 32];
     pk.copy_from_slice(&bytes);
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
     let amount = chain.state().relay_balance_of(&pk);
     let divisor = 10f64.powi(crate::config::COIN_DECIMALS as i32);
     Ok(Json(serde_json::json!({
@@ -4390,10 +4829,39 @@ async fn relay_payouts_recent(
 ) -> Json<serde_json::Value> {
     use crate::consensus::relay_pool::PAYOUT_INTERVAL;
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
-    let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+    let chain = state.blockchain.read().await;
+
+    // v2.5.4 Bug #8 — prefer the in-state rolling history (populated by
+    // `apply_relay_payout` and preserved across fast-sync via the snapshot).
+    // This makes `/relay/payouts/recent` authoritative on every node,
+    // including fast-synced nodes that do not have the archival payout
+    // blocks stored locally. Falls back to the legacy block-walk when the
+    // history is empty (pre-v2.5.4 snapshots restored without it).
+    let history = chain.state().recent_payouts();
+    if !history.is_empty() {
+        // Iterate newest → oldest.
+        let payouts: Vec<serde_json::Value> = history
+            .iter()
+            .rev()
+            .take(limit as usize)
+            .map(|payout| {
+                serde_json::json!({
+                    "height": payout.height,
+                    "pool_total": payout.pool_total,
+                    "entries": payout.entries.iter().map(|e| serde_json::json!({
+                        "recipient": hex::encode(e.recipient),
+                        "amount": e.amount,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        return Json(serde_json::json!({ "payouts": payouts, "source": "state_history" }));
+    }
+
+    // Legacy path — walk backwards across payout boundaries. Still useful
+    // for pre-v2.5.4 nodes that have the blocks but no snapshot-restored
+    // history.
     let tip = chain.height();
-    // Walk backwards across payout boundaries only — much cheaper than
-    // scanning every block.
     let mut payouts = Vec::new();
     let mut boundary = (tip / PAYOUT_INTERVAL) * PAYOUT_INTERVAL;
     while payouts.len() < limit as usize && boundary > 0 {
@@ -4412,7 +4880,7 @@ async fn relay_payouts_recent(
         if boundary < PAYOUT_INTERVAL { break; }
         boundary -= PAYOUT_INTERVAL;
     }
-    Json(serde_json::json!({ "payouts": payouts }))
+    Json(serde_json::json!({ "payouts": payouts, "source": "block_walk" }))
 }
 
 // ============================================================================
@@ -4494,22 +4962,28 @@ async fn wallet_scan_api(
     };
     let scanned = ws.last_scanned_height().await;
     let chain_height = {
-        let chain = state.blockchain.read().unwrap();
+        let chain = state.blockchain.read().await;
         chain.height()
     };
 
+    // v2.5.4 — cap the batch at `MAX_SCAN_BATCH` blocks so a wallet that is
+    // thousands of blocks behind (fresh restore, long offline period) does not
+    // hold the axum handler for minutes. If the scan is incomplete, the
+    // response reports `complete: false` and the caller can poll the endpoint
+    // again to continue. This also prevents the CLOSE-WAIT pileup on peers
+    // that request `/wallet/scan` and give up before we finish.
+    const MAX_SCAN_BATCH: u64 = 500;
+    let target = chain_height.min(scanned + MAX_SCAN_BATCH);
+
     let mut new_notes = 0usize;
-    for h in (scanned + 1)..=chain_height {
+    for h in (scanned + 1)..=target {
         let block = {
-            let chain = state.blockchain.read().unwrap();
+            let chain = state.blockchain.read().await;
             chain.get_block_by_height(h)
         };
         if let Some(block) = block {
-            let tree_size = {
-                let chain = state.blockchain.read().unwrap();
-                chain.state().commitment_count() as u64
-            };
-            // Approximate start position (scan_block handles deduplication via UNIQUE constraint)
+            // `scan_block` dedupes via UNIQUE constraint on commitment, so a
+            // best-effort start position of 0 is safe.
             match ws.scan_block(&block, 0).await {
                 Ok(n) => new_notes += n,
                 Err(e) => {
@@ -4523,7 +4997,9 @@ async fn wallet_scan_api(
     Json(serde_json::json!({
         "new_notes": new_notes,
         "scanned_from": scanned + 1,
-        "scanned_to": chain_height,
+        "scanned_to": target,
+        "chain_height": chain_height,
+        "complete": target == chain_height,
     })).into_response()
 }
 
@@ -4541,4 +5017,76 @@ async fn wallet_rescan_api(
         "status": "ok",
         "message": "wallet cleared, scan from height 0",
     })).into_response()
+}
+
+// ============================================================================
+// v2.5.3 — relay pool endorsement endpoint
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct EndorseRequest {
+    /// Hex-encoded 32-byte block hash the caller wants this relay to sign.
+    header_hash: String,
+}
+
+/// POST /relay/endorse
+///
+/// A miner collects endorsements from known relays after finding a valid PoW.
+/// The relay signs the block hash with its ML-DSA-65 wallet key and returns
+/// `{ pub_key, signature }`. The miner verifies the signature locally, dedupes
+/// by pk_hash, and attaches up to `MAX_ENDORSEMENTS_PER_BLOCK` entries to the
+/// block before broadcasting.
+///
+/// Authorization: no ACL — any caller can ask for an endorsement. The relay's
+/// signature commits it to the given block hash; if the hash does not end up
+/// on the canonical chain, the endorsement is worthless but harmless. This
+/// makes the endpoint self-rate-limiting by the relay-pool economics.
+///
+/// Signing a hash is cheap (~1–2 ms ML-DSA-65) but still worth rate-limiting
+/// via the shared `rate_limit_layer` (200 rps burst 400) to prevent simple
+/// floods from starving the relay of CPU during normal mining.
+async fn relay_endorse_api(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<EndorseRequest>,
+) -> impl IntoResponse {
+    let Some(ref ws) = state.wallet_service else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no wallet configured — this node cannot endorse"})),
+        )
+            .into_response();
+    };
+
+    let bytes = match hex::decode(body.header_hash.trim()) {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "header_hash must be valid hex"})),
+            )
+                .into_response();
+        }
+    };
+    if bytes.len() != crate::core::BLOCK_HASH_SIZE {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!(
+                    "header_hash must be {} bytes, got {}",
+                    crate::core::BLOCK_HASH_SIZE,
+                    bytes.len()
+                )
+            })),
+        )
+            .into_response();
+    }
+
+    let pub_key = ws.public_key_bytes().await;
+    let signature = ws.sign_message(&bytes).await;
+
+    Json(serde_json::json!({
+        "pub_key":   hex::encode(&pub_key),
+        "signature": hex::encode(&signature),
+    }))
+    .into_response()
 }

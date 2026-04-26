@@ -1,6 +1,6 @@
 [package]
 name = "tsn"
-version = "2.5.0"
+version = "2.7.4"
 edition = "2021"
 description = "TSN (Trust Stack Network) - A privacy-preserving post-quantum cryptocurrency"
 license = "MIT"
@@ -60,12 +60,14 @@ bincode = "1"
 toml = "0.8"
 
 # Networking (HTTP API — kept for wallet, explorer, external tools)
-axum = "0.7"
+axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7"
 futures = "0.3"
-tower-http = { version = "0.5", features = ["cors", "fs", "limit"] }
+tower-http = { version = "0.5", features = ["cors", "fs", "limit", "timeout"] }
+socket2 = { version = "0.5", features = ["all"] }
+arc-swap = "1"
 tower_governor = "0.4"
 tower = "0.5"
 reqwest = { version = "0.12", features = ["json"] }

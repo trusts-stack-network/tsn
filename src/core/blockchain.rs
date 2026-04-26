@@ -155,7 +155,7 @@ impl ShieldedBlockchain {
             .get_height()
             .map_err(|e| BlockchainError::StorageError(e.to_string()))?;
 
-        if let Some(height) = stored_height {
+        if let Some(mut height) = stored_height {
             // WAL: check for interrupted reorg (crash during rollback)
             let reorg_flag = db.get_metadata("reorg_in_progress")
                 .ok().flatten().unwrap_or_default();
@@ -175,7 +175,7 @@ impl ShieldedBlockchain {
             tracing::info!("Loading blockchain from disk (height: {})", height);
 
             let mut blocks = LruCache::new(NonZeroUsize::new(1000).unwrap());
-            let height_index;
+            let mut height_index: Vec<[u8; 32]>;
             let mut state = ShieldedState::new();
 
             // Try to load state snapshot for fast startup
@@ -208,7 +208,7 @@ impl ShieldedBlockchain {
 
             // Determine starting height for replay
             let start_height = snapshot_height.map(|h| h + 1).unwrap_or(0);
-            let blocks_to_replay = height - start_height + 1;
+            let mut blocks_to_replay = height.saturating_sub(start_height) + 1;
 
             // SAFETY: if no snapshot exists but we have fast-sync placeholders,
             // replaying from height 0 will fail (placeholder blocks have no data).
@@ -266,6 +266,60 @@ impl ShieldedBlockchain {
                 tracing::info!("Height index loaded ({} entries)", height_index.len());
             }
 
+            // v2.5.1 — startup consistency check.
+            // Walk `height_index` and verify `get(block, height_index[h]).prev_hash
+            // == height_index[h-1]` for every h > fast_sync_base. If the invariant
+            // is broken, truncate to the last consistent height and let the node
+            // re-sync the missing tail from peers. This is the only way to
+            // survive the Frankenstein-chain bug pre-v2.5.1 reorgs could leave
+            // behind in `block_heights` (see reorganize_to_block for root cause).
+            // Skip over fast-sync placeholder ([0u8;32]) entries — they have no
+            // block data and can't be verified here.
+            let start_check = fast_sync_base_for_index.max(1);
+            let mut first_bad: Option<u64> = None;
+            let end_check = height_index.len() as u64;
+            for h in start_check..end_check {
+                let hash_h = match height_index.get(h as usize) {
+                    Some(h) if *h != [0u8; 32] => *h,
+                    _ => continue,
+                };
+                let hash_h_minus_1 = match height_index.get((h - 1) as usize) {
+                    Some(h) if *h != [0u8; 32] => *h,
+                    _ => continue,
+                };
+                // Load the block at height h and check its prev_hash.
+                if let Ok(Some(block)) = db.load_block(&hash_h) {
+                    if block.header.prev_hash != hash_h_minus_1 {
+                        tracing::error!(
+                            "STARTUP CONSISTENCY CHECK FAILED at height {}: \
+                             block prev_hash {} != height_index[{}] {}. \
+                             Truncating chain to last consistent height {} for re-sync.",
+                            h, hex::encode(&block.header.prev_hash[..8]),
+                            h - 1, hex::encode(&hash_h_minus_1[..8]),
+                            h - 1
+                        );
+                        first_bad = Some(h);
+                        break;
+                    }
+                }
+            }
+            if let Some(bad_h) = first_bad {
+                // Truncate in-memory index + remove the bad tail from DB
+                // so the node can re-sync it cleanly on startup.
+                height_index.truncate(bad_h as usize);
+                let _ = db.remove_blocks_from(bad_h);
+                let new_h = height_index.len().saturating_sub(1) as u64;
+                let _ = db.set_metadata("height", &new_h.to_string());
+                // Update local bindings so the replay loop doesn't walk past
+                // the truncated tail.
+                height = new_h;
+                blocks_to_replay = if new_h >= start_height {
+                    new_h - start_height + 1
+                } else {
+                    0
+                };
+            }
+
             // Replay blocks from snapshot to current height to rebuild state
             // With snapshots every 10 blocks, this replays at most ~9 blocks
             if blocks_to_replay > 0 && start_height <= height {
@@ -308,7 +362,7 @@ impl ShieldedBlockchain {
                     state.apply_coinbase(&block.coinbase);
                     // v2.4.2 fix — mirror insert_block_internal exactly so
                     // the replayed state matches live apply results (Phase 5).
-                    state.accumulate_relay_pool(
+                    state.accumulate_relay_pool_from_block(&block,
                         crate::config::relay_pool(block.coinbase.reward),
                     );
                     if let Some(ref payout) = block.relay_payout {
@@ -839,6 +893,13 @@ impl ShieldedBlockchain {
         // The DB snapshot is updated every 10 blocks and can be much newer than fast_sync_base.
         // Using fast_sync_base caused blocks between fast_sync_base and snap_height to be
         // applied TWICE, doubling commitment tree entries and corrupting the root.
+        //
+        // v2.5.6 GUARD — Never replay from genesis on a fast-synced node.
+        // If the node was bootstrapped from a fast-sync snapshot, blocks below
+        // fast_sync_base_height are NOT on disk. Replaying from genesis would
+        // produce a tree with only the recent tail of blocks — a silently
+        // corrupted state. Refuse the rollback and halt with a clear message
+        // pointing to the GitHub signed snapshot releases. Incident 2026-04-24.
         let (mut new_state, replay_from) =
             if self.fast_sync_base_height > 0 && target_height >= self.fast_sync_base_height {
                 let snapshot_state = if let Some(ref db) = self.db {
@@ -849,10 +910,11 @@ impl ShieldedBlockchain {
                                 s.restore_pq_from_snapshot(snapshot);
                                 Some((s, snap_height))
                             } else {
-                                // Snapshot is NEWER than rollback target — can't use it
-                                tracing::warn!(
-                                    "Rollback: DB snapshot at height {} > target {}, replaying from genesis",
-                                    snap_height, target_height
+                                tracing::error!(
+                                    "Rollback BLOCKED: DB snapshot at height {} > target {}, \
+                                     and node is fast-synced (base={}). Replaying from genesis \
+                                     would corrupt the commitment tree. Node will halt rollback.",
+                                    snap_height, target_height, self.fast_sync_base_height
                                 );
                                 None
                             }
@@ -872,8 +934,75 @@ impl ShieldedBlockchain {
                     );
                     (state, snap_height + 1)
                 } else {
-                    tracing::warn!("Rollback: no usable snapshot, replaying from genesis");
-                    (ShieldedState::new(), 0)
+                    // v2.6.3 — fallback to the immutable fast-sync base state
+                    // before refusing. The rolling snapshot can be too new for
+                    // a target between fast_sync_base and the rolling snapshot
+                    // height; in that window the base state plus a long replay
+                    // is the only deterministic recovery path. This avoids the
+                    // operational deadlock observed on 2026-04-25 where seeds
+                    // sat stuck for minutes waiting for a manual restart to
+                    // self-heal from a GitHub snapshot.
+                    let base_state = self.db.as_ref().and_then(|db| {
+                        match db.load_fast_sync_base_state() {
+                            Ok(Some((snap, base_h))) if base_h <= target_height => {
+                                let mut s = ShieldedState::new();
+                                s.restore_pq_from_snapshot(snap);
+                                Some((s, base_h))
+                            }
+                            Ok(Some((_, base_h))) => {
+                                tracing::warn!(
+                                    "Rollback fallback: fast_sync_base_state at {} > target {}, no fallback available",
+                                    base_h, target_height
+                                );
+                                None
+                            }
+                            Ok(None) => {
+                                tracing::warn!(
+                                    "Rollback fallback: no fast_sync_base_state recorded \
+                                     (node may have started before v2.6.3)"
+                                );
+                                None
+                            }
+                            Err(e) => {
+                                tracing::warn!("Rollback fallback: load_fast_sync_base_state failed: {}", e);
+                                None
+                            }
+                        }
+                    });
+                    if let Some((state, base_h)) = base_state {
+                        tracing::warn!(
+                            "Rollback: using fast_sync_base_state at height {} (rolling snapshot \
+                             too new for target {}), replaying {} blocks",
+                            base_h, target_height, target_height.saturating_sub(base_h)
+                        );
+                        (state, base_h + 1)
+                    } else {
+                        tracing::error!(
+                            "CRITICAL: Rollback refused. No usable snapshot at height ≤ {} \
+                             and no fast_sync_base_state fallback (fast_sync_base={}). Older \
+                             blocks are pruned. Replaying from genesis would silently destroy \
+                             the commitment tree. v2.6.0 auto-restore marker written — next \
+                             node startup will self-heal by fetching the latest signed snapshot \
+                             from github.com/trusts-stack-network/tsn-snapshots. Restart the \
+                             node to trigger recovery.",
+                            target_height, self.fast_sync_base_height
+                        );
+                        if let Some(ref db) = self.db {
+                            let _ = db.set_metadata("reorg_in_progress", "");
+                            if let Some(dd) = db.data_dir() {
+                                let reason = format!(
+                                    "rollback refused at target={} fast_sync_base={}",
+                                    target_height, self.fast_sync_base_height
+                                );
+                                crate::network::snapshot_auto_fetch::set_marker(dd, &reason);
+                            }
+                        }
+                        return Err(BlockchainError::StorageError(format!(
+                            "Rollback to {} refused: no snapshot ≤ {} and fast_sync_base={} pruned older blocks. \
+                             Auto-restore marker written; restart the node to self-heal.",
+                            target_height, target_height, self.fast_sync_base_height
+                        )));
+                    }
                 }
             } else {
                 (ShieldedState::new(), 0)
@@ -899,7 +1028,7 @@ impl ShieldedBlockchain {
                     for tx in &block.transactions { new_state.apply_transaction(tx); }
                     for tx in &block.transactions_v2 { new_state.apply_transaction_v2(tx); }
                     new_state.apply_coinbase(&block.coinbase);
-                    new_state.accumulate_relay_pool(
+                    new_state.accumulate_relay_pool_from_block(&block,
                         crate::config::relay_pool(block.coinbase.reward),
                     );
                     if let Some(ref payout) = block.relay_payout {
@@ -1032,7 +1161,14 @@ impl ShieldedBlockchain {
     /// fix survives a restart. Data above `fast_sync_base_height` is dropped
     /// because it is already represented by locally-stored blocks.
     pub fn set_pre_snapshot_lwma(&mut self, mut data: Vec<(u64, u64, u64)>) {
-        data.retain(|(h, _, _)| *h < self.fast_sync_base_height);
+        // v2.5.2 — keep h == fast_sync_base_height (the snapshot tip). Previously
+        // this was strictly `< fast_sync_base_height`, which dropped the tip
+        // entry and forced next_difficulty() to fall back to `self.difficulty`
+        // for any lookup_at(fast_sync_base). That mismatch between the peer's
+        // live LWMA and the receiver's stale fallback caused "Invalid
+        // difficulty" rejection loops post-fast-sync (observed on Cortex h=1651
+        // → 1652 with peer diff 3.2M vs receiver expected 2.75M, ratio 1.17).
+        data.retain(|(h, _, _)| *h <= self.fast_sync_base_height);
         data.sort_by_key(|(h, _, _)| *h);
         data.dedup_by_key(|(h, _, _)| *h);
         self.pre_snapshot_lwma = data;
@@ -1159,6 +1295,48 @@ impl ShieldedBlockchain {
     /// If assume-valid is enabled and the block height is at or below the
     /// assume-valid checkpoint, ZK proof verification is skipped. Block structure,
     /// proof-of-work, and state transitions are still fully validated.
+    /// v2.5.3 — validate the endorsement set attached to a block.
+    ///
+    /// Rules enforced:
+    ///   1. At most `MAX_ENDORSEMENTS_PER_BLOCK` entries.
+    ///   2. Each entry's ML-DSA-65 signature verifies against `block.hash()`.
+    ///   3. pk_hashes are unique within the set (no self-double-counting).
+    ///
+    /// This must be called on every peer-received block before it is counted
+    /// toward the relay pool. `add_block_trusted` (used in fast-sync) skips
+    /// this because those blocks are already finalized deep in the chain and
+    /// their endorsements have already shaped prior payouts; re-checking adds
+    /// latency without catching anything.
+    pub fn validate_endorsements(block: &ShieldedBlock) -> Result<(), BlockchainError> {
+        use crate::core::MAX_ENDORSEMENTS_PER_BLOCK;
+        if block.endorsements.len() > MAX_ENDORSEMENTS_PER_BLOCK {
+            return Err(BlockchainError::InvalidTransaction(format!(
+                "too many endorsements: {} > {}",
+                block.endorsements.len(),
+                MAX_ENDORSEMENTS_PER_BLOCK
+            )));
+        }
+        if block.endorsements.is_empty() {
+            return Ok(());
+        }
+        let block_hash = block.hash();
+        let mut seen: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+        for end in &block.endorsements {
+            if !end.verify(&block_hash) {
+                return Err(BlockchainError::InvalidTransaction(
+                    "endorsement signature failed to verify".into(),
+                ));
+            }
+            let pkh = end.pk_hash();
+            if !seen.insert(pkh) {
+                return Err(BlockchainError::InvalidTransaction(
+                    "duplicate endorsement pk_hash".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate_block(&self, block: &ShieldedBlock) -> Result<(), BlockchainError> {
         // Check previous hash
         if block.header.prev_hash != self.latest_hash() {
@@ -1182,6 +1360,13 @@ impl ShieldedBlockchain {
 
         // Check block structure and proof-of-work
         block.verify().map_err(BlockchainError::BlockError)?;
+
+        // v2.5.3 — validate relay endorsements attached to this block.
+        // Endorsements are NOT part of the PoW hash, so they must be
+        // checked here to prevent a miner (or a peer relaying the block)
+        // from stuffing bogus signatures that would later show up in
+        // relay-pool payouts. Cheap checks (count + dedup) come first.
+        Self::validate_endorsements(block)?;
 
         // Check difficulty
         let expected_difficulty = self.next_difficulty();
@@ -1225,8 +1410,17 @@ impl ShieldedBlockchain {
                 //   After LWMA_WINDOW*2: ±10% (normal tolerance)
                 // Always require >= MIN_DIFFICULTY regardless.
                 let blocks_since_sync = self.height().saturating_sub(self.fast_sync_base_height);
+                // v2.5.4 Bug #11 — when the snapshot source itself fast-synced
+                // (so it only holds a handful of headers pre-snapshot), our
+                // `pre_snapshot_lwma` vec is shorter than `LWMA_WINDOW` and
+                // `next_difficulty()` falls back to stale data. Widen the
+                // acceptance window to ±75% during the first window in that
+                // case so the freshly fast-synced node is not stuck rejecting
+                // every peer block (observed on the cortex: "ratio=1.74,
+                // tolerance=50%-150%" → Invalid difficulty loop).
+                let lwma_short = self.pre_snapshot_lwma.len() < LWMA_WINDOW as usize;
                 let (tolerance_low, tolerance_high) = if blocks_since_sync <= LWMA_WINDOW {
-                    (0.50, 1.50) // ±50% during first window
+                    if lwma_short { (0.25, 4.0) } else { (0.50, 1.50) }
                 } else if blocks_since_sync <= LWMA_WINDOW * 2 {
                     (0.75, 1.25) // ±25% during second window
                 } else {
@@ -1523,7 +1717,7 @@ impl ShieldedBlockchain {
         // the up-to-date balance to drain. The pool now lives in state so
         // this is consensus-binding: every node (including fast-synced ones
         // restoring from a snapshot) sees the same accumulator.
-        self.state.accumulate_relay_pool(
+        self.state.accumulate_relay_pool_from_block(&block,
             crate::config::relay_pool(block.coinbase.reward),
         );
 
@@ -2271,7 +2465,7 @@ impl ShieldedBlockchain {
                     // v2.4.2 fix — Phase 5 steps must run during full-chain
                     // replay (alt-chain reorg) so state_root matches the
                     // header of the winning chain.
-                    new_state.accumulate_relay_pool(
+                    new_state.accumulate_relay_pool_from_block(&block,
                         crate::config::relay_pool(block.coinbase.reward),
                     );
                     if let Some(ref payout) = block.relay_payout {
@@ -2283,7 +2477,17 @@ impl ShieldedBlockchain {
                     // Store per-block work in DB
                     if let Some(ref db) = self.db {
                         let _ = db.save_cumulative_work(i as u64, running_work);
+                        // v2.5.1 — persist the new-chain block directly here,
+                        // same reason as in the partial-reorg path: prevents
+                        // block_heights from retaining stale entries after
+                        // LRU clear. See detailed comment in the other branch.
+                        let _ = db.save_block(block, i as u64);
                     }
+                }
+                // v2.5.1 — clear any block_heights entries above the new tip.
+                if let Some(ref db) = self.db {
+                    let new_tip_h = new_height_index.len() as u64 - 1;
+                    let _ = db.remove_blocks_from(new_tip_h + 1);
                 }
 
                 self.blocks.put(new_tip.hash(), new_tip);
@@ -2360,7 +2564,7 @@ impl ShieldedBlockchain {
             self.state.apply_coinbase(&block.coinbase);
             // v2.4.2 fix — Phase 5 steps must run during fork-apply so the
             // state_root of the new tip matches the block header.
-            self.state.accumulate_relay_pool(
+            self.state.accumulate_relay_pool_from_block(&block,
                 crate::config::relay_pool(block.coinbase.reward),
             );
             if let Some(ref payout) = block.relay_payout {
@@ -2372,7 +2576,27 @@ impl ShieldedBlockchain {
             let fork_h = new_height_index.len() as u64 - 1;
             if let Some(ref db) = self.db {
                 let _ = db.save_cumulative_work(fork_h, running_work);
+                // v2.5.1 — persist the new-chain blocks to DB while we still
+                // hold them in `fork_blocks`. Without this, the subsequent
+                // LRU clear evicts intermediate fork blocks from RAM, and
+                // `persist_reorg()` silently skips them (`get_block` returns
+                // None), leaving block_heights[fork_h] pointing at the OLD
+                // chain. At restart, load_all_block_hashes rebuilds
+                // height_index from block_heights — producing a Frankenstein
+                // chain where h=N and h=N-1 come from different forks.
+                // That's the root cause of the "prev_hash mismatch" seeds
+                // have been hitting at h=24 in testnet-v9.
+                let _ = db.save_block(block, fork_h);
             }
+        }
+
+        // v2.5.1 — remove block_heights entries strictly above the new tip.
+        // Reorgs can shorten the chain (heavier but shorter). Without this,
+        // block_heights keeps ghost entries from the abandoned tail, which
+        // reappear as height_index entries on restart.
+        if let Some(ref db) = self.db {
+            let new_tip_h = new_height_index.len() as u64 - 1;
+            let _ = db.remove_blocks_from(new_tip_h + 1);
         }
 
         // v1.8.0: Purge LRU before storing new tip — old fork blocks must not
@@ -2595,15 +2819,18 @@ impl ShieldedBlockchain {
         // otherwise we'd miss the freshly-added 3% slice when the boundary
         // block itself triggers a payout.
         let payout_opt = if temp_state.relay_pool().is_payout_due(new_height) {
-            let pool_total = temp_state.relay_pool().balance;
-            let entries = if pool_total == 0 {
-                Vec::new()
-            } else {
-                vec![crate::consensus::relay_pool::PayoutEntry {
-                    recipient: crate::config::DEV_TREASURY_PK_HASH,
-                    amount: pool_total,
-                }]
-            };
+            // v2.5.3 — build payout from per-recipient accumulator. Applies
+            // the 30% cap per relay and pushes any overflow plus unallocated
+            // slice (blocks mined with zero endorsements, division residues)
+            // to DEV_TREASURY. Deterministic ordering via BTreeMap.
+            let payout_v2 = temp_state.relay_pool().build_payout_v2(
+                new_height,
+                crate::config::DEV_TREASURY_PK_HASH,
+            );
+            // Kept for reference in the log below.
+            let pool_total = payout_v2.pool_total;
+            let entries = payout_v2.entries;
+            let _ = pool_total; // silence unused when no log site below references it
             Some(crate::consensus::relay_pool::RelayPayout {
                 height: new_height,
                 pool_total,
@@ -2879,6 +3106,14 @@ impl ShieldedBlockchain {
             if let Err(e) = db.save_state_snapshot(&snapshot, height) {
                 tracing::warn!("Failed to save imported snapshot: {}", e);
             }
+            // v2.6.3 — also save as immutable fast-sync base state. The rolling
+            // `save_state_snapshot` will be overwritten as the node advances;
+            // this copy is never overwritten and serves as the fallback for
+            // deep reorgs whose target sits above fast_sync_base but below
+            // the latest rolling snapshot.
+            if let Err(e) = db.save_fast_sync_base_state(&snapshot, height) {
+                tracing::warn!("Failed to save fast_sync_base_state: {}", e);
+            }
             // Store exact cumulative_work in per-height tree (source of truth for insert_block_internal)
             let _ = db.save_cumulative_work(height, self.cumulative_work);
             let _ = db.set_metadata("height", &height.to_string());
@@ -3063,7 +3298,7 @@ mod tests {
         // recompute state_root exactly the way `insert_block_internal` does.
         let mut validator_state = miner_chain.state().clone();
         validator_state.apply_coinbase(&template.coinbase);
-        validator_state.accumulate_relay_pool(
+        validator_state.accumulate_relay_pool_from_block(&template,
             crate::config::relay_pool(template.coinbase.reward),
         );
         if let Some(ref payout) = template.relay_payout {
@@ -3276,6 +3511,109 @@ mod tests {
             assert_eq!(chain.height(), height_before);
             assert_eq!(chain.cumulative_work(), work_before,
                 "cumulative_work must be identical after restart");
+        }
+    }
+
+    // ========== v2.5.3 endorsement validation ==========
+
+    fn make_test_block() -> ShieldedBlock {
+        let vk = test_viewing_key();
+        let pk_hash = test_pk_hash();
+        let coinbase = ShieldedBlockchain::create_genesis_coinbase(pk_hash, &vk);
+        let chain = ShieldedBlockchain::new(MIN_DIFFICULTY, coinbase);
+        chain.create_block_template(pk_hash, &vk, vec![])
+    }
+
+    fn sign_block_with_new_keypair(block: &ShieldedBlock) -> crate::core::Endorsement {
+        let kp = crate::crypto::keys::KeyPair::generate();
+        let block_hash = block.hash();
+        let signature = crate::crypto::signature::sign(&block_hash, &kp);
+        crate::core::Endorsement {
+            pub_key: kp.public_key_bytes().to_vec(),
+            signature: signature.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn validate_endorsements_empty_is_ok() {
+        let block = make_test_block();
+        assert!(ShieldedBlockchain::validate_endorsements(&block).is_ok());
+    }
+
+    #[test]
+    fn validate_endorsements_rejects_over_cap() {
+        use crate::core::MAX_ENDORSEMENTS_PER_BLOCK;
+        let mut block = make_test_block();
+        let mut ends = Vec::new();
+        for _ in 0..(MAX_ENDORSEMENTS_PER_BLOCK + 1) {
+            ends.push(sign_block_with_new_keypair(&block));
+        }
+        block.endorsements = ends;
+        let err = ShieldedBlockchain::validate_endorsements(&block).unwrap_err();
+        match err {
+            BlockchainError::InvalidTransaction(msg) => {
+                assert!(msg.contains("too many endorsements"), "got: {}", msg);
+            }
+            other => panic!("expected InvalidTransaction, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_endorsements_accepts_valid_signatures() {
+        let mut block = make_test_block();
+        let e1 = sign_block_with_new_keypair(&block);
+        let e2 = sign_block_with_new_keypair(&block);
+        block.endorsements = vec![e1, e2];
+        assert!(ShieldedBlockchain::validate_endorsements(&block).is_ok());
+    }
+
+    #[test]
+    fn validate_endorsements_rejects_bad_signature() {
+        let mut block = make_test_block();
+        let mut e = sign_block_with_new_keypair(&block);
+        e.signature[0] ^= 0xFF;
+        block.endorsements = vec![e];
+        let err = ShieldedBlockchain::validate_endorsements(&block).unwrap_err();
+        match err {
+            BlockchainError::InvalidTransaction(msg) => {
+                assert!(msg.contains("failed to verify"), "got: {}", msg);
+            }
+            other => panic!("expected InvalidTransaction, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_endorsements_rejects_duplicate_pk_hash() {
+        let mut block = make_test_block();
+        let e = sign_block_with_new_keypair(&block);
+        block.endorsements = vec![e.clone(), e];
+        let err = ShieldedBlockchain::validate_endorsements(&block).unwrap_err();
+        match err {
+            BlockchainError::InvalidTransaction(msg) => {
+                assert!(msg.contains("duplicate"), "got: {}", msg);
+            }
+            other => panic!("expected InvalidTransaction, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_endorsements_rejects_wrong_message() {
+        let vk = test_viewing_key();
+        let pk_hash = test_pk_hash();
+        let coinbase = ShieldedBlockchain::create_genesis_coinbase(pk_hash, &vk);
+        let chain = ShieldedBlockchain::new(MIN_DIFFICULTY, coinbase);
+        let mut other_block = chain.create_block_template(pk_hash, &vk, vec![]);
+        other_block.header.timestamp = other_block.header.timestamp.wrapping_add(999);
+
+        let e = sign_block_with_new_keypair(&other_block);
+        let mut block = make_test_block();
+        block.endorsements = vec![e];
+        let err = ShieldedBlockchain::validate_endorsements(&block).unwrap_err();
+        match err {
+            BlockchainError::InvalidTransaction(msg) => {
+                assert!(msg.contains("failed to verify"), "got: {}", msg);
+            }
+            other => panic!("expected InvalidTransaction, got {:?}", other),
         }
     }
 }

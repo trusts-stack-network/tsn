@@ -63,7 +63,7 @@ pub fn is_ip_whitelisted(ip: &str) -> bool {
 }
 
 /// Network name for identification
-pub const NETWORK_NAME: &str = "tsn-testnet-v9";
+pub const NETWORK_NAME: &str = "tsn-testnet-v12";
 
 /// Hardcoded checkpoints for fast-sync verification.
 /// After downloading blocks in trusted mode, the node verifies that these
@@ -260,9 +260,13 @@ pub const MAX_REORG_DEPTH: u64 = 100;
 
 /// Interval between automatic signed snapshot exports (in blocks).
 /// A snapshot is triggered when a new multiple of this interval becomes finalized
-/// (i.e. tip >= multiple + MAX_REORG_DEPTH). With 10s blocks, 1000 blocks ~ 2.7 hours,
-/// producing roughly 8-10 snapshots per day.
-pub const SNAPSHOT_MANIFEST_INTERVAL: u64 = 1000;
+/// (i.e. tip >= multiple + MAX_REORG_DEPTH). With 10s blocks, 500 blocs ~ 1.4h,
+/// producing roughly 16-20 snapshots per day.
+///
+/// v2.5.6: reduced from 1000 → 500 after the 2026-04-24 rollback incident. A user
+/// who loses coins because the nearest recoverable snapshot is 1000 blocks behind
+/// is unacceptable on mainnet; 500 caps the worst-case recovery gap.
+pub const SNAPSHOT_MANIFEST_INTERVAL: u64 = 500;
 
 /// Hardcoded checkpoints — blocks that MUST be in the canonical chain.
 /// Any chain that doesn't include these exact hashes at these heights is rejected.
@@ -305,7 +309,11 @@ pub const HARDCODED_CHECKPOINTS: &[(u64, &str)] = &[];
 /// v2.2.0: New genesis for testnet-v4 reset (wallet rewrite, April 16, 2026).
 /// Previous value: "" (testnet-v3, unlocked)
 /// v2.3.5: New genesis for testnet-v5 reset (chain fork recovery, April 19, 2026).
-/// Previous value: "bf18bbaad9d19045abb926425f652dffb84a9bf010a9555cd863d7b1e08ca539"
-/// Deterministic hash computed from (NETWORK_NAME, GENESIS_DIFFICULTY, BLOCK_REWARD).
-/// See `print_genesis_hash` test in `src/main.rs` to recompute after any bump.
-pub const EXPECTED_GENESIS_HASH: &str = "9a700269f2624e9b8a64e1257f7962945cafd35bb75c4bca878f4262032440be";
+/// v2.6.0: New genesis for testnet-v12 reset (April 24, 2026 — clean restart after
+/// a day of cascading forks from stuck rollback-guard nodes).
+/// Previous value (testnet-v11): "d387692f5be4c655b79cd8c14e9cd6d83957805c056166de4e68e12db41e3aaf"
+/// Empty string disables the genesis-hash check at startup, so existing v11 nodes
+/// auto-wipe on first v2.6.0 boot via the NETWORK_NAME mismatch path in
+/// main.rs::v2.3.5 auto-wipe. Will be pinned once the v12 genesis is produced by
+/// a majority of seeds (see `print_genesis_hash` test in src/main.rs).
+pub const EXPECTED_GENESIS_HASH: &str = "";

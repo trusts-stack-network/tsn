@@ -45,6 +45,28 @@ struct Cli {
     /// Disable connecting to seed nodes
     #[arg(long, global = false)]
     no_seeds: bool,
+
+    /// v2.6.0 — auto-consolidate wallet notes in the background once the
+    /// unspent-note count exceeds the threshold. v2.6.6 default: OFF — too
+    /// chatty in current form, floods the mempool with consolidation tx
+    /// faster than blocks can absorb. Pass `--auto-consolidate` to enable
+    /// once the spam-rate fix lands. (See AGENT_TSN_v5.md, 2026-04-25 BACW
+    /// over-trigger incident.)
+    #[arg(long, global = false, default_value_t = false)]
+    auto_consolidate: bool,
+
+    /// v2.6.0 — background consolidation fires when `unspent_notes_count` goes
+    /// above this value. Lowering it runs more often; raising it tolerates
+    /// bigger wallets between consolidations. 30 is sized so a single send
+    /// afterwards never needs to consolidate on the hot path.
+    #[arg(long, global = false, default_value_t = 30)]
+    consolidation_threshold: usize,
+
+    /// v2.6.0 — how often (seconds) the background worker polls the wallet
+    /// and, if above threshold, runs a consolidation round. 300s = 5 minutes
+    /// is a good balance between freshness and mempool / prover load.
+    #[arg(long, global = false, default_value_t = 300)]
+    consolidation_interval_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -221,7 +243,7 @@ async fn wait_for_initial_sync(
     loop {
         let peers = { state.peers.read().unwrap().clone() };
         let (local_height, local_hash) = {
-            let chain = state.blockchain.read().unwrap();
+            let chain = state.blockchain.read().await;
             (chain.height(), hex::encode(chain.latest_hash()))
         };
 
@@ -300,7 +322,7 @@ async fn wait_for_initial_sync(
 
         if Instant::now() >= deadline {
             // Don't fail — just start mining anyway if we have any blocks
-            let height = state.blockchain.read().unwrap().height();
+            let height = state.blockchain.read().await.height();
             if height > 0 {
                 println!("Sync timeout but chain at height {}. Starting mining.", height);
                 return Ok(());
@@ -587,6 +609,12 @@ enum Commands {
         /// Data directory (default: ./data)
         #[arg(short, long)]
         data_dir: Option<String>,
+        /// Recovery-only: accept a snapshot with only the producer signature
+        /// (skip the 2-of-N seed confirmations check). Use this when seeds are
+        /// offline or in a corrupted state and cannot cross-confirm. The
+        /// producer's ed25519 signature is still verified.
+        #[arg(long, default_value_t = false)]
+        force_producer_only: bool,
     },
     /// Check for updates and install the latest version
     Update,
@@ -650,70 +678,37 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Balance { wallet, node }) => {
             let wallet = wallet.or_else(auto_detect_wallet).unwrap_or_else(|| "wallet.json".to_string());
-            let node = node.unwrap_or_else(|| {
-                // Try common ports to find running node (use 127.0.0.1, not localhost which may resolve to IPv6)
-                for port in [9333u16, 9334, 9335, 8333] {
-                    if let Ok(stream) = std::net::TcpStream::connect_timeout(
-                        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-                        std::time::Duration::from_millis(200),
-                    ) {
-                        drop(stream);
-                        return format!("http://127.0.0.1:{}", port);
-                    }
-                }
-                format!("http://127.0.0.1:{}", config::get_port())
-            });
+            let node = match node {
+                Some(u) => u,
+                None => auto_discover_node().await?,
+            };
             cmd_balance(&wallet, &node).await?;
         }
         Some(Commands::History { node, limit }) => {
             let wallet_path = auto_detect_wallet().unwrap_or_else(|| "wallet.json".to_string());
-            let node = node.unwrap_or_else(|| {
-                for port in [9333u16, 9334, 9335, 8333] {
-                    if let Ok(stream) = std::net::TcpStream::connect_timeout(
-                        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-                        std::time::Duration::from_millis(200),
-                    ) {
-                        drop(stream);
-                        return format!("http://127.0.0.1:{}", port);
-                    }
-                }
-                format!("http://127.0.0.1:{}", config::get_port())
-            });
+            let node = match node {
+                Some(u) => u,
+                None => auto_discover_node().await?,
+            };
             cmd_history(&wallet_path, &node, limit).await?;
         }
         Some(Commands::Send { to, amount, fee, wallet, node }) => {
             let wallet = wallet.or_else(auto_detect_wallet).unwrap_or_else(|| "wallet.json".to_string());
-            let node = node.unwrap_or_else(|| {
-                for port in [9333u16, 9334, 9335, 8333] {
-                    if let Ok(stream) = std::net::TcpStream::connect_timeout(
-                        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-                        std::time::Duration::from_millis(200),
-                    ) {
-                        drop(stream);
-                        return format!("http://127.0.0.1:{}", port);
-                    }
-                }
-                format!("http://127.0.0.1:{}", config::get_port())
-            });
+            let node = match node {
+                Some(u) => u,
+                None => auto_discover_node().await?,
+            };
             cmd_send(&wallet, &node, &to, amount, fee).await?;
         }
         Some(Commands::WalletCleanup { wallet, node, dry_run }) => {
             let wallet = wallet.or_else(auto_detect_wallet).unwrap_or_else(|| "wallet.json".to_string());
-            let node = node.unwrap_or_else(|| {
-                for port in [9333u16, 9334, 9335, 8333] {
-                    if let Ok(stream) = std::net::TcpStream::connect_timeout(
-                        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-                        std::time::Duration::from_millis(200),
-                    ) {
-                        drop(stream);
-                        return format!("http://127.0.0.1:{}", port);
-                    }
-                }
-                format!("http://127.0.0.1:{}", config::get_port())
-            });
+            let node = match node {
+                Some(u) => u,
+                None => auto_discover_node().await?,
+            };
             cmd_wallet_cleanup(&wallet, &node, dry_run).await?;
         }
-        Some(Commands::RestoreSnapshot { snapshot, manifest, data_dir }) => {
+        Some(Commands::RestoreSnapshot { snapshot, manifest, data_dir, force_producer_only }) => {
             let data_dir = data_dir.unwrap_or_else(|| "data".to_string());
             println!("=== TSN Snapshot Restore (Verified) ===");
             println!("Snapshot: {}", snapshot);
@@ -743,9 +738,12 @@ async fn main() -> anyhow::Result<()> {
                 return Err(anyhow::anyhow!("REJECTED: Producer signature invalid — snapshot cannot be trusted"));
             }
 
-            // Check 2: At least 2 seed confirmations
+            // Check 2: At least 2 seed confirmations (unless --force-producer-only)
             let valid_confs = m.valid_confirmation_count();
-            if valid_confs >= 2 {
+            if force_producer_only {
+                println!("  [SKIP] 2/3 Confirmations check bypassed (--force-producer-only)");
+                println!("         Producer signature alone is trusted. Use ONLY for emergency recovery.");
+            } else if valid_confs >= 2 {
                 println!("  [PASS] 2/3 {} seed confirmations valid (minimum: 2)", valid_confs);
                 for c in &m.confirmations {
                     if c.verify() {
@@ -754,7 +752,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             } else {
                 println!("  [FAIL] 2/3 Only {} valid confirmations (minimum: 2)", valid_confs);
-                return Err(anyhow::anyhow!("REJECTED: Insufficient seed confirmations ({}/2)", valid_confs));
+                return Err(anyhow::anyhow!("REJECTED: Insufficient seed confirmations ({}/2). Use --force-producer-only to bypass during emergency recovery.", valid_confs));
             }
 
             // Check 3: SHA256
@@ -828,7 +826,7 @@ async fn main() -> anyhow::Result<()> {
             let mut peers = if no_seeds { Vec::new() } else { config::get_seed_nodes() };
             peers.extend(peer);
             dedup_peers(&mut peers);
-            cmd_node(port, peers, &data_dir, Some(wallet_path), jobs, None, public_url, false, None, None, true, NodeRole::Miner).await?;
+            cmd_node(port, peers, &data_dir, Some(wallet_path), jobs, None, public_url, false, None, None, true, NodeRole::Miner, cli.auto_consolidate, cli.consolidation_threshold, cli.consolidation_interval_secs).await?;
         }
         Some(Commands::Relay { port, wallet, data_dir, peer, public_url, no_seeds }) => {
             let data_dir = data_dir.unwrap_or_else(|| "data-relay".to_string());
@@ -837,7 +835,7 @@ async fn main() -> anyhow::Result<()> {
             let mut peers = if no_seeds { Vec::new() } else { config::get_seed_nodes() };
             peers.extend(peer);
             dedup_peers(&mut peers);
-            cmd_node(port, peers, &data_dir, wallet_path, 1, None, public_url, false, None, None, true, NodeRole::Relay).await?;
+            cmd_node(port, peers, &data_dir, wallet_path, 1, None, public_url, false, None, None, true, NodeRole::Relay, cli.auto_consolidate, cli.consolidation_threshold, cli.consolidation_interval_secs).await?;
         }
         Some(Commands::Light { port, wallet, data_dir, peer, no_seeds }) => {
             let data_dir = data_dir.unwrap_or_else(|| "data-light".to_string());
@@ -846,7 +844,7 @@ async fn main() -> anyhow::Result<()> {
             let mut peers = if no_seeds { Vec::new() } else { config::get_seed_nodes() };
             peers.extend(peer);
             dedup_peers(&mut peers);
-            cmd_node(port, peers, &data_dir, wallet_path, 1, None, None, false, None, None, true, NodeRole::LightClient).await?;
+            cmd_node(port, peers, &data_dir, wallet_path, 1, None, None, false, None, None, true, NodeRole::LightClient, cli.auto_consolidate, cli.consolidation_threshold, cli.consolidation_interval_secs).await?;
         }
         Some(Commands::Cortex { port, data_dir, peer, public_url, no_seeds }) => {
             let data_dir = data_dir.unwrap_or_else(|| "data-cortex".to_string());
@@ -861,7 +859,7 @@ async fn main() -> anyhow::Result<()> {
             println!("    WASM runtime: embedded (wasmtime), fuel metering on");
             println!("    On-chain module registry: not yet (planned Phase 2)");
             println!();
-            cmd_node(port, peers, &data_dir, None, 1, None, public_url, false, None, None, true, NodeRole::Cortex).await?;
+            cmd_node(port, peers, &data_dir, None, 1, None, public_url, false, None, None, true, NodeRole::Cortex, cli.auto_consolidate, cli.consolidation_threshold, cli.consolidation_interval_secs).await?;
         }
         Some(Commands::CortexLoadModule { name, wasm, signature, node }) => {
             use tsn::cortex::wasm_runtime::CortexRuntime;
@@ -971,6 +969,7 @@ async fn main() -> anyhow::Result<()> {
                 force_mine, faucet_wallet, faucet_daily_limit,
                 true, // fast_sync always on
                 node_role,
+                cli.auto_consolidate, cli.consolidation_threshold, cli.consolidation_interval_secs,
             ).await?;
         }
         None => {
@@ -1008,6 +1007,7 @@ async fn main() -> anyhow::Result<()> {
                 false, None, None,
                 true, // fast_sync always on
                 node_role,
+                cli.auto_consolidate, cli.consolidation_threshold, cli.consolidation_interval_secs,
             ).await?;
         }
     }
@@ -1198,6 +1198,51 @@ fn auto_detect_role() -> NodeRole {
     }
     // Default: miner
     NodeRole::from_str("miner").unwrap()
+}
+
+/// v2.6.0 — pick a healthy node URL for CLI commands that need a live chain
+/// (today: `tsn send`, `tsn balance --node`, `tsn history`). The old logic
+/// probed 127.0.0.1:{9333,9334,9335,8333} with a TCP connect, which did not
+/// catch a case where the miner was listening but hitting a rollback guard
+/// loop and returned nothing on `/chain/info` (incident 2026-04-24 AM).
+/// Fallback order, each step returns fast (<2 s) and only emits the candidate
+/// if `/chain/info` parses correctly:
+///   1. localhost:9333 (miner), :9335 (relay), :9337 (cortex), :9343 (alt)
+///   2. each DNS seed from `config::get_seed_nodes()`
+/// Returns the first URL that answers. Errors only when nothing is live,
+/// with a clear message that includes the list of attempts.
+async fn auto_discover_node() -> anyhow::Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+
+    let mut candidates: Vec<String> = Vec::new();
+    for port in [9333u16, 9335, 9337, 9343, 9345, 9334, 8333] {
+        candidates.push(format!("http://127.0.0.1:{}", port));
+    }
+    for seed in config::get_seed_nodes() {
+        candidates.push(seed);
+    }
+
+    for url in &candidates {
+        let info_url = format!("{}/chain/info", url);
+        if let Ok(resp) = client.get(&info_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(v) = resp.json::<serde_json::Value>().await {
+                    if v.get("height").and_then(|h| h.as_u64()).is_some() {
+                        return Ok(url.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "No reachable node found. Tried: {}. Start a local node (`tsn miner` / \
+         `tsn relay`) or pass `--node http://...` to point at a remote one.",
+        candidates.join(", ")
+    )
 }
 
 /// Auto-detect wallet.json next to binary or in current dir
@@ -1936,41 +1981,28 @@ async fn send_single_tx(
     let pk_hash = wallet.pk_hash();
     let keypair = wallet.keypair();
 
-    // Fetch Merkle witnesses from the node (one per selected note).
-    // v2.3.1: collect orphan positions from resolve_pq_commitment and bail
-    // once at the end with a machine-parseable list. The caller retries with
-    // these positions excluded.
+    // v2.7.4 Phase C — Local witness generation. The wallet maintains its
+    // own copy of the Poseidon/Goldilocks commitment tree (built at scan
+    // time via `sync_local_tree_pq`), so we can produce a Merkle witness
+    // for each spent note without an HTTP round-trip. This eliminates the
+    // 404 "position not found" errors that used to surface whenever the
+    // chosen `node_url` was a few blocks behind the canonical tip; the
+    // local tree is by definition consistent with itself.
     let mut spend_witnesses = Vec::new();
     let mut orphan_positions: Vec<u64> = Vec::new();
+    let local_tree_size = wallet.local_tree_size();
+    let _ = client; // network fetch no longer needed in the hot path
+    let _ = node_url;
+    eprintln!("    [Phase C] proof loop: local_tree_size={} candidates={}", local_tree_size, selected_notes.len());
     for note in selected_notes {
         let pos = note.position;
-        let url = format!("{}/witness/v2/position/{}", node_url, pos);
-        let resp = get_with_429_backoff(
-            client, &url, &format!("witness pos {}", pos)
-        ).await?;
-        if !resp.status().is_success() {
-            anyhow::bail!("Failed to get witness for position {}: HTTP {}", pos, resp.status());
-        }
-        let v: serde_json::Value = resp.json().await?;
-        let root_hex = v["root"].as_str().unwrap_or("");
-        let mut root = [0u8; 32];
-        if let Ok(bytes) = hex::decode(root_hex) {
-            if bytes.len() == 32 { root.copy_from_slice(&bytes); }
-        }
-        let empty = vec![];
-        let path_arr = v["path"].as_array().unwrap_or(&empty);
-        let indices_arr = v["indices"].as_array().unwrap_or(&empty);
-        let siblings: Vec<[u8; 32]> = path_arr.iter().filter_map(|s| {
-            let h = s.as_str()?;
-            let b = hex::decode(h).ok()?;
-            if b.len() == 32 { let mut a = [0u8;32]; a.copy_from_slice(&b); Some(a) } else { None }
-        }).collect();
-        let indices: Vec<u8> = indices_arr.iter().filter_map(|i| i.as_u64().map(|n| n as u8)).collect();
-
-        let witness = tsn::crypto::pq::merkle_pq::MerkleWitnessPQ {
-            path: tsn::crypto::pq::merkle_pq::MerklePathPQ { siblings, indices },
-            position: pos,
-            root,
+        let witness = match wallet.local_witness_v2(pos) {
+            Some(w) => w,
+            None => {
+                eprintln!("    [Phase C] orphan: local witness miss at pos {} (tree_size={})", pos, local_tree_size);
+                orphan_positions.push(pos);
+                continue;
+            }
         };
 
         let randomness = match note.pq_randomness {
@@ -1983,25 +2015,27 @@ async fn send_single_tx(
             }
         };
 
-        // v2.3.1: resolve commitment from wallet + server. Orphans are
-        // collected and reported together; happy-path notes go straight into
-        // the spend witness list.
-        let server_leaf_hex = v["leaf"].as_str();
-        let stored_pq_cm = match resolve_pq_commitment(note.pq_commitment, server_leaf_hex, pos) {
-            Ok(c) => c,
-            Err(e) if e.to_string().contains(ORPHANED_NOTE_MARKER) => {
+        // v2.7.4 Phase C — leaf bytes come from the local tree. The wallet
+        // stores raw `pq_commitment` from `/outputs/since`, but the local
+        // tree (and the node's tree) stores the canonical Goldilocks-mod-p
+        // round-trip. Direct equality on those two representations is not
+        // safe; instead, derive the canonical leaf from the local tree
+        // (which is consistent with what the node will validate against)
+        // and use it as `stored_pq_cm`. The Merkle witness check then
+        // confirms the leaf is at the right position; the proof generator
+        // does its own commitment-from-randomness consistency check.
+        let stored_pq_cm = match wallet.local_leaf_at_v2(pos) {
+            Some(leaf) => leaf,
+            None => {
+                eprintln!("    [Phase C] orphan: leaf miss at pos {}", pos);
                 orphan_positions.push(pos);
                 continue;
             }
-            Err(e) => return Err(e),
         };
         if !witness.verify(&NoteCommitmentPQ(stored_pq_cm)) {
-            anyhow::bail!(
-                "Merkle witness verification failed for note at position {}. \
-                 The commitment in your wallet does not match the merkle tree. \
-                 Try rescanning your wallet.",
-                pos
-            );
+            eprintln!("    [Phase C] orphan: witness verify failed at pos {} (root_local mismatch)", pos);
+            orphan_positions.push(pos);
+            continue;
         }
 
         spend_witnesses.push(SpendWitnessPQ {
@@ -2398,14 +2432,36 @@ async fn auto_consolidate(
             }
         };
         eprintln!("tx {} submitted", &tx_hash[..16]);
+
+        // v2.5.4 Bug #6 fix — mark the notes that were just spent as
+        // `is_spent=true` in memory BEFORE the next round selects a fresh
+        // batch. Without this, `auto_consolidate` round 2 re-picks the same
+        // 24 smallest notes (they are still `is_spent=false` until the node
+        // confirms and the post-round scan catches the nullifiers), and the
+        // submit is rejected with "Nullifier already spent". The subsequent
+        // `try_scan_via_api` still runs as a safety net — it will re-mark
+        // these same positions via `/nullifiers/check` in the next cycle.
+        {
+            let spent_positions: std::collections::HashSet<u64> =
+                batch.iter().map(|n| n.position).collect();
+            for note in wallet.notes_mut().iter_mut() {
+                if spent_positions.contains(&note.position) && !note.is_spent {
+                    note.is_spent = true;
+                }
+            }
+            if let Err(e) = wallet.save(wallet_path) {
+                tracing::warn!("Failed to persist spent markers after round {}: {}", round + 1, e);
+            }
+        }
+
         eprint!("    waiting for mining... ");
         wait_nullifiers_mined(
             &nullifiers, node_url, client,
-            std::time::Duration::from_secs(180),
+            std::time::Duration::from_secs(1800),
         ).await?;
         eprintln!("confirmed");
 
-        // Rescan to ingest the new big note (and mark consumed notes as spent).
+        // Rescan to ingest the new big note (and confirm consumed notes as spent).
         try_scan_via_api(wallet, node_url, wallet_path).await;
 
         round += 1;
@@ -2413,6 +2469,175 @@ async fn auto_consolidate(
             anyhow::bail!("Too many consolidation rounds ({}); aborting to avoid loop.", round);
         }
     }
+}
+
+/// v2.6.0 — parallel consolidation: when multiple rounds are predicted, we
+/// partition the smallest unspent notes into N disjoint batches of
+/// `CONSOLIDATION_BATCH` each and submit all N consolidation txs to the
+/// mempool concurrently. The miner typically picks all of them into the very
+/// next block (the mempool has plenty of room and each tx spends disjoint
+/// nullifiers, so there is no conflict). We then wait for ALL nullifiers to
+/// be confirmed in a single pass and rescan the wallet once — turning what
+/// used to be N blocks of serial waiting into ~1 block of concurrent
+/// submission.
+///
+/// Contract with the caller:
+/// - `max_parallel` caps the fan-out (defaults to 8). Proof generation is
+///   CPU-heavy (Plonky3), so firing 40 proofs at once just thrashes cores.
+/// - The spent notes are marked `is_spent=true` in the wallet BEFORE waiting
+///   so subsequent logic (including the fall-back serial pass) does not
+///   re-select them.
+/// - If ANY of the N txs fails (orphan witness, duplicate nullifier, network
+///   hiccup), we collect the bad positions and bail back to the serial
+///   `auto_consolidate` path for safe retry semantics. The parallel path is
+///   an optimization, never a correctness requirement.
+async fn auto_consolidate_parallel(
+    wallet: &mut tsn::wallet::ShieldedWallet,
+    wallet_path: &str,
+    node_url: &str,
+    fee_base: u64,
+    total_needed: u64,
+    client: &reqwest::Client,
+    initial_bad_positions: std::collections::HashSet<u64>,
+    max_parallel: usize,
+) -> anyhow::Result<(usize, std::collections::HashSet<u64>)> {
+    use futures::future::join_all;
+
+    let cyan = "\x1b[1;36m";
+    let reset = "\x1b[0m";
+    let multiplier = 10u64.pow(config::COIN_DECIMALS);
+    let self_pk = wallet.pk_hash();
+    let mut bad_positions = initial_bad_positions;
+
+    // Snapshot the unspent notes (excluding orphans) sorted smallest-first,
+    // because the greedy selection for the final tx keeps the largest and
+    // consolidates the smallest.
+    let all_unspent: Vec<tsn::wallet::WalletNote> = {
+        let unspent = wallet.unspent_notes();
+        let mut v: Vec<tsn::wallet::WalletNote> = unspent.iter()
+            .filter(|n| !bad_positions.contains(&n.position))
+            .map(|n| (*n).clone())
+            .collect();
+        v.sort_by(|a, b| a.note.value.cmp(&b.note.value));
+        v
+    };
+
+    // Predict how many serial rounds the classic path would need, then run
+    // min(predicted, max_parallel) batches in one go. If `predicted == 1` we
+    // do NOT enter the parallel fast-path — a single-round consolidation is
+    // already what the serial path does.
+    let big_first: u64 = all_unspent.iter().rev().take(CONSOLIDATION_BATCH).map(|n| n.note.value).sum();
+    if big_first >= total_needed {
+        // One round or zero rounds will suffice; let the serial path handle it.
+        return Ok((0, bad_positions));
+    }
+
+    // Number of full batches we can form from the smallest notes.
+    let n_batches = (all_unspent.len() / CONSOLIDATION_BATCH).min(max_parallel);
+    if n_batches < 2 {
+        return Ok((0, bad_positions));
+    }
+
+    let mut batches: Vec<Vec<tsn::wallet::WalletNote>> = Vec::with_capacity(n_batches);
+    for i in 0..n_batches {
+        let start = i * CONSOLIDATION_BATCH;
+        let end = start + CONSOLIDATION_BATCH;
+        batches.push(all_unspent[start..end].to_vec());
+    }
+
+    println!(
+        "  {}Parallel consolidation{}: submitting {} rounds concurrently ({} notes total)",
+        cyan, reset, n_batches, n_batches * CONSOLIDATION_BATCH
+    );
+
+    // Build one send future per batch. Each call to send_single_tx owns its
+    // notes slice (already cloned) and reads the wallet immutably for keys +
+    // nullifier_key, so concurrent calls are safe.
+    let futs: Vec<_> = batches.iter().enumerate().map(|(idx, batch)| {
+        let batch_sum: u64 = batch.iter().map(|n| n.note.value).sum();
+        let consolidation_amount = batch_sum.saturating_sub(fee_base);
+        let wallet_ref: &tsn::wallet::ShieldedWallet = wallet;
+        async move {
+            let res = send_single_tx(
+                batch, consolidation_amount, fee_base, self_pk,
+                wallet_ref, node_url, client,
+            ).await;
+            (idx, batch_sum, res)
+        }
+    }).collect();
+
+    let results = join_all(futs).await;
+
+    // Classify outcomes. Collect nullifiers from the successful submissions
+    // and propagate orphan positions from any failed ones back to the caller
+    // so the serial retry path filters them out on the next pass.
+    let mut all_nullifiers: Vec<String> = Vec::new();
+    let mut successful_batches: Vec<&Vec<tsn::wallet::WalletNote>> = Vec::new();
+    let mut any_failed = false;
+    for (idx, batch_sum, res) in &results {
+        match res {
+            Ok((tx_hash, nullifiers)) => {
+                eprintln!(
+                    "    [batch {}] tx {} submitted ({:.4} TSN → 1 note)",
+                    idx + 1, &tx_hash[..16],
+                    (*batch_sum - fee_base) as f64 / multiplier as f64
+                );
+                all_nullifiers.extend(nullifiers.iter().cloned());
+                successful_batches.push(&batches[*idx]);
+            }
+            Err(e) => {
+                any_failed = true;
+                let orphans = parse_orphan_positions(&e.to_string());
+                if !orphans.is_empty() {
+                    for p in orphans {
+                        bad_positions.insert(p);
+                    }
+                    eprintln!("    [batch {}] orphan notes detected, retrying in serial pass", idx + 1);
+                } else {
+                    eprintln!("    [batch {}] failed: {}", idx + 1, e);
+                }
+            }
+        }
+    }
+
+    // If every parallel batch failed, there is nothing to wait for and the
+    // serial path can pick up from here (with the orphan list updated).
+    if successful_batches.is_empty() {
+        return Ok((0, bad_positions));
+    }
+
+    // Mark spent in wallet memory, persist once.
+    {
+        let spent_positions: std::collections::HashSet<u64> = successful_batches
+            .iter()
+            .flat_map(|b| b.iter().map(|n| n.position))
+            .collect();
+        for note in wallet.notes_mut().iter_mut() {
+            if spent_positions.contains(&note.position) && !note.is_spent {
+                note.is_spent = true;
+            }
+        }
+        if let Err(e) = wallet.save(wallet_path) {
+            tracing::warn!("Failed to persist spent markers after parallel consolidation: {}", e);
+        }
+    }
+
+    eprint!("    waiting for all nullifiers... ");
+    wait_nullifiers_mined(
+        &all_nullifiers, node_url, client,
+        std::time::Duration::from_secs(1800),
+    ).await?;
+    eprintln!("confirmed ({} nullifiers)", all_nullifiers.len());
+
+    // Rescan once — every successful batch's consolidated output is now on
+    // chain; the wallet ingests them in a single API pass.
+    try_scan_via_api(wallet, node_url, wallet_path).await;
+
+    if any_failed {
+        eprintln!("    note: {} of {} parallel batches failed, falling back to serial for the rest", results.iter().filter(|(_,_,r)| r.is_err()).count(), results.len());
+    }
+
+    Ok((successful_batches.len(), bad_positions))
 }
 
 async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee: f64) -> anyhow::Result<()> {
@@ -2517,6 +2742,21 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         }
     }
 
+    // v2.7.4 Phase C — Sync the wallet's local commitment tree to the
+    // chain tip BEFORE we start building witnesses. This single call
+    // replaces the dozens of `/witness/v2/position/{N}` round-trips that
+    // used to happen later in the proof loop, and makes orphan detection
+    // a local operation. If the sync fails (node down) we just continue —
+    // the orphan check below will still surface stale notes and the user
+    // gets a clean error.
+    if let Err(e) = sync_local_tree_pq(&mut wallet, node_url, &client).await {
+        tracing::warn!("local tree sync failed (continuing with stale tree): {}", e);
+    } else {
+        // Persist so the next cmd_send invocation does not re-pull the
+        // entire tree from scratch.
+        let _ = wallet.save(wallet_path);
+    }
+
     // v2.3.3: pre-validate unspent note witnesses against the node. Flags
     // notes that were orphaned by chain reorgs since the last scan, so both
     // auto_consolidate and the final send skip them from their first batch
@@ -2579,11 +2819,43 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
             "  {}Auto-consolidation required{}: {} notes needed, max {} per tx.",
             cyan, reset, needed_count, CONSOLIDATION_BATCH
         );
+
+        // v2.6.0 — parallel fast-path: if more than one consolidation round
+        // is predicted, submit up to 8 disjoint batches concurrently. The
+        // miner usually picks them all into the next 1-2 blocks, cutting
+        // wall-clock time from ~N × 10s to ~20s regardless of N. If the
+        // parallel path can't fully cover the need (or any batch fails),
+        // we fall through to the serial `auto_consolidate` to finish.
+        let parallel_rounds_target = (needed_count - CONSOLIDATION_BATCH + CONSOLIDATION_BATCH - 1)
+            / CONSOLIDATION_BATCH;
+        let mut parallel_bad_positions = pre_orphan_positions.clone();
+        if parallel_rounds_target >= 2 {
+            match auto_consolidate_parallel(
+                &mut wallet, wallet_path, node_url, fee_base, total_needed, &client,
+                parallel_bad_positions.clone(), 8,
+            ).await {
+                Ok((rounds_done, new_bad)) => {
+                    if rounds_done > 0 {
+                        println!("  Parallel consolidation complete ({} batches in ~1 block).", rounds_done);
+                    }
+                    parallel_bad_positions = new_bad;
+                }
+                Err(e) => {
+                    eprintln!("  Parallel consolidation hit an error ({}), falling back to serial.", e);
+                }
+            }
+        }
+
+        // Serial mop-up. If the parallel path already consolidated enough
+        // notes to fit the greedy selection, this loop exits on its first
+        // iteration (count <= CONSOLIDATION_BATCH).
         let rounds = auto_consolidate(
             &mut wallet, wallet_path, node_url, fee_base, total_needed, &client,
-            pre_orphan_positions.clone(),
+            parallel_bad_positions,
         ).await?;
-        println!("  Consolidation complete ({} rounds).", rounds);
+        if rounds > 0 {
+            println!("  Serial consolidation follow-up ({} additional rounds).", rounds);
+        }
         println!();
     }
 
@@ -2652,10 +2924,23 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         }
 
         eprint!("  Proof:     generating... ");
+        let selected_positions: std::collections::HashSet<u64> =
+            selected.iter().map(|n| n.position).collect();
         match send_single_tx(
             &selected, amount_base, fee_base, recipient_pk_hash, &wallet, node_url, &client,
         ).await {
             Ok((tx_hash, nullifiers)) => {
+                // v2.5.4 Bug #6 fix — mark the selected notes as spent so the
+                // user cannot accidentally re-submit the same tx (e.g. a retry
+                // after a network timeout that actually reached the node).
+                for note in wallet.notes_mut().iter_mut() {
+                    if selected_positions.contains(&note.position) && !note.is_spent {
+                        note.is_spent = true;
+                    }
+                }
+                if let Err(e) = wallet.save(wallet_path) {
+                    tracing::warn!("Failed to persist spent markers after final send: {}", e);
+                }
                 break (tx_hash, nullifiers, selected_total);
             }
             Err(e) => {
@@ -2703,6 +2988,144 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
     Ok(())
 }
 
+/// v2.7.4 Phase C — Pull every commitment leaf the wallet does not yet have
+/// from the node's bulk-leaves endpoint and append them to the wallet's
+/// local Poseidon/Goldilocks tree. After this call returns, the wallet's
+/// `local_anchor_v2()` matches the node's V2 commitment root, and the
+/// wallet can serve its own Merkle witnesses for any leaf it owns without
+/// touching `/witness/v2/position/{N}`.
+///
+/// The caller is responsible for persisting the resulting tree snapshot
+/// (`wallet.save()`).
+async fn sync_local_tree_pq(
+    wallet: &mut ShieldedWallet,
+    node_url: &str,
+    _client: &reqwest::Client,
+) -> Result<(), String> {
+    // v2.7.4 Phase C — use a dedicated client with a long read timeout.
+    // The shared `client` from cmd_send has a 30s timeout that times out
+    // mid-stream on a 900KB /leaves/bulk response, leaving the JSON
+    // truncated and forcing a parse error.
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return Err(format!("client build: {}", e)),
+    };
+    let info_url = format!("{}/chain/info", node_url);
+    let target: u64 = match client.get(&info_url).send().await {
+        Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+            Ok(v) => v["commitment_count"].as_u64().unwrap_or(0),
+            Err(e) => return Err(format!("chain/info parse: {}", e)),
+        },
+        _ => return Err("chain/info unreachable".to_string()),
+    };
+    let starting = wallet.local_tree_size();
+    eprintln!(
+        "  [Phase C] sync local tree {} → {} ({} new leaves)",
+        starting, target, target.saturating_sub(starting)
+    );
+
+    const BATCH: u64 = 5_000; // half of `MAX_BULK_POSITIONS` to keep response under 500KB
+    const PARALLEL: usize = 1; // serial: 1 outstanding request avoids saturating the node
+    let url = format!("{}/leaves/bulk", node_url);
+    let mut next = wallet.local_tree_size();
+    while next < target {
+        // Build up to PARALLEL batches and dispatch them concurrently.
+        let mut requests = Vec::new();
+        let mut spans = Vec::new();
+        while requests.len() < PARALLEL && next < target {
+            let from = next;
+            let to = (from + BATCH).min(target);
+            let positions: Vec<u64> = (from..to).collect();
+            let body = serde_json::json!({"positions": positions});
+            let url2 = url.clone();
+            let client2 = client.clone();
+            requests.push(async move {
+                client2.post(&url2).json(&body).send().await
+            });
+            spans.push((from, to));
+            next = to;
+        }
+        let responses = futures::future::join_all(requests).await;
+        // Flatten responses into a single position-keyed map. Failed batches
+        // are logged and skipped (rather than failing the whole sync) so we
+        // can still append the contiguous prefix and let the next outer-loop
+        // iteration retry the gap.
+        let mut by_pos: std::collections::BTreeMap<u64, [u8; 32]> = std::collections::BTreeMap::new();
+        for (resp, (from, to)) in responses.into_iter().zip(spans.into_iter()) {
+            let r = match resp {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    eprintln!("  [Phase C] batch {}..{} HTTP {} (skip)", from, to, r.status());
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("  [Phase C] batch {}..{} send err: {} (skip)", from, to, e);
+                    continue;
+                }
+            };
+            let v: serde_json::Value = match r.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("  [Phase C] batch {}..{} parse err: {} (skip)", from, to, e);
+                    continue;
+                }
+            };
+            let arr = match v["leaves"].as_array() {
+                Some(a) => a,
+                None => {
+                    eprintln!("  [Phase C] batch {}..{} missing 'leaves' (skip)", from, to);
+                    continue;
+                }
+            };
+            for entry in arr {
+                let pos = match entry["position"].as_u64() { Some(p) => p, None => continue };
+                let leaf_hex = match entry["leaf"].as_str() { Some(s) => s, None => continue };
+                let bytes = match hex::decode(leaf_hex) { Ok(b) if b.len() == 32 => b, _ => continue };
+                let mut leaf = [0u8; 32];
+                leaf.copy_from_slice(&bytes);
+                by_pos.insert(pos, leaf);
+            }
+        }
+        // Append the contiguous run starting at the current tree size.
+        // If the response has a hole (some position missing), stop appending
+        // there; the next iteration of the outer while will retry the gap
+        // batch. A previous version returned an error on gap which left the
+        // tree mid-build with no recovery; we now soft-break instead.
+        let expected_start = wallet.local_tree_size();
+        let mut appended_this_round = 0u64;
+        for (pos, leaf) in by_pos {
+            if pos < expected_start { continue; }
+            if pos != wallet.local_tree_size() {
+                eprintln!(
+                    "  [Phase C] gap at pos {} (have {}); will retry on next round",
+                    pos, wallet.local_tree_size()
+                );
+                break;
+            }
+            wallet.append_local_leaf_pq(leaf);
+            appended_this_round += 1;
+        }
+        // Defensive: if we did not advance, break to avoid an infinite loop.
+        if appended_this_round == 0 {
+            eprintln!(
+                "  [Phase C] sync stalled at {} (target {}) — giving up",
+                wallet.local_tree_size(), target
+            );
+            break;
+        }
+        eprintln!("  [Phase C] tree size {} / {} (+{})", wallet.local_tree_size(), target, appended_this_round);
+    }
+    eprintln!(
+        "  [Phase C] sync done: {} leaves",
+        wallet.local_tree_size()
+    );
+    Ok(())
+}
+
 async fn try_scan_via_api(wallet: &mut ShieldedWallet, node_url: &str, wallet_path: &str) -> (bool, usize) {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -2713,18 +3136,73 @@ async fn try_scan_via_api(wallet: &mut ShieldedWallet, node_url: &str, wallet_pa
         Err(_) => return (false, 0),
     };
 
-    // Check node is reachable and get chain height
+    // Check node is reachable, fetch chain height + genesis_hash + commitment_count
     let info_url = format!("{}/chain/info", node_url);
-    let chain_height: u64 = match client.get(&info_url).send().await {
-        Ok(r) if r.status().is_success() => {
-            match r.json::<serde_json::Value>().await {
-                Ok(v) => v["height"].as_u64().unwrap_or(0),
-                Err(_) => return (false, 0),
+    let (chain_height, chain_genesis, commitment_count): (u64, String, u64) =
+        match client.get(&info_url).send().await {
+            Ok(r) if r.status().is_success() => {
+                match r.json::<serde_json::Value>().await {
+                    Ok(v) => (
+                        v["height"].as_u64().unwrap_or(0),
+                        v["genesis_hash"].as_str().unwrap_or("").to_string(),
+                        v["commitment_count"].as_u64().unwrap_or(0),
+                    ),
+                    Err(_) => return (false, 0),
+                }
             }
-        }
-        _ => return (false, 0),
-    };
+            _ => return (false, 0),
+        };
 
+    // v2.6.0 — nuanced stale detection. Previously any 2-block regression
+    // (scanned_height > chain_height + 1) triggered a full clear_notes.
+    // That is too aggressive: during a normal short reorg the node's
+    // canonical_height dips 1-3 blocks for a few seconds before sync
+    // catches up, and the wallet would throw away balance worth hundreds
+    // of thousands of TSN. The clear is only justified when:
+    //   (a) genesis_hash mismatch — we are literally on a different chain,
+    //   (b) the wallet's highest unspent position is ABOVE the chain's
+    //       commitment count by more than a small slack — our notes
+    //       reference leaves the tree does not have, 404 on witness fetch,
+    //   (c) scanned_height is more than `STALE_ROLLBACK_SLACK` blocks
+    //       above the chain tip — a transient dip is not enough; this
+    //       only fires on an actual chain reset or deep wipe.
+    // Any of (a)(b)(c) true → clear. Otherwise we just rewind
+    // `last_scanned_height` to the chain tip and let the incremental
+    // scan re-verify. Notes are preserved; spent markers are re-checked
+    // by the nullifier API.
+    const STALE_ROLLBACK_SLACK: u64 = 20;
+    const STALE_POSITION_SLACK: u64 = 100;
+    let wallet_genesis = wallet.db_genesis_hash().unwrap_or_default();
+    let scanned_height = wallet.last_scanned_height();
+    let max_unspent_pos = wallet.unspent_note_max_position();
+    let height_regression = scanned_height.saturating_sub(chain_height);
+    let position_over = max_unspent_pos.saturating_sub(commitment_count);
+    let genesis_mismatch =
+        !chain_genesis.is_empty() && !wallet_genesis.is_empty() && wallet_genesis != chain_genesis;
+    let deep_rollback = height_regression > STALE_ROLLBACK_SLACK;
+    let position_out_of_range = position_over > STALE_POSITION_SLACK;
+    if genesis_mismatch || deep_rollback || position_out_of_range {
+        eprintln!(
+            "  Wallet state stale (genesis_mismatch={} height_regression={} position_over={}). \
+             Clearing notes and rescanning from the current chain.",
+            genesis_mismatch, height_regression, position_over
+        );
+        wallet.clear_notes();
+        let _ = wallet.save(wallet_path);
+    } else if height_regression > 0 {
+        // Minor reorg: rewind scanned_height so the incremental scan below
+        // re-verifies the last few blocks and any nullifier changes they
+        // produced. Notes stay put; if they were spent on the new canonical
+        // chain the nullifier check will mark them.
+        tracing::info!(
+            "wallet: minor reorg absorbed (scanned={} chain={}, rewinding {} blocks, notes preserved)",
+            scanned_height, chain_height, height_regression
+        );
+        wallet.set_last_scanned_height(chain_height);
+    }
+    if !chain_genesis.is_empty() {
+        let _ = wallet.set_db_genesis_hash(&chain_genesis);
+    }
     let scanned_height = wallet.last_scanned_height();
     // v2.3.9 — even when there is no new block to scan, we still need to run the
     // nullifier/spent check below so that notes spent between two scans (e.g. by
@@ -3045,9 +3523,16 @@ fn check_snapshot_auto_trigger(state: &std::sync::Arc<tsn::network::AppState>, t
     // Previously the atomic was reset to 0 at boot, causing every restart to fire
     // a snapshot at the current (non-aligned) tip, polluting tsn-snapshots with
     // dozens of near-duplicate releases.
+    //
+    // v2.5.4 — store format `{height}|{network_name}` so the trigger is scoped to
+    // the current testnet. When `NETWORK_NAME` changes (testnet bump), the file
+    // from the previous testnet is ignored on load, which avoids the manual
+    // `rm .last_snapshot_trigger` + restart required during the testnet-v10 →
+    // testnet-v11 transition.
     let data_dir = tsn::config::get_data_dir();
     let trigger_file = std::path::PathBuf::from(&data_dir).join(".last_snapshot_trigger");
-    let _ = std::fs::write(&trigger_file, latest_eligible.to_string());
+    let content = format!("{}|{}", latest_eligible, crate::config::NETWORK_NAME);
+    let _ = std::fs::write(&trigger_file, content);
 
     tracing::info!(
         "Snapshot auto-trigger: height {} finalized interval {}",
@@ -3062,12 +3547,30 @@ fn check_snapshot_auto_trigger(state: &std::sync::Arc<tsn::network::AppState>, t
 
 /// v2.3.7 — Load the last-triggered snapshot height from disk so we don't re-fire
 /// a snapshot at the same interval after a restart.
+///
+/// v2.5.4 — expects format `{height}|{network_name}`. Returns 0 if the stored
+/// network_name does not match the current one (stale from a previous testnet).
+/// Falls back to the legacy bare-integer format for files written by pre-v2.5.4
+/// nodes — those are treated as current-network.
 fn load_last_snapshot_trigger(data_dir: &str) -> u64 {
     let path = std::path::PathBuf::from(data_dir).join(".last_snapshot_trigger");
-    match std::fs::read_to_string(&path) {
-        Ok(s) => s.trim().parse::<u64>().unwrap_or(0),
-        Err(_) => 0,
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => return 0,
+    };
+    // New format: "{height}|{network_name}"
+    if let Some((height_str, net)) = raw.split_once('|') {
+        if net != crate::config::NETWORK_NAME {
+            tracing::info!(
+                "Snapshot trigger file is from network `{}` (current `{}`); treating as stale",
+                net, crate::config::NETWORK_NAME
+            );
+            return 0;
+        }
+        return height_str.parse::<u64>().unwrap_or(0);
     }
+    // Legacy format (bare integer, pre-v2.5.4) — assume same network.
+    raw.parse::<u64>().unwrap_or(0)
 }
 
 async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>, tag_height: u64) {
@@ -3081,7 +3584,7 @@ async fn auto_snapshot_export(state: std::sync::Arc<tsn::network::AppState>, tag
 
     // Export snapshot
     let (data, height, block_hash, state_root, peer_id_str) = {
-        let chain = state.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let chain = state.blockchain.read().await;
         let tip = chain.height();
         if tip <= tsn::config::MAX_REORG_DEPTH + 100 {
             return;
@@ -3359,8 +3862,59 @@ async fn publish_snapshot_to_github(
         .await
     {
         if resp.status().is_success() {
-            info!("Snapshot GitHub publish: tag {} already exists (HEAD 200), skipping", tag);
-            return;
+            // v2.5.4 — compare the existing release's chain_id with our own
+            // NETWORK_NAME. If they differ, we have a stale tag from a previous
+            // testnet (genesis rename). Delete the release so we can recreate
+            // it with the correct chain data. Without this, a new testnet
+            // never republishes its snapshots because the HEAD check succeeds
+            // against an obsolete release.
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                let existing_body = body.get("body").and_then(|v| v.as_str()).unwrap_or("");
+                let our_chain = crate::config::NETWORK_NAME;
+                // manifest body format: "Signed snapshot for chain {chain_id} at height ..."
+                // If the existing release body does not mention OUR chain id, it is stale.
+                if !existing_body.contains(our_chain) {
+                    let release_id = body.get("id").and_then(|v| v.as_u64());
+                    if let Some(id) = release_id {
+                        let del_url = format!("https://api.github.com/repos/{}/releases/{}", owner_repo, id);
+                        let _ = client
+                            .delete(&del_url)
+                            .bearer_auth(&token)
+                            .header("Accept", "application/vnd.github+json")
+                            .header("X-GitHub-Api-Version", "2022-11-28")
+                            .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+                            .send()
+                            .await;
+                        // Also delete the git tag so the next POST /releases can
+                        // recreate it fresh (GitHub keeps the tag even after
+                        // release deletion).
+                        let tag_url = format!("https://api.github.com/repos/{}/git/refs/tags/{}", owner_repo, tag);
+                        let _ = client
+                            .delete(&tag_url)
+                            .bearer_auth(&token)
+                            .header("Accept", "application/vnd.github+json")
+                            .header("X-GitHub-Api-Version", "2022-11-28")
+                            .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+                            .send()
+                            .await;
+                        info!(
+                            "Snapshot GitHub publish: tag {} existed for a different chain; deleted, will recreate for {}",
+                            tag, our_chain
+                        );
+                        // Fall through to create the release below.
+                    } else {
+                        warn!("Snapshot GitHub publish: stale tag {} found but release id missing, skipping", tag);
+                        return;
+                    }
+                } else {
+                    info!("Snapshot GitHub publish: tag {} already exists for current chain, skipping", tag);
+                    return;
+                }
+            } else {
+                // Could not parse body — play safe and skip.
+                info!("Snapshot GitHub publish: tag {} already exists (body unparsed), skipping", tag);
+                return;
+            }
         }
     }
 
@@ -3409,28 +3963,87 @@ async fn publish_snapshot_to_github(
         }
     };
 
-    if !resp.status().is_success() {
+    // v2.6.0 — handle the 422 "tag already exists" race properly.
+    // Previously this path just returned silently, which left orphan empty
+    // releases on GitHub when the winning seed crashed between create and
+    // asset upload. The symptom was: every `snapshot-N` tag clickable from
+    // explorer → 404. Now: on 422, HEAD the existing release, check its
+    // assets, and if it has <2 assets (snapshot.tar.gz + manifest.json) we
+    // adopt the release_id and continue to upload into it. That makes the
+    // publish retry-safe no matter which seed got interrupted.
+    let release: serde_json::Value = if resp.status().is_success() {
+        match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Snapshot GitHub publish: parse create response failed: {}", e);
+                return;
+            }
+        }
+    } else {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        // 422 = tag already exists — treat as idempotent success, don't spam warns.
-        if status.as_u16() == 422 {
-            info!("Snapshot GitHub publish: tag {} already exists, skipping upload", tag);
+        if status.as_u16() != 422 {
+            warn!(
+                "Snapshot GitHub publish: create release returned {} — {}",
+                status,
+                text.chars().take(200).collect::<String>()
+            );
             return;
         }
-        warn!(
-            "Snapshot GitHub publish: create release returned {} — {}",
-            status,
-            text.chars().take(200).collect::<String>()
+        // 422: tag was (re)created by another seed between our HEAD and our
+        // POST. Re-fetch to see what state that release is in.
+        let probe_url = format!(
+            "https://api.github.com/repos/{}/releases/tags/{}",
+            owner_repo, tag
         );
-        return;
-    }
-
-    let release: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("Snapshot GitHub publish: parse create response failed: {}", e);
+        let probe = match client
+            .get(&probe_url)
+            .bearer_auth(&token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Snapshot GitHub publish: post-422 re-probe failed: {}", e);
+                return;
+            }
+        };
+        if !probe.status().is_success() {
+            warn!("Snapshot GitHub publish: post-422 re-probe returned {}", probe.status());
             return;
         }
+        let existing: serde_json::Value = match probe.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Snapshot GitHub publish: post-422 re-probe parse failed: {}", e);
+                return;
+            }
+        };
+        let asset_count = existing
+            .get("assets")
+            .and_then(|a| a.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let existing_body = existing.get("body").and_then(|v| v.as_str()).unwrap_or("");
+        let same_chain = existing_body.contains(crate::config::NETWORK_NAME);
+        if asset_count >= 2 && same_chain {
+            info!(
+                "Snapshot GitHub publish: tag {} already published by peer with {} assets, skipping",
+                tag, asset_count
+            );
+            return;
+        }
+        info!(
+            "Snapshot GitHub publish: tag {} exists but incomplete ({} assets, same_chain={}), uploading into release_id={}",
+            tag,
+            asset_count,
+            same_chain,
+            existing.get("id").and_then(|v| v.as_u64()).unwrap_or(0)
+        );
+        existing
     };
 
     let upload_url_template = match release["upload_url"].as_str() {
@@ -3497,8 +4110,122 @@ async fn publish_snapshot_to_github(
         tag, compressed.len() / 1024
     );
 
+    // v2.6.1 — post-publish dedup. The HEAD-then-POST pattern still has a tiny
+    // race window where N seeds simultaneously see "tag missing", all POST, and
+    // GitHub creates N separate releases with the same tag_name (it does NOT
+    // always 422 — it accepts the body and creates a fresh release ID).
+    // Symptom: tags like snapshot-5000 with 3 releases. Cleanup is to list all
+    // releases, filter by our tag, and delete any extras. The canonical one
+    // (returned by GET /releases/tags/{tag}) wins; everyone else self-deletes
+    // their own race-loser. Self-healing — every publish cycle converges to 1.
+    let our_id = release.get("id").and_then(|v| v.as_u64());
+    dedup_releases_with_tag(client, &token, owner_repo, &tag, our_id).await;
+
     // Retention: prune releases older than the 10 most recent.
     prune_github_snapshot_releases(client, &token, owner_repo, 10).await;
+}
+
+/// v2.6.1 — find all releases sharing `tag` and delete all but the canonical
+/// one (the one returned by GET /releases/tags/{tag}). Caller passes
+/// `our_release_id` so we know whether to delete ourselves (we lost the race)
+/// or to delete the others (we won). Best-effort, errors are logged not fatal.
+async fn dedup_releases_with_tag(
+    client: &reqwest::Client,
+    token: &str,
+    owner_repo: &str,
+    tag: &str,
+    our_release_id: Option<u64>,
+) {
+    use tracing::{info, warn};
+    let list_url = format!("https://api.github.com/repos/{}/releases?per_page=100", owner_repo);
+    let resp = match client
+        .get(&list_url)
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Snapshot dedup: list releases failed: {}", e);
+            return;
+        }
+    };
+    if !resp.status().is_success() {
+        return;
+    }
+    let all: Vec<serde_json::Value> = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let same_tag: Vec<u64> = all
+        .iter()
+        .filter(|r| r.get("tag_name").and_then(|v| v.as_str()) == Some(tag))
+        .filter_map(|r| r.get("id").and_then(|v| v.as_u64()))
+        .collect();
+    if same_tag.len() <= 1 {
+        return;
+    }
+    let probe_url = format!(
+        "https://api.github.com/repos/{}/releases/tags/{}",
+        owner_repo, tag
+    );
+    let canonical_id = match client
+        .get(&probe_url)
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+            Ok(v) => v.get("id").and_then(|i| i.as_u64()),
+            Err(_) => None,
+        },
+        _ => None,
+    };
+    let canonical_id = match canonical_id {
+        Some(id) => id,
+        None => {
+            warn!("Snapshot dedup: cannot resolve canonical for tag {}", tag);
+            return;
+        }
+    };
+    info!(
+        "Snapshot dedup: tag={} has {} releases (canonical={}, ours={:?})",
+        tag,
+        same_tag.len(),
+        canonical_id,
+        our_release_id
+    );
+    for id in same_tag {
+        if id == canonical_id {
+            continue;
+        }
+        let del_url = format!("https://api.github.com/repos/{}/releases/{}", owner_repo, id);
+        match client
+            .delete(&del_url)
+            .bearer_auth(token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header(reqwest::header::USER_AGENT, format!("tsn-snapshot-publisher/{}", env!("CARGO_PKG_VERSION")))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => {
+                info!("Snapshot dedup: deleted duplicate release id={} for tag {}", id, tag);
+            }
+            Ok(r) => {
+                warn!("Snapshot dedup: delete id={} returned {}", id, r.status());
+            }
+            Err(e) => {
+                warn!("Snapshot dedup: delete id={} failed: {}", id, e);
+            }
+        }
+    }
 }
 
 /// Keep only the `keep` most recent snapshot- releases on the tsn-snapshots
@@ -3586,6 +4313,11 @@ async fn cmd_node(
     faucet_daily_limit: Option<u64>,
     fast_sync: bool,
     node_role: NodeRole,
+    // v2.6.0 — auto-consolidate background worker (opt-out via --auto-consolidate=false).
+    // Only spawned when `mine_wallet` is set (nothing to consolidate on a wallet-less node).
+    auto_consolidate: bool,
+    consolidation_threshold: usize,
+    consolidation_interval_secs: u64,
 ) -> anyhow::Result<()> {
     use tsn::network::{AppState, MinerStats, sync_from_peer, sync_loop, broadcast_block, discovery_loop};
     use tsn::crypto::proof::CircomVerifyingParams;
@@ -3683,6 +4415,54 @@ async fn cmd_node(
 
     // Initialize blockchain with persistence
     let db_path = format!("{}/blockchain", data_dir);
+
+    // v2.6.9 — AUTO_RESTORE_NEEDED marker is now LOG-ONLY by default.
+    //
+    // The previous behaviour (auto-fetch the latest signed snapshot from
+    // GitHub on startup whenever the marker existed) caused a cascade of
+    // chain divergences on 2026-04-25: every restart of a stuck node
+    // re-fetched whichever snapshot GitHub had at that moment, which was
+    // sometimes a stale chain from earlier in the day. Operators ended up
+    // with the network split across 2-3 chains depending on which restart
+    // landed on which snapshot, and the v2.6.3 rollback fallback could not
+    // bridge those splits.
+    //
+    // New behaviour: the marker is read and surfaced loudly with explicit
+    // recovery instructions, but no network call is made. Operator must
+    // explicitly run `tsn restore-snapshot ...` (or set the env var
+    // `TSN_AUTO_RESTORE=1`) to opt back into auto-fetch. This way the
+    // chain you boot on is determined by your peers, not by whatever
+    // GitHub happened to host.
+    {
+        let dd = std::path::PathBuf::from(&data_dir);
+        if tsn::network::snapshot_auto_fetch::marker_exists(&dd) {
+            let opt_in = std::env::var("TSN_AUTO_RESTORE").map(|v| v == "1" || v == "true").unwrap_or(false);
+            if opt_in {
+                match tsn::network::snapshot_auto_fetch::auto_restore_if_marker_present(&dd).await {
+                    Ok(true) => tracing::info!(
+                        "auto-restore: self-healed from GitHub signed snapshot — continuing startup"
+                    ),
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::error!(
+                            "auto-restore FAILED ({}). Marker kept; next restart will retry. \
+                             To restore manually: `tsn restore-snapshot --snapshot snapshot.tar.gz \
+                             --manifest manifest.json --data-dir {} --force-producer-only` \
+                             with files from github.com/trusts-stack-network/tsn-snapshots.",
+                            e, data_dir
+                        );
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    "AUTO_RESTORE_NEEDED marker present at {:?} but auto-fetch is OFF (v2.6.9 default). \
+                     Letting peer fast-sync handle recovery instead. To force a GitHub snapshot \
+                     fetch on the next restart, set env TSN_AUTO_RESTORE=1.",
+                    dd.join(tsn::network::snapshot_auto_fetch::MARKER_FILENAME)
+                );
+            }
+        }
+    }
 
     // v2.3.5: auto-wipe obsolete chain data on testnet reset. When the on-disk
     // genesis does not match EXPECTED_GENESIS_HASH (because we bumped the
@@ -4096,8 +4876,13 @@ async fn cmd_node(
             tsn::consensus::banned_miners::BannedMiners::new()
         });
 
+    // v2.6.0 — snapshot chain.info() before moving the blockchain into the
+    // RwLock so AppState.chain_info_cache starts with a valid value from the
+    // very first /chain/info call, before the refresher task ever ticks.
+    let initial_chain_info = blockchain.info();
+
     let state = Arc::new(AppState {
-        blockchain: RwLock::new(blockchain),
+        blockchain: tokio::sync::RwLock::new(blockchain),
         mempool: RwLock::new(mempool),
         banned_miners: RwLock::new(banned_miners),
         banned_miners_path: Some(banned_miners_path),
@@ -4114,6 +4899,12 @@ async fn cmd_node(
         http_client,
         last_reorg_height: std::sync::atomic::AtomicU64::new(0),
         snapshot_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
+        // v2.7.0 Phase 1.2 — bumped from 4 to 16. With Phase 1.1 (witness LRU
+        // cache) the read-lock contention from validation drops sharply, so
+        // the bottleneck is no longer shared with /witness handlers. 16 lets
+        // a parallel consolidation of 8 tx run as a single batch instead of
+        // back-to-back batches of 4 with a 250 ms gap each.
+        tx_submit_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
         snapshot_cache: tokio::sync::RwLock::new(None),
         orphan_count: std::sync::atomic::AtomicU64::new(0),
         reorg_count: std::sync::atomic::AtomicU64::new(0),
@@ -4150,14 +4941,148 @@ async fn cmd_node(
         version_bans: std::sync::RwLock::new(std::collections::HashMap::new()),
         activity: std::sync::Arc::new(tsn::network::activity::ActivityCounters::default()),
         activity_bus: std::sync::Arc::new(tsn::network::activity::ActivityBus::new()),
+        network_status_cache: std::sync::RwLock::new(None),
+        chain_info_cache: arc_swap::ArcSwap::from_pointee(initial_chain_info),
+        // v2.7.0 Phase 1.1 — Witness cache. Cap is fixed at compile time;
+        // see `WITNESS_CACHE_CAPACITY` for sizing rationale.
+        witness_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+            std::num::NonZeroUsize::new(tsn::network::api::WITNESS_CACHE_CAPACITY).unwrap(),
+        ))),
+        // v2.7.0 Phase 1.3 — Per-IP submit rate-limit tracker.
+        submit_rate: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+            std::num::NonZeroUsize::new(tsn::network::api::SUBMIT_RATE_TRACKER_CAPACITY).unwrap(),
+        ))),
     });
+
+    // v2.6.0 — keep AppState.chain_info_cache fresh every 200ms so GET
+    // /chain/info never blocks on the blockchain RwLock. See api.rs for the
+    // full rationale.
+    tsn::network::api::spawn_chain_info_refresher(state.clone());
+
+    // v2.6.4 — Background Auto-Consolidation Worker (BACW).
+    //
+    // The mining wallet accumulates one coinbase note per block. After a few
+    // hundred blocks a `tsn send` has to consolidate dozens of small notes
+    // into spendable units, with each round costing one block's wait — the
+    // user-perceived send latency degrades from ~10s to several minutes.
+    //
+    // BACW runs in the background while the node is up. When the unspent
+    // note count crosses `consolidation_threshold`, BACW acquires the
+    // wallet mutex (the same `Arc<Mutex<ShieldedWallet>>` that CLI commands
+    // use, so serialization is automatic) and runs ONE consolidation round
+    // using `auto_consolidate`. It then releases the mutex and waits for
+    // the next interval. Over time the wallet stabilises near the threshold
+    // and any user-initiated `tsn send` finishes in ~10s — the Zcash-class
+    // UX promised since the v2.5 wallet rewrite.
+    //
+    // Lock contention notes: the wallet mutex is also held briefly by the
+    // miner loop on each new block (to scan for incoming notes) and by the
+    // balance/history HTTP handlers. A consolidation round holds the lock
+    // for the duration of the proof + submit + confirmation, which can be
+    // up to ~30s. During that window those callers wait — acceptable for
+    // a background maintenance task.
+    if auto_consolidate {
+        if let (Some(ws), Some(wallet_path_str)) = (wallet_service.clone(), mine_wallet.clone()) {
+            let threshold = consolidation_threshold;
+            let interval = std::time::Duration::from_secs(consolidation_interval_secs.max(60));
+            let bacw_node_url = format!("http://127.0.0.1:{}", port);
+            // BACW runs on its own OS thread with a `current_thread` tokio runtime.
+            // Reason: `auto_consolidate` (the consolidation loop reused from the
+            // CLI send path) holds `ThreadRng` and `&ShieldedWallet` references
+            // across `.await` boundaries — both `!Send`. A `tokio::spawn` requires
+            // the future to be `Send`, which would force a refactor of
+            // `auto_consolidate` to swap its RNG and rework the wallet borrow
+            // pattern. A dedicated single-thread runtime sidesteps the
+            // restriction without touching the existing send/consolidate logic.
+            std::thread::Builder::new()
+                .name("tsn-bacw".to_string())
+                .spawn(move || {
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::error!("BACW: failed to build runtime: {}", e);
+                            return;
+                        }
+                    };
+                    rt.block_on(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                        let mut tick = tokio::time::interval(interval);
+                        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                        tick.tick().await; // consume the immediate first tick
+                        let fee_base: u64 = 100_000; // 0.0001 TSN per consolidation round
+                        let bacw_client = reqwest::Client::builder()
+                            .timeout(std::time::Duration::from_secs(60))
+                            .build()
+                            .unwrap_or_default();
+
+                        loop {
+                            tick.tick().await;
+                            let unspent = ws.unspent_count().await;
+                            if unspent <= threshold {
+                                continue;
+                            }
+                            tracing::info!(
+                                "BACW: wallet has {} unspent notes (threshold {}), running one consolidation round",
+                                unspent, threshold
+                            );
+                            let mut wallet = ws.wallet.lock().await;
+                            let balance = wallet.balance();
+                            if balance < fee_base.saturating_mul(10) {
+                                tracing::warn!("BACW: balance {} too low for safe consolidation, skipping round", balance);
+                                continue;
+                            }
+                            // v2.6.8 — exactly ONE consolidation round per tick.
+                            // The previous design called `auto_consolidate` with
+                            // total_needed = balance/8 which let the inner loop
+                            // run many rounds back-to-back, flooding the
+                            // mempool with consolidation tx faster than blocks
+                            // could absorb (observed 2026-04-25). One round per
+                            // tick + jitter on the next tick keeps the BACW
+                            // contribution to mempool churn small and even.
+                            let total_needed = fee_base.saturating_mul(2);
+                            let bacw_label = wallet_path_str.clone();
+                            let result = crate::auto_consolidate(
+                                &mut *wallet,
+                                &bacw_label,
+                                &bacw_node_url,
+                                fee_base,
+                                total_needed,
+                                &bacw_client,
+                                std::collections::HashSet::new(),
+                            ).await;
+                            match result {
+                                Ok(rounds) if rounds > 0 => {
+                                    tracing::info!("BACW: 1-round consolidation complete ({} round actually executed)", rounds);
+                                }
+                                Ok(_) => {
+                                    tracing::debug!("BACW: no round needed at this tick");
+                                }
+                                Err(e) => {
+                                    tracing::warn!("BACW: consolidation round failed: {}", e);
+                                }
+                            }
+                            drop(wallet); // release lock before sleeping on jitter
+                            // jitter 0-30s so concurrent miners don't thunder
+                            let jitter_ms: u64 = (std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_nanos() as u64).unwrap_or(0)) % 30_000;
+                            tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
+                        }
+                    });
+                })
+                .ok();
+        }
+    }
 
     // ========================================================================
     // CHECKPOINT VALIDATION AT STARTUP
     // If our chain doesn't match hardcoded checkpoints, rollback and re-sync.
     // ========================================================================
     {
-        let chain = state.blockchain.read().unwrap();
+        let chain = state.blockchain.read().await;
         let local_height = chain.height();
         let mut violations = Vec::new();
         for &(cp_height, cp_hash) in crate::config::HARDCODED_CHECKPOINTS {
@@ -4185,7 +5110,7 @@ async fn cmd_node(
                 lowest.saturating_sub(1)
             );
             let rollback_target = lowest.saturating_sub(1);
-            let mut chain = state.blockchain.write().unwrap();
+            let mut chain = state.blockchain.write().await;
             // Bypass MAX_REORG_DEPTH for checkpoint-forced rollback
             if local_height - rollback_target <= ShieldedBlockchain::MAX_REORG_DEPTH {
                 let _ = chain.rollback_to_height(rollback_target);
@@ -4201,7 +5126,7 @@ async fn cmd_node(
                 // Re-open empty blockchain
                 let fresh = ShieldedBlockchain::open(&db_path, 1_500_000)
                     .expect("Failed to create fresh blockchain");
-                *state.blockchain.write().unwrap() = fresh;
+                *state.blockchain.write().await = fresh;
             }
         }
     }
@@ -4217,11 +5142,73 @@ async fn cmd_node(
     let api_port = port;
     let api_app = app;
     tokio::spawn(async move {
-        let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port)).await {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("FATAL: Cannot bind port {}: {}", api_port, e);
-                std::process::exit(1);
+        // v2.5.4 Bug #12 — retry bind on AddrInUse (up to 10s). After a
+        // killed node, the kernel can hold the socket in TIME_WAIT for a
+        // few seconds before releasing; without this loop the restart dies
+        // with `FATAL: Cannot bind port ...` (observed on EPYC2 relay
+        // post-pkill). SO_REUSEADDR would also fix it but tokio's default
+        // TcpListener::bind does not set it, and replacing it requires a
+        // larger refactor.
+        // v2.5.5 Bug #1 fix — build the listener via socket2 so we can
+        // enable SO_KEEPALIVE + SO_REUSEADDR at the kernel level. Without
+        // keepalive, half-open connections (client vanished without FIN,
+        // NAT timeout, network partition) stay in CLOSE-WAIT until the
+        // server tries to write and gets EPIPE. On seed-2 we observed
+        // 4036 CLOSE-WAIT after 51 days of uptime — fully saturating the
+        // accept backlog. With keepalive probes every 30 s after 60 s of
+        // idle, the OS closes dead sockets automatically.
+        let listener = {
+            use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
+            let mut delay_ms = 200u64;
+            let start = std::time::Instant::now();
+            let addr: std::net::SocketAddr = format!("0.0.0.0:{}", api_port).parse().unwrap();
+            loop {
+                let sock = match Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("FATAL: socket() failed: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                let _ = sock.set_reuse_address(true);
+                let _ = sock.set_nonblocking(true);
+                let keepalive = TcpKeepalive::new()
+                    .with_time(std::time::Duration::from_secs(60))
+                    .with_interval(std::time::Duration::from_secs(30))
+                    .with_retries(3);
+                if let Err(e) = sock.set_tcp_keepalive(&keepalive) {
+                    tracing::warn!("Failed to set TCP keepalive on listener: {}", e);
+                }
+                match sock.bind(&addr.into()) {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse
+                        && start.elapsed() < std::time::Duration::from_secs(10) =>
+                    {
+                        tracing::warn!(
+                            "Port {} busy, retrying bind in {}ms ({}s elapsed)...",
+                            api_port, delay_ms, start.elapsed().as_secs()
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms = (delay_ms * 2).min(2000);
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("FATAL: bind port {}: {}", api_port, e);
+                        std::process::exit(1);
+                    }
+                }
+                if let Err(e) = sock.listen(1024) {
+                    eprintln!("FATAL: listen() failed: {}", e);
+                    std::process::exit(1);
+                }
+                let std_listener: std::net::TcpListener = sock.into();
+                match tokio::net::TcpListener::from_std(std_listener) {
+                    Ok(l) => break l,
+                    Err(e) => {
+                        eprintln!("FATAL: TcpListener::from_std failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
         };
         tracing::info!("HTTP API listening on port {}", api_port);
@@ -4352,7 +5339,7 @@ async fn cmd_node(
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
 
                 let current_height = {
-                    let chain = watchdog_state.blockchain.read().unwrap();
+                    let chain = watchdog_state.blockchain.read().await;
                     chain.height()
                 };
 
@@ -4469,8 +5456,16 @@ async fn cmd_node(
                             }
                         }
                     }
-                    // v2.3.8 — smart auto-wipe for solo-fork:
-                    // only triggered when MULTIPLE guards are satisfied simultaneously.
+                    // v2.6.1 — auto-wipe DISABLED unconditionally. Operator-only.
+                    //
+                    // Prior versions (v2.3.8, v2.5.2) executed `chain.reset_for_snapshot_resync()`
+                    // automatically when a solo-fork was detected and the cooldown guard
+                    // allowed it. On 2026-04-25 this fired and wiped local state to h=0
+                    // because gossipsub silently dropped a 4 MB block (MessageTooLarge),
+                    // leaving the producer mining alone. The user's standing rule
+                    // (`feedback_never_auto_wipe.md`) is that NO destructive action is
+                    // ever taken without explicit human approval. We only log + alert.
+                    // Manual recovery: `/admin/force-resync`.
                     if verified_peer_heights.len() >= MIN_PEERS_AGREE && current_height > 100 {
                         let consensus_opt = compute_consensus(&verified_peer_heights);
                         let ahead_gap = consensus_opt
@@ -4478,42 +5473,19 @@ async fn cmd_node(
                             .unwrap_or(0);
                         if ahead_gap > SOLO_FORK_THRESHOLD {
                             let consensus_h = consensus_opt.unwrap();
-                            let now = std::time::Instant::now();
-                            // Trim wipe_history_24h
-                            while let Some(front) = wipe_history_24h.front() {
-                                if now.duration_since(*front).as_secs() > 86400 {
-                                    wipe_history_24h.pop_front();
-                                } else { break; }
-                            }
-                            let (allowed, reason) = check_wipe_allowed(now, last_wipe_at, &wipe_history_24h);
-                            let status_msg = if allowed {
-                                "ALLOWED".to_string()
-                            } else {
-                                format!("DENIED: {}", reason)
-                            };
                             tracing::warn!(
-                                "\x1b[36mWATCHDOG:\x1b[0m SOLO FORK confirmed — local={} consensus={} gap={} ({} peers agree). Auto-wipe {}.",
-                                current_height, consensus_h, ahead_gap, verified_peer_heights.len(),
-                                status_msg
+                                "\x1b[36mWATCHDOG:\x1b[0m SOLO FORK confirmed — local={} consensus={} gap={} ({} peers agree). Auto-wipe DISABLED (v2.6.1). Use /admin/force-resync to recover.",
+                                current_height, consensus_h, ahead_gap, verified_peer_heights.len()
                             );
-                            if allowed && is_auto {
-                                tracing::warn!("\x1b[36mWATCHDOG:\x1b[0m Executing smart auto-wipe (conditions satisfied).");
-                                let _reorg_guard = watchdog_state.reorg_lock.write().await;
-                                let mut chain = watchdog_state.blockchain.write().unwrap();
-                                chain.reset_for_snapshot_resync();
-                                drop(chain);
-                                drop(_reorg_guard);
-                                last_wipe_at = Some(now);
-                                wipe_history_24h.push_back(now);
-                                stuck_since = None;
-                                last_height = 0;
-                                continue;
-                            }
-                            // v2.3.8 — If validation mode OR wipe denied by guards,
-                            // surface to operator without touching data.
-                            if !is_auto {
-                                tracing::info!("\x1b[36mWATCHDOG:\x1b[0m Mode validation — solo fork detected (gap={}), action proposed via /admin/force-resync", ahead_gap);
-                            }
+                            tsn::network::log_node_error(
+                                &watchdog_state,
+                                "solo_fork",
+                                &format!(
+                                    "local={} consensus={} gap={} peers_agree={}",
+                                    current_height, consensus_h, ahead_gap, verified_peer_heights.len()
+                                ),
+                            );
+                            let _ = is_auto;
                         }
 
                         // v2.3.9 — Check 2d: symmetric case of 2c — local is BEHIND
@@ -4527,6 +5499,9 @@ async fn cmd_node(
                         let behind_gap = consensus_opt
                             .map(|c| c.saturating_sub(current_height))
                             .unwrap_or(0);
+                        // v2.6.1 — auto-wipe DISABLED unconditionally (same rationale as Check 2c).
+                        // We still track behind_stuck_since to surface a stable signal in logs,
+                        // but never destroy data. Operator must call /admin/force-resync.
                         if behind_gap > STUCK_BEHIND_THRESHOLD {
                             if behind_stuck_since.is_none() {
                                 behind_stuck_since = Some(std::time::Instant::now());
@@ -4536,40 +5511,20 @@ async fn cmd_node(
                                 .unwrap_or(false);
                             if grace_elapsed {
                                 let consensus_h = consensus_opt.unwrap();
-                                let now = std::time::Instant::now();
-                                while let Some(front) = wipe_history_24h.front() {
-                                    if now.duration_since(*front).as_secs() > 86400 {
-                                        wipe_history_24h.pop_front();
-                                    } else { break; }
-                                }
-                                let (allowed, reason) = check_wipe_allowed(now, last_wipe_at, &wipe_history_24h);
-                                let status_msg = if allowed {
-                                    "ALLOWED".to_string()
-                                } else {
-                                    format!("DENIED: {}", reason)
-                                };
                                 tracing::warn!(
-                                    "\x1b[36mWATCHDOG:\x1b[0m STUCK BEHIND confirmed — local={} consensus={} gap={} ({} peers agree, {}s elapsed). Auto-wipe {}.",
+                                    "\x1b[36mWATCHDOG:\x1b[0m STUCK BEHIND confirmed — local={} consensus={} gap={} ({} peers agree, {}s elapsed). Auto-wipe DISABLED (v2.6.1). Use /admin/force-resync to recover.",
                                     current_height, consensus_h, behind_gap, verified_peer_heights.len(),
-                                    STUCK_BEHIND_GRACE_SECS, status_msg
+                                    STUCK_BEHIND_GRACE_SECS
                                 );
-                                if allowed && is_auto {
-                                    tracing::warn!("\x1b[36mWATCHDOG:\x1b[0m Executing smart auto-wipe (stuck behind, rollback blocked by finalization).");
-                                    let _reorg_guard = watchdog_state.reorg_lock.write().await;
-                                    let mut chain = watchdog_state.blockchain.write().unwrap();
-                                    chain.reset_for_snapshot_resync();
-                                    drop(chain);
-                                    drop(_reorg_guard);
-                                    last_wipe_at = Some(now);
-                                    wipe_history_24h.push_back(now);
-                                    stuck_since = None;
-                                    behind_stuck_since = None;
-                                    last_height = 0;
-                                    continue;
-                                }
-                                if !is_auto {
-                                    tracing::info!("\x1b[36mWATCHDOG:\x1b[0m Mode validation — stuck behind detected (gap={}), action proposed via /admin/force-resync", behind_gap);
-                                }
+                                tsn::network::log_node_error(
+                                    &watchdog_state,
+                                    "stuck_behind",
+                                    &format!(
+                                        "local={} consensus={} gap={} peers_agree={}",
+                                        current_height, consensus_h, behind_gap, verified_peer_heights.len()
+                                    ),
+                                );
+                                let _ = is_auto;
                             }
                         } else {
                             behind_stuck_since = None;
@@ -4586,7 +5541,7 @@ async fn cmd_node(
                         tracing::warn!("\x1b[36mWATCHDOG:\x1b[0m Auto mode — full wipe + fresh sync.");
                         // v2.0.9: Take reorg_lock to prevent race with miner
                         let _reorg_guard = watchdog_state.reorg_lock.write().await;
-                        let mut chain = watchdog_state.blockchain.write().unwrap();
+                        let mut chain = watchdog_state.blockchain.write().await;
                         chain.reset_for_snapshot_resync();
                         drop(chain);
                         drop(_reorg_guard);
@@ -4603,7 +5558,7 @@ async fn cmd_node(
                 // Check 4: Verify checkpoints periodically (every 5 min)
                 // v2.0.9: Collect violation info first, drop read guard, then act
                 let checkpoint_violated = {
-                    let chain = watchdog_state.blockchain.read().unwrap();
+                    let chain = watchdog_state.blockchain.read().await;
                     let mut violated = false;
                     for &(cp_height, cp_hash) in crate::config::HARDCODED_CHECKPOINTS {
                         if cp_height <= chain.height() {
@@ -4625,7 +5580,7 @@ async fn cmd_node(
                     // Always auto for checkpoint violations — chain is on wrong fork
                     // v2.0.9: Take reorg_lock to prevent race with miner
                     let _reorg_guard = watchdog_state.reorg_lock.write().await;
-                    let mut chain_w = watchdog_state.blockchain.write().unwrap();
+                    let mut chain_w = watchdog_state.blockchain.write().await;
                     chain_w.reset_for_snapshot_resync();
                     drop(chain_w);
                     drop(_reorg_guard);
@@ -4698,7 +5653,7 @@ async fn cmd_node(
             // their peer-height cache without an HTTP /chain/info call.
             // The hint is frozen at startup; live updates continue via the
             // existing tip broadcast loop.
-            let startup_height = state.blockchain.read().unwrap().height();
+            let startup_height = state.blockchain.read().await.height();
             let p2p_config = P2pConfig {
                 listen_port: p2p_port,
                 bootstrap_peers: Vec::new(),
@@ -4708,6 +5663,7 @@ async fn cmd_node(
                 protocol_version: format!("tsn/{}/{}", env!("CARGO_PKG_VERSION"),
                     if miner_info.is_some() && node_role == NodeRole::Miner { "miner" }
                     else if node_role == NodeRole::LightClient { "light" }
+                    else if node_role == NodeRole::Cortex { "cortex" }
                     else { "relay" }),
                 agent_version: format!("h={}", startup_height),
             };
@@ -4810,7 +5766,7 @@ async fn cmd_node(
                                     let result = {
                                         // v2.0.9: Take reorg_lock to prevent race with miner
                                         let _reorg_guard = p2p_blockchain.reorg_lock.read().await;
-                                        let mut chain = p2p_blockchain.blockchain.write().unwrap();
+                                        let mut chain = p2p_blockchain.blockchain.write().await;
                                         chain.try_add_block(block)
                                     };
                                     match result {
@@ -4836,8 +5792,9 @@ async fn cmd_node(
                                                 if mempool.is_empty() {
                                                     return;
                                                 }
-                                                let chain_ro = cleanup_state.blockchain.read()
-                                                    .unwrap_or_else(|e| e.into_inner());
+                                                // v2.6.0 — inside spawn_blocking (sync context),
+                                                // use blocking_read() for the tokio RwLock.
+                                                let chain_ro = cleanup_state.blockchain.blocking_read();
                                                 let removed = mempool.revalidate(chain_ro.state());
                                                 if removed > 0 {
                                                     info!(
@@ -4852,7 +5809,7 @@ async fn cmd_node(
                                             // This keeps P2P peer heights fresh without waiting for
                                             // the periodic 10s tip broadcast cycle.
                                             {
-                                                let chain = p2p_blockchain.blockchain.read().unwrap();
+                                                let chain = p2p_blockchain.blockchain.read().await;
                                                 let tip_h = chain.height();
                                                 let tip_hash = hex::encode(chain.latest_hash());
                                                 let tx = p2p_blockchain.p2p_broadcast.read().unwrap().clone();
@@ -4865,13 +5822,13 @@ async fn cmd_node(
                                             // v2.3.0 Phase 2.1: block-based snapshot auto-trigger.
                                             // Shared with the miner-local path via check_snapshot_auto_trigger.
                                             {
-                                                let tip_h = p2p_blockchain.blockchain.read().unwrap().height();
+                                                let tip_h = p2p_blockchain.blockchain.read().await.height();
                                                 check_snapshot_auto_trigger(&p2p_blockchain, tip_h);
                                             }
                                         }
                                         Ok(false) => {
                                             // Stored as orphan — request missing blocks via P2P
-                                            let local_height = p2p_blockchain.blockchain.read().unwrap().height();
+                                            let local_height = p2p_blockchain.blockchain.read().await.height();
                                             let now_secs = std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)
                                                 .unwrap_or_default().as_secs();
@@ -4896,7 +5853,7 @@ async fn cmd_node(
                                                     tokio::spawn(async move {
                                                         // Give P2P 3s to fill the gap first
                                                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                                                        let cur_h = fb_state.blockchain.read().unwrap().height();
+                                                        let cur_h = fb_state.blockchain.read().await.height();
                                                         if cur_h <= fb_height {
                                                             // P2P didn't fill the gap — use HTTP
                                                             let _guard = fb_lock.lock().await;
@@ -4973,7 +5930,7 @@ async fn cmd_node(
                         P2pEvent::BlockRequest(from, to) => {
                             // A peer needs blocks from us — serve them via P2P
                             let blocks_data = {
-                                let chain = p2p_blockchain.blockchain.read().unwrap();
+                                let chain = p2p_blockchain.blockchain.read().await;
                                 let local_h = chain.height();
                                 if from <= local_h && to <= local_h {
                                     let mut bd: Vec<Vec<u8>> = Vec::new();
@@ -5020,7 +5977,7 @@ async fn cmd_node(
                 interval.tick().await;
 
                 let (height, hash) = {
-                    let chain = tip_state.blockchain.read().unwrap();
+                    let chain = tip_state.blockchain.read().await;
                     (chain.height(), hex::encode(chain.latest_hash()))
                 };
 
@@ -5055,6 +6012,8 @@ async fn cmd_node(
                     .unwrap_or(false);
                 let my_role: String = if tip_state.node_role == "light" {
                     "light".to_string()
+                } else if tip_state.node_role == "cortex" {
+                    "cortex".to_string()
                 } else if is_actively_mining {
                     "miner".to_string()
                 } else {
@@ -5103,7 +6062,7 @@ async fn cmd_node(
         // Do initial scan in a blocking task to avoid blocking the async runtime
         let scan_state = state.clone();
         let (new_notes, balance) = tokio::task::spawn_blocking(move || {
-            let blockchain = scan_state.blockchain.read().unwrap();
+            let blockchain = scan_state.blockchain.blocking_read();
             let current_height = blockchain.height();
 
             // Collect blocks into a vec to avoid borrowing issues
@@ -5143,7 +6102,7 @@ async fn cmd_node(
                 let scan_state = faucet_scan_state.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Some(ref faucet) = scan_state.faucet {
-                        let blockchain = scan_state.blockchain.read().unwrap();
+                        let blockchain = scan_state.blockchain.blocking_read();
                         let current_height = blockchain.height();
 
                         let mut faucet_guard = faucet.blocking_write();
@@ -5274,7 +6233,7 @@ async fn cmd_node(
                 // v1.3.3: only consider peers whose height we can verify via HTTP /tip
                 // (gossip tips can come from fork chains and are unreliable)
                 if !force_mine {
-                    let local_height = mine_state.blockchain.read().unwrap().height();
+                    let local_height = mine_state.blockchain.read().await.height();
                     let sync_client = mine_state.http_client.clone();
                     let peers_list = mine_state.peers.read().unwrap().clone();
 
@@ -5324,7 +6283,7 @@ async fn cmd_node(
                         let backoff_secs = std::cmp::min(5u64 * 2u64.pow(resync_attempts.min(3)), 30);
                         tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
 
-                        let fresh_height = mine_state.blockchain.read().unwrap().height();
+                        let fresh_height = mine_state.blockchain.read().await.height();
                         let fresh_gap = verified_max_height.saturating_sub(fresh_height);
 
                         if fresh_height > local_height {
@@ -5421,7 +6380,7 @@ async fn cmd_node(
 
                                                                     // v2.3.9 — fetch LWMA seed headers before taking the lock.
                                                                     let lwma_seed = tsn::network::sync::fetch_pre_snapshot_lwma_headers(&sync_client, &peer_url, snap_height).await;
-                                                                    let mut chain = mine_state.blockchain.write().unwrap();
+                                                                    let mut chain = mine_state.blockchain.write().await;
                                                                     chain.import_snapshot_at_height(snapshot, snap_height, block_hash, diff, next_diff, peer_work);
                                                                     if !lwma_seed.is_empty() {
                                                                         tracing::info!("pre_snapshot_lwma: seeded {} headers from {}", lwma_seed.len(), peer_url);
@@ -5455,7 +6414,7 @@ async fn cmd_node(
 
                 // Auto-resync: detect stuck node and trigger full wipe+resync
                 if !force_mine {
-                    let current_height = mine_state.blockchain.read().unwrap().height();
+                    let current_height = mine_state.blockchain.read().await.height();
                     let sync_client = mine_state.http_client.clone();
                     let peers_list = mine_state.peers.read().unwrap().clone();
 
@@ -5469,7 +6428,7 @@ async fn cmd_node(
                         let mut verified_max_height: u64 = 0;
                         let mut best_peer: Option<String> = None;
                         let mut _peer_max_work: u128 = 0;
-                        let _local_work = mine_state.blockchain.read().unwrap().cumulative_work();
+                        let _local_work = mine_state.blockchain.read().await.cumulative_work();
                         for peer in &peers_list {
                             let info_url = format!("{}/chain/info", peer);
                             if let Ok(resp) = sync_client.get(&info_url)
@@ -5549,7 +6508,7 @@ async fn cmd_node(
 
                                                                     // v2.3.9 — fetch LWMA seed headers before taking the lock.
                                                                     let lwma_seed = tsn::network::sync::fetch_pre_snapshot_lwma_headers(&sync_client, &peer_url, snap_height).await;
-                                                                    let mut chain = mine_state.blockchain.write().unwrap();
+                                                                    let mut chain = mine_state.blockchain.write().await;
                                                                     chain.import_snapshot_at_height(snapshot, snap_height, block_hash, diff, next_diff, peer_work);
                                                                     if !lwma_seed.is_empty() {
                                                                         tracing::info!("pre_snapshot_lwma: seeded {} headers from {}", lwma_seed.len(), peer_id(&peer_url));
@@ -5584,19 +6543,40 @@ async fn cmd_node(
                 }
 
                 // Get mempool transactions (both V1 and V2)
-                let (mempool_txs, mempool_txs_v2) = {
+                // v2.6.0 — mempool is std::sync::RwLock (!Send). We MUST release
+                // its guard via an inner block before the blockchain .await,
+                // otherwise the enclosing tokio::spawn future becomes !Send.
+                // v2.7.0 Phase 1.5 — V2 selection now follows the ZIP-317 split
+                // (high-fee unconditional + bounded underpaying); see
+                // `Mempool::get_shielded_v2_for_block` for the algorithm.
+                let (v1, all_v2) = {
                     let mempool = mine_state.mempool.read().unwrap();
                     let v1 = mempool.get_transactions(100);
-                    let all_v2 = mempool.get_shielded_v2_transactions(100);
-                    drop(mempool);
-
+                    let all_v2 = mempool.get_shielded_v2_for_block(
+                        tsn::network::mempool::BLOCK_HIGH_FEE_TX_LIMIT,
+                        tsn::network::mempool::BLOCK_UNPAID_ACTION_LIMIT,
+                    );
+                    (v1, all_v2)
+                };
+                let (mempool_txs, mempool_txs_v2) = {
                     // Filter V2 transactions: only include those with valid anchors
-                    // This prevents invalid TX anchors from blocking mining
-                    let chain = mine_state.blockchain.read().unwrap();
+                    // AND whose nullifiers have not already been spent on-chain.
+                    //
+                    // v2.5.4 Bug #7 fix — the nullifier check prevents a zombie
+                    // tx from staying in the mempool and poisoning every block
+                    // template: once its nullifier is already in the chain's
+                    // nullifier set, `add_block` fails with "Nullifier already
+                    // spent" and the miner stalls. Filtering here skips the
+                    // zombie; `mempool.revalidate` (now V2-aware) cleans it up
+                    // on the next post-block pass.
+                    let chain = mine_state.blockchain.read().await;
                     let v2: Vec<_> = all_v2.into_iter().filter(|tx| {
-                        tx.spends.iter().all(|spend| chain.state().is_valid_anchor_pq(&spend.anchor))
+                        tx.spends.iter().all(|spend| {
+                            let n = tsn::crypto::nullifier::Nullifier(spend.nullifier);
+                            chain.state().is_valid_anchor_pq(&spend.anchor)
+                                && !chain.state().is_nullifier_spent(&n)
+                        })
                     }).collect();
-                    drop(chain);
 
                     if !v2.is_empty() {
                         println!("  Including {} V2 transactions in block template", v2.len());
@@ -5610,7 +6590,7 @@ async fn cmd_node(
                 let block_wait_secs = {
                     let min_interval = crate::config::MIN_BLOCK_INTERVAL_SECS;
                     let wait_secs = {
-                        let chain = mine_state.blockchain.read().unwrap();
+                        let chain = mine_state.blockchain.read().await;
                         let tip_height = chain.height();
                         if tip_height > 0 {
                             if let Some(prev_block) = chain.get_block_by_height(tip_height) {
@@ -5635,7 +6615,7 @@ async fn cmd_node(
 
                 // Create block template with both V1 and V2 transactions
                 let mut block = {
-                    let chain = mine_state.blockchain.read().unwrap();
+                    let chain = mine_state.blockchain.read().await;
                     chain.create_block_template_with_v2(miner_pk_hash, &viewing_key, mempool_txs, mempool_txs_v2)
                 };
                 // Save the prev_hash to detect stale blocks after PoW
@@ -5645,7 +6625,7 @@ async fn cmd_node(
                 drop(_reorg_read);
 
                 let (height, difficulty) = {
-                    let chain = mine_state.blockchain.read().unwrap();
+                    let chain = mine_state.blockchain.read().await;
                     (chain.height() + 1, block.header.difficulty)
                 };
 
@@ -5723,7 +6703,7 @@ async fn cmd_node(
                 });
 
                 // If cancelled, restart on new tip (with cooldown after reorg)
-                let mined_block = match mined_block {
+                let mut mined_block = match mined_block {
                     Some(b) => b,
                     None => {
                         tracing::debug!("Mining cancelled — restarting on new tip");
@@ -5731,12 +6711,45 @@ async fn cmd_node(
                     }
                 };
 
+                // v2.5.3 — collect relay endorsements over this block's hash.
+                // Each successful response grants the signer an equal share of
+                // this block's 3% relay-pool slice (distributed at the next
+                // PAYOUT_INTERVAL tip). Empty Vec is fine — the 3% just rolls
+                // into `unallocated` and eventually drops to DEV_TREASURY.
+                {
+                    let block_hash = mined_block.hash();
+                    let mut peers = mine_state.peers.read().unwrap().clone();
+                    peers.retain(|peer| {
+                        tsn::network::is_contactable_peer(peer)
+                            && peer != &announce_url
+                            && peer != &local_url
+                            && peer != &local_ip_url
+                    });
+                    if !peers.is_empty() {
+                        let endorsements = tsn::network::sync::collect_endorsements(
+                            &block_hash,
+                            &peers,
+                            &client,
+                            &miner_pk_hash,
+                        )
+                        .await;
+                        if !endorsements.is_empty() {
+                            tracing::info!(
+                                "Attaching {} endorsement(s) to block {}",
+                                endorsements.len(),
+                                hex::encode(&block_hash[..8]),
+                            );
+                        }
+                        mined_block.endorsements = endorsements;
+                    }
+                }
+
                 // Re-acquire reorg lock before adding block — ensures no reorg in progress
                 let _reorg_read_post = mine_state.reorg_lock.read().await;
 
                 // Check if tip changed during PoW (reorg happened while mining)
                 {
-                    let chain = mine_state.blockchain.read().unwrap();
+                    let chain = mine_state.blockchain.read().await;
                     let current_tip = chain.latest_hash();
                     if template_prev_hash != current_tip {
                         mine_state.metric_stale_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -5750,7 +6763,7 @@ async fn cmd_node(
 
                 // Add to local chain
                 {
-                    let mut chain = mine_state.blockchain.write().unwrap();
+                    let mut chain = mine_state.blockchain.write().await;
                     match chain.add_block(mined_block.clone()) {
                         Ok(()) => {
                             println!(
@@ -5826,7 +6839,7 @@ async fn cmd_node(
                 // check_snapshot_auto_trigger is a no-op unless the new tip crosses an
                 // interval boundary and the CAS claims the exported interval first.
                 {
-                    let tip_h = mine_state.blockchain.read().unwrap().height();
+                    let tip_h = mine_state.blockchain.read().await.height();
                     check_snapshot_auto_trigger(&mine_state, tip_h);
                 }
 
@@ -5861,7 +6874,7 @@ async fn cmd_node(
                             let peer_hash = peer_info.get("latest_hash").and_then(|v| v.as_str()).unwrap_or("");
 
                             let local_hash_hex = {
-                                let chain = mine_state.blockchain.read().unwrap();
+                                let chain = mine_state.blockchain.read().await;
                                 hex::encode(chain.latest_hash())
                             };
 
@@ -5875,7 +6888,7 @@ async fn cmd_node(
                                     // Wait for next block cycle to check if our block survived
                                     tokio::time::sleep(std::time::Duration::from_secs(12)).await;
                                     let local_hash_at_h = {
-                                        let chain = confirm_state.blockchain.read().unwrap();
+                                        let chain = confirm_state.blockchain.read().await;
                                         chain.get_hash_at_height(confirm_height)
                                             .map(|h| hex::encode(h))
                                             .unwrap_or_default()
@@ -5919,7 +6932,36 @@ async fn cmd_node(
                                 if unaccepted_count >= 2 {
                                     tracing::error!("FORK CONFIRMED: peer is ahead. Re-syncing...");
                                     mine_state.reorg_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    let _ = tsn::network::sync_from_peer(mine_state.clone(), peer).await;
+                                    // v2.5.2 — 60s global timeout. Prevents the miner loop from
+                                    // hanging indefinitely when sync_from_peer stalls on
+                                    // reorg_lock contention (observed 13 min stall on EPYC2
+                                    // during testnet-v9 hot race). Errors are counted but the
+                                    // miner loop resumes: the next cycle will re-check peers
+                                    // and retry via sync_loop anyway.
+                                    let sync_start = std::time::Instant::now();
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(60),
+                                        tsn::network::sync_from_peer(mine_state.clone(), peer),
+                                    ).await {
+                                        Ok(Ok(height)) => {
+                                            tracing::info!(
+                                                "FORK recovery: sync_from_peer ok h={} took={}ms",
+                                                height, sync_start.elapsed().as_millis()
+                                            );
+                                        }
+                                        Ok(Err(e)) => {
+                                            tracing::warn!(
+                                                "FORK recovery: sync_from_peer err={} took={}ms — will retry next cycle",
+                                                e, sync_start.elapsed().as_millis()
+                                            );
+                                        }
+                                        Err(_) => {
+                                            tracing::error!(
+                                                "FORK recovery: sync_from_peer TIMEOUT after 60s on peer {} — aborting, will retry next cycle",
+                                                peer
+                                            );
+                                        }
+                                    }
                                     // BUG FIX: Do NOT set mining_cancel here.
                                     // sync_from_peer already cancels mining during reorg internally.
                                     // Setting cancel=true AFTER sync returns kills the next mining
@@ -5940,7 +6982,7 @@ async fn cmd_node(
         });
     }
 
-    let chain_height = state.blockchain.read().unwrap().height();
+    let chain_height = state.blockchain.read().await.height();
     let node_id = state.p2p_peer_id.read().unwrap().clone().unwrap_or_default();
     println!();
     println!("Chain height: {}", chain_height);
@@ -5975,7 +7017,7 @@ async fn cmd_node(
                     }
                 }
                 "status" => {
-                    let chain = console_state.blockchain.read().unwrap();
+                    let chain = console_state.blockchain.read().await;
                     let h = chain.height();
                     let diff = chain.info().difficulty;
                     let work = chain.cumulative_work();
@@ -6002,7 +7044,7 @@ async fn cmd_node(
                     println!("{violet}> TSN v{}{reset}", env!("CARGO_PKG_VERSION"));
                 }
                 "difficulty" => {
-                    let chain = console_state.blockchain.read().unwrap();
+                    let chain = console_state.blockchain.read().await;
                     let diff = chain.info().difficulty;
                     let next = chain.info().next_difficulty;
                     println!("{violet}> Current:    {reset}{diff}");

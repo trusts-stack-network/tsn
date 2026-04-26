@@ -94,6 +94,35 @@ pub struct ShieldedWallet {
     tx_history: Vec<WalletTxRecord>,
     /// SQLite database backend (None = legacy JSON mode).
     db: Option<super::wallet_db::WalletDb>,
+    /// v2.7.4 Phase C — Local Poseidon/Goldilocks commitment tree.
+    ///
+    /// The wallet maintains its own copy of the network's V2 commitment
+    /// tree, growing it leaf-by-leaf as blocks are scanned. This eliminates
+    /// the round-trip to the node's `/witness/v2/position/{N}` endpoint when
+    /// building a transaction: the wallet generates the Merkle path locally,
+    /// using its own anchor (root) which is guaranteed to belong to a recent
+    /// chain state because the wallet replays the same blocks the node did.
+    ///
+    /// The tree state is persisted via `CommitmentTreePQ::snapshot()` in
+    /// `wallet_db` (or alongside the JSON wallet) so it survives restarts.
+    pub(crate) local_tree: crate::crypto::pq::merkle_pq::CommitmentTreePQ,
+}
+
+impl ShieldedWallet {
+    /// v2.7.4 Phase C — Append a single raw Poseidon leaf to the wallet's
+    /// local commitment tree. Used by `sync_local_tree_pq` in the binary
+    /// to rebuild the tree from the node's bulk-leaves API.
+    pub fn append_local_leaf_pq(&mut self, leaf: [u8; 32]) {
+        let cm = crate::crypto::pq::commitment_pq::NoteCommitmentPQ(leaf);
+        self.local_tree.append(&cm);
+    }
+
+    /// v2.7.4 Phase C — Raw leaf bytes at the given position in the local
+    /// V2 tree. Returns `None` if the position is past the wallet's tree
+    /// (caller should refresh via `sync_local_tree_pq` and retry).
+    pub fn local_leaf_at_v2(&self, position: u64) -> Option<[u8; 32]> {
+        self.local_tree.leaf_at(position)
+    }
 }
 
 impl ShieldedWallet {
@@ -115,6 +144,7 @@ impl ShieldedWallet {
             last_scanned_height: 0,
             tx_history: Vec::new(),
             db: None,
+            local_tree: crate::crypto::pq::merkle_pq::CommitmentTreePQ::new(),
         }
     }
 
@@ -138,6 +168,7 @@ impl ShieldedWallet {
             last_scanned_height: 0,
             tx_history: Vec::new(),
             db: None,
+            local_tree: crate::crypto::pq::merkle_pq::CommitmentTreePQ::new(),
         }
     }
 
@@ -196,6 +227,7 @@ impl ShieldedWallet {
             last_scanned_height: stored.last_scanned_height,
             tx_history: stored.tx_history,
             db: None,
+            local_tree: crate::crypto::pq::merkle_pq::CommitmentTreePQ::new(),
         })
     }
 
@@ -274,6 +306,15 @@ impl ShieldedWallet {
         let last_scanned_height = db.last_scanned_height()?;
         let tx_history = db.tx_history(10000)?; // load all
 
+        // v2.7.4 Phase C — try to restore the local commitment tree from
+        // its persisted snapshot. If the wallet has none yet (first run on
+        // this network) we start with an empty tree; the next scan will
+        // rebuild it leaf-by-leaf.
+        let local_tree = match db.load_tree_snapshot() {
+            Ok(Some(snap)) => crate::crypto::pq::merkle_pq::CommitmentTreePQ::from_snapshot(snap),
+            _ => crate::crypto::pq::merkle_pq::CommitmentTreePQ::new(),
+        };
+
         Ok(Self {
             keypair,
             nullifier_key,
@@ -283,6 +324,7 @@ impl ShieldedWallet {
             last_scanned_height,
             tx_history,
             db: Some(db),
+            local_tree,
         })
     }
 
@@ -337,6 +379,31 @@ impl ShieldedWallet {
         for wn in &self.notes {
             if wn.is_spent {
                 db.mark_spent_by_commitment(&wn.commitment.to_bytes())?;
+            }
+        }
+
+        // v2.7.4 Phase C — persist the local commitment-tree snapshot so
+        // the next CLI invocation reuses it instead of bulk-pulling every
+        // leaf from genesis.
+        //
+        // Guard: only overwrite the persisted snapshot when the in-memory
+        // tree is at least as large as what's already on disk. Otherwise a
+        // mining process whose local_tree was never populated would reset
+        // the wallet's bootstrapped tree on every save, defeating the
+        // whole point of persistence.
+        let in_mem_size = self.local_tree.size();
+        if in_mem_size > 0 {
+            let persisted_size = db
+                .load_tree_snapshot()
+                .ok()
+                .flatten()
+                .map(|s| s.size)
+                .unwrap_or(0);
+            if in_mem_size >= persisted_size {
+                let snap = self.local_tree.snapshot();
+                if let Err(e) = db.save_tree_snapshot(&snap) {
+                    tracing::warn!("failed to save tree snapshot: {}", e);
+                }
             }
         }
 
@@ -504,6 +571,57 @@ impl ShieldedWallet {
     /// Alias for unspent_count.
     pub fn note_count(&self) -> usize {
         self.unspent_count()
+    }
+
+    /// v2.7.4 Phase C — Append every V2 commitment in `block` to the
+    /// wallet's local Poseidon/Goldilocks tree, in the *exact same order*
+    /// as `ShieldedState::apply_transaction_v2` + `apply_coinbase`. Run this
+    /// once per block as it is scanned so the wallet's tree mirrors the
+    /// network's. The wallet can then generate its own Merkle witnesses
+    /// without calling the node's `/witness/v2/position/{N}` endpoint.
+    pub fn append_block_pq_commitments(&mut self, block: &ShieldedBlock) {
+        use crate::crypto::pq::commitment_pq::NoteCommitmentPQ;
+
+        // (1) V2 transactions, output by output (matches state.rs:399-406).
+        for tx in &block.transactions_v2 {
+            for output in &tx.outputs {
+                let cm = NoteCommitmentPQ(output.note_commitment);
+                self.local_tree.append(&cm);
+            }
+        }
+
+        // (2) Coinbase miner reward (matches state.rs:428-429).
+        let cb_cm = NoteCommitmentPQ(block.coinbase.note_commitment_pq);
+        self.local_tree.append(&cb_cm);
+
+        // (3) Optional dev-fee output (matches state.rs:440-443).
+        if let Some(dev_cm_pq) = block.coinbase.dev_fee_commitment_pq {
+            let cm = NoteCommitmentPQ(dev_cm_pq);
+            self.local_tree.append(&cm);
+        }
+    }
+
+    /// v2.7.4 Phase C — Local Merkle witness for a known leaf position. Used
+    /// by `cmd_send` to skip the network round-trip; equivalent to GET
+    /// `/witness/v2/position/{position}` but served entirely from the
+    /// wallet's in-memory tree.
+    pub fn local_witness_v2(
+        &self,
+        position: u64,
+    ) -> Option<crate::crypto::pq::merkle_pq::MerkleWitnessPQ> {
+        self.local_tree.witness(position)
+    }
+
+    /// v2.7.4 Phase C — Current root of the wallet's local commitment tree,
+    /// to be used as the anchor for newly built V2 transactions.
+    pub fn local_anchor_v2(&self) -> [u8; 32] {
+        // TreeHashPQ is already `[u8; 32]`.
+        self.local_tree.root()
+    }
+
+    /// v2.7.4 Phase C — Number of leaves currently in the local tree.
+    pub fn local_tree_size(&self) -> u64 {
+        self.local_tree.size()
     }
 
     /// Scan a block for incoming notes.
@@ -694,6 +812,39 @@ impl ShieldedWallet {
         self.last_scanned_height = height;
     }
 
+    /// v2.5.4 — read the genesis_hash the wallet last synced against.
+    /// Returns `Err` or empty string if the wallet has no SQLite backend
+    /// (pre-v2.2.0 JSON wallets) or the field is not yet set.
+    pub fn db_genesis_hash(&self) -> Result<String, WalletError> {
+        match &self.db {
+            Some(db) => db.genesis_hash(),
+            None => Ok(String::new()),
+        }
+    }
+
+    /// v2.5.4 — persist the genesis_hash seen on the last successful scan.
+    /// Used by `try_scan_via_api` to detect local data/ wipes (new chain
+    /// under the same network_name) and archive stale notes automatically.
+    pub fn set_db_genesis_hash(&self, hash: &str) -> Result<(), WalletError> {
+        match &self.db {
+            Some(db) => db.set_genesis_hash(hash),
+            None => Ok(()),
+        }
+    }
+
+    /// v2.5.4 — highest `position` held across all unspent notes. Used as
+    /// a rollback detector: if the current chain has fewer commitments
+    /// than this value, some of our notes reference leaves that no longer
+    /// exist in the tree and would 404 on witness fetch.
+    pub fn unspent_note_max_position(&self) -> u64 {
+        self.notes
+            .iter()
+            .filter(|n| !n.is_spent)
+            .map(|n| n.position)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Export viewing key as hex string for sharing with third parties.
     ///
     /// The viewing key allows scanning the blockchain for incoming notes
@@ -735,6 +886,7 @@ impl ShieldedWallet {
             last_scanned_height: 0,
             tx_history: Vec::new(),
             db: None,
+            local_tree: crate::crypto::pq::merkle_pq::CommitmentTreePQ::new(),
         })
     }
 

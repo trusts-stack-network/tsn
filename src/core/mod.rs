@@ -13,7 +13,8 @@ mod blockchain;
 
 // Shielded types (primary)
 pub use block::{
-    BlockError, BlockHeader, BlockHeaderHashPrefix, CompactHeader, ShieldedBlock, BLOCK_HASH_SIZE,
+    BlockError, BlockHeader, BlockHeaderHashPrefix, CompactHeader, Endorsement, ShieldedBlock,
+    BLOCK_HASH_SIZE, MAX_ENDORSEMENTS_PER_BLOCK,
 };
 pub use transaction::{
     BindingSignature, CoinbaseTransaction, LegacyTransaction, OutputDescription,

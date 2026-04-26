@@ -49,12 +49,18 @@ pub struct Database {
     /// v1.4.0: Persistent cumulative_work index (height -> u128).
     /// Used for accurate fork choice and rollback work calculation.
     cumulative_work: sled::Tree,
+    /// v2.6.0 — original on-disk path of this database (the "blockchain" dir).
+    /// Stored so the blockchain layer can derive the data_dir (parent) without
+    /// plumbing extra args through every callsite. Used by the rollback guard
+    /// to drop an AUTO_RESTORE_NEEDED marker next to this dir on fatal refuse.
+    path: std::path::PathBuf,
 }
 
 impl Database {
     /// Open or create a database at the given path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DatabaseError> {
-        let db = sled::open(path)?;
+        let path_buf = path.as_ref().to_path_buf();
+        let db = sled::open(&path_buf)?;
         let blocks = db.open_tree("blocks")?;
         let block_heights = db.open_tree("block_heights")?;
         let nullifiers = db.open_tree("nullifiers")?;
@@ -72,7 +78,15 @@ impl Database {
             metadata,
             faucet_claims,
             cumulative_work,
+            path: path_buf,
         })
+    }
+
+    /// v2.6.0 — the data_dir that contains this DB (i.e. the parent of the
+    /// "blockchain" dir). Returns None for in-memory DBs where the path has no
+    /// meaningful parent.
+    pub fn data_dir(&self) -> Option<&Path> {
+        self.path.parent()
     }
 
     /// Create a temporary in-memory database (for testing).
@@ -96,6 +110,7 @@ impl Database {
             metadata,
             faucet_claims,
             cumulative_work,
+            path: std::path::PathBuf::new(),
         })
     }
 
@@ -326,6 +341,51 @@ impl Database {
         self.metadata.insert("state_snapshot_height", &height.to_be_bytes())?;
         self.db.flush()?;
         Ok(())
+    }
+
+    /// v2.6.3 — Save the fast-sync base state immutably, never overwritten.
+    ///
+    /// Rationale: when a fast-sync receiver imports a snapshot at height B,
+    /// the rolling `state_snapshot_pq` (above) starts at B but is later
+    /// overwritten as the node advances. If a deep reorg target lands above
+    /// B but below the latest rolling snapshot, the rolling snapshot is too
+    /// new to use, AND the genesis state is unreachable (blocks below B were
+    /// pruned from the fast-sync). Without this immutable copy the rollback
+    /// dies with "no snapshot ≤ target", as observed on 2026-04-25 when
+    /// seeds got stuck unable to reorg out of a 10K-send-induced fork.
+    ///
+    /// We keep one base state per node — written once at fast-sync import
+    /// (or the first time the node opens with no base recorded) and read
+    /// only when the rolling snapshot cannot serve the rollback.
+    pub fn save_fast_sync_base_state(
+        &self,
+        snapshot: &crate::core::StateSnapshotPQ,
+        height: u64,
+    ) -> Result<(), DatabaseError> {
+        let data = serde_json::to_vec(snapshot)?;
+        self.metadata.insert("fast_sync_base_state_pq", data)?;
+        self.metadata.insert("fast_sync_base_state_height", &height.to_be_bytes())?;
+        self.db.flush()?;
+        Ok(())
+    }
+
+    /// v2.6.3 — Load the immutable fast-sync base state, if recorded.
+    pub fn load_fast_sync_base_state(
+        &self,
+    ) -> Result<Option<(crate::core::StateSnapshotPQ, u64)>, DatabaseError> {
+        let snapshot_data = match self.metadata.get("fast_sync_base_state_pq")? {
+            Some(data) => data,
+            None => return Ok(None),
+        };
+        let height_data = match self.metadata.get("fast_sync_base_state_height")? {
+            Some(data) => data,
+            None => return Ok(None),
+        };
+        let snapshot: crate::core::StateSnapshotPQ = serde_json::from_slice(&snapshot_data)?;
+        let height = u64::from_be_bytes(height_data.as_ref().try_into().map_err(|_| {
+            DatabaseError::InvalidData("invalid fast_sync_base_state height".into())
+        })?);
+        Ok(Some((snapshot, height)))
     }
 
     /// Clear the state snapshot (used during resync).

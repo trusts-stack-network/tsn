@@ -59,7 +59,17 @@ pub struct ShieldedState {
     /// lifetime (sum of `pool_total` on every `RelayPayout`). Strictly
     /// monotonic, bound into state_root.
     relay_pool_total_paid: u64,
+    /// v2.5.4 Bug #8 fix — rolling history of the most recent N relay
+    /// payouts (up to `MAX_PAYOUT_HISTORY`). Kept OUT of state_root so it
+    /// does NOT force a hard-fork, but included in the snapshot so a
+    /// fast-synced node can serve `/relay/payouts/recent` without needing
+    /// every block since genesis. Populated by `apply_relay_payout`.
+    recent_payouts: std::collections::VecDeque<crate::consensus::relay_pool::RelayPayout>,
 }
+
+/// v2.5.4 Bug #8 fix — keep at most this many recent payouts in state.
+/// At 1 payout / 1000 blocks, 100 entries = ~100000 blocks of history.
+pub const MAX_PAYOUT_HISTORY: usize = 100;
 
 impl ShieldedState {
     /// Create a new empty shielded state.
@@ -72,7 +82,16 @@ impl ShieldedState {
             relay_balances: std::collections::BTreeMap::new(),
             relay_pool: crate::consensus::relay_pool::RelayPool::new(),
             relay_pool_total_paid: 0,
+            recent_payouts: std::collections::VecDeque::new(),
         }
+    }
+
+    /// v2.5.4 Bug #8 — read-only access to the rolling payout history.
+    /// Ordered oldest → newest. Used by `/relay/payouts/recent` so the
+    /// explorer still shows payouts even on fast-synced nodes that have
+    /// pruned the original blocks.
+    pub fn recent_payouts(&self) -> &std::collections::VecDeque<crate::consensus::relay_pool::RelayPayout> {
+        &self.recent_payouts
     }
 
     /// Read-only access to the relay balance table (Phase 5 / v2.4.0).
@@ -99,8 +118,30 @@ impl ShieldedState {
     /// Accumulate 3% of a block's reward into the pool. Called on every
     /// accepted block (including fast-sync replay), so the pool balance
     /// stays consistent cross-node.
+    ///
+    /// v2.5.3 legacy path — treats the amount as `unallocated` (no per-relay
+    /// attribution). New callers that have the block in scope must use
+    /// `accumulate_relay_pool_from_block` so endorsements are credited.
     pub fn accumulate_relay_pool(&mut self, amount: u64) {
         self.relay_pool.accumulate(amount);
+    }
+
+    /// v2.5.3 — accumulate 3% of a block's reward, attributing equal shares
+    /// to each endorsement signer on the block. Blocks with zero endorsements
+    /// push the full amount into the unallocated bucket (flows to DEV_TREASURY
+    /// at payout time). Replaces `accumulate_relay_pool` at every call site
+    /// that has the full block available (i.e. post-v2.5.3 replay + live).
+    pub fn accumulate_relay_pool_from_block(
+        &mut self,
+        block: &crate::core::block::ShieldedBlock,
+        amount: u64,
+    ) {
+        let pk_hashes: Vec<[u8; 32]> = block
+            .endorsements
+            .iter()
+            .map(|e| e.pk_hash())
+            .collect();
+        self.relay_pool.accumulate_from_block(amount, &pk_hashes);
     }
 
     /// Apply a `RelayPayout` to the state: for each entry, add `amount` to
@@ -114,6 +155,13 @@ impl ShieldedState {
         self.relay_pool_total_paid =
             self.relay_pool_total_paid.saturating_add(payout.pool_total);
         self.relay_pool.drain(payout.height);
+        // v2.5.4 Bug #8 — record the payout in the rolling history so the
+        // explorer can surface it without scanning archival blocks. Bounded
+        // size keeps the state footprint + snapshot size predictable.
+        self.recent_payouts.push_back(payout.clone());
+        while self.recent_payouts.len() > MAX_PAYOUT_HISTORY {
+            self.recent_payouts.pop_front();
+        }
     }
 
     /// Get the current commitment tree root.
@@ -206,7 +254,7 @@ impl ShieldedState {
         // fast-synced nodes agree with miners on pending balance and
         // cumulative payout.
         hasher.update(b"relay_pool_v1");
-        hasher.update(&self.relay_pool.balance.to_le_bytes());
+        hasher.update(&self.relay_pool.balance().to_le_bytes());
         hasher.update(&self.relay_pool.last_payout_height.to_le_bytes());
         hasher.update(&self.relay_pool_total_paid.to_le_bytes());
 
@@ -434,6 +482,91 @@ impl ShieldedState {
     /// quantum-vulnerable elliptic curve assumptions.
     ///
     /// Checks:
+    /// v2.7.0 Phase 2.1 — CPU-only validation that does not touch chain state.
+    /// Verifies the STARK proof, the proof's public-input self-consistency,
+    /// the proof↔transaction commitment/nullifier/anchor agreement, and the
+    /// ML-DSA-65 ownership signatures. Returns the verified public inputs so
+    /// the caller can hand them to `validate_transaction_v2_state_check` for
+    /// the cheap state-dependent checks. Designed to run in
+    /// `tokio::task::spawn_blocking` without holding the blockchain lock.
+    pub fn validate_transaction_v2_proof_only(
+        tx: &ShieldedTransactionV2,
+    ) -> Result<crate::crypto::pq::proof_pq::TransactionPublicInputs, StateError> {
+        use crate::crypto::pq::proof_pq::verify_proof;
+
+        if tx.spends.is_empty() && tx.outputs.is_empty() {
+            return Err(StateError::EmptyTransaction);
+        }
+
+        let public_inputs = verify_proof(
+            &tx.transaction_proof,
+            tx.spends.len(),
+            tx.outputs.len(),
+        ).map_err(|_| StateError::InvalidProof)?;
+
+        if public_inputs.nullifiers.len() != tx.spends.len() {
+            return Err(StateError::InvalidProof);
+        }
+        if public_inputs.note_commitments.len() != tx.outputs.len() {
+            return Err(StateError::InvalidProof);
+        }
+        if public_inputs.fee != tx.fee {
+            return Err(StateError::InvalidProof);
+        }
+
+        for (i, root) in public_inputs.merkle_roots.iter().enumerate() {
+            if root != &tx.spends[i].anchor {
+                return Err(StateError::InvalidAnchor);
+            }
+        }
+
+        for (i, nf) in public_inputs.nullifiers.iter().enumerate() {
+            if nf != &tx.spends[i].nullifier {
+                return Err(StateError::InvalidProof);
+            }
+        }
+
+        for (i, cm) in public_inputs.note_commitments.iter().enumerate() {
+            if cm != &tx.outputs[i].note_commitment {
+                return Err(StateError::InvalidProof);
+            }
+        }
+
+        for (i, spend) in tx.spends.iter().enumerate() {
+            let message = &public_inputs.nullifiers[i];
+            let valid = spend.verify_signature(message)
+                .map_err(|_| StateError::InvalidSignature)?;
+            if !valid {
+                return Err(StateError::InvalidSignature);
+            }
+        }
+
+        Ok(public_inputs)
+    }
+
+    /// v2.7.0 Phase 2.1 — Cheap state-dependent checks that go with
+    /// `validate_transaction_v2_proof_only`. Runs under `blockchain.read()`
+    /// for typically <10ms even with a large nullifier set.
+    pub fn validate_transaction_v2_state_check(
+        &self,
+        public_inputs: &crate::crypto::pq::proof_pq::TransactionPublicInputs,
+    ) -> Result<(), StateError> {
+        for root in public_inputs.merkle_roots.iter() {
+            if !self.is_valid_anchor_pq(root) {
+                return Err(StateError::InvalidAnchor);
+            }
+        }
+
+        for nf in public_inputs.nullifiers.iter() {
+            let nullifier = Nullifier(*nf);
+            if self.is_nullifier_spent(&nullifier) {
+                return Err(StateError::NullifierAlreadySpent(nullifier));
+            }
+        }
+
+        Ok(())
+    }
+
     /// 1. STARK proof is valid
     /// 2. All anchors are valid recent roots
     /// 3. No nullifiers are already spent
@@ -818,9 +951,14 @@ impl ShieldedState {
         // as the miner (bound into state_root for consensus safety).
         let relay_balances: Vec<([u8; 32], u64)> =
             self.relay_balances.iter().map(|(k, v)| (*k, *v)).collect();
-        let relay_pool_balance = self.relay_pool.balance;
+        let relay_pool_balance = self.relay_pool.balance();
         let relay_pool_last_payout_height = self.relay_pool.last_payout_height;
         let relay_pool_total_paid = self.relay_pool_total_paid;
+        // v2.5.4 Bug #8 — ship the rolling payout history with the snapshot
+        // so a fresh fast-synced node can answer `/relay/payouts/recent`
+        // without needing the archived payout blocks.
+        let recent_payouts: Vec<crate::consensus::relay_pool::RelayPayout> =
+            self.recent_payouts.iter().cloned().collect();
 
         // Always include V1 tree in snapshots for consensus compatibility.
         // Nodes that restore this snapshot will have skip_v1_tree=false and
@@ -839,6 +977,7 @@ impl ShieldedState {
                 relay_pool_balance,
                 relay_pool_last_payout_height,
                 relay_pool_total_paid,
+                recent_payouts,
             }
         } else {
             // V1+V2 mode: calculate migration_hash for subsequent verification
@@ -856,6 +995,7 @@ impl ShieldedState {
                 relay_pool_balance,
                 relay_pool_last_payout_height,
                 relay_pool_total_paid,
+                recent_payouts,
             }
         }
     }
@@ -867,11 +1007,20 @@ impl ShieldedState {
         self.nullifier_set = snapshot.nullifiers.clone().into_iter().map(Nullifier).collect();
         // v2.4.0 — restore relay-pool state (balances + accumulator + lifetime).
         self.relay_balances = snapshot.relay_balances.iter().cloned().collect();
+        // v2.5.3 — snapshots only carry the aggregate balance (for backward
+        // compat with pre-v2.5.3 snapshots). Restore into `unallocated`; the
+        // per-recipient map is reset (fresh snapshots published post-v2.5.3
+        // will regenerate it from block replay).
         self.relay_pool = crate::consensus::relay_pool::RelayPool {
-            balance: snapshot.relay_pool_balance,
+            unallocated: snapshot.relay_pool_balance,
+            per_recipient: std::collections::BTreeMap::new(),
             last_payout_height: snapshot.relay_pool_last_payout_height,
         };
         self.relay_pool_total_paid = snapshot.relay_pool_total_paid;
+        // v2.5.4 Bug #8 — restore the payout history so `/relay/payouts/recent`
+        // can serve real data immediately, even when the blocks containing
+        // those payouts were never stored locally (fresh fast-sync).
+        self.recent_payouts = snapshot.recent_payouts.iter().cloned().collect();
         // V1 tree must be maintained for consensus: all nodes must compute
         // the same commitment_root in block headers. If V1 tree is present
         // in the snapshot, restore it and keep skip_v1_tree=false.
@@ -949,6 +1098,11 @@ pub struct StateSnapshotPQ {
     /// v2.4.0 — cumulative lifetime paid.
     #[serde(default)]
     pub relay_pool_total_paid: u64,
+    /// v2.5.4 Bug #8 — rolling history of recent payouts so fast-synced
+    /// nodes can serve `/relay/payouts/recent` without archival blocks.
+    /// Empty by default for backward compat with pre-v2.5.4 snapshots.
+    #[serde(default)]
+    pub recent_payouts: Vec<crate::consensus::relay_pool::RelayPayout>,
 }
 
 impl StateSnapshotPQ {

@@ -11,7 +11,7 @@ use crate::core::ShieldedBlock;
 
 /// Thread-safe wallet service for use across the node.
 pub struct WalletService {
-    wallet: Arc<Mutex<ShieldedWallet>>,
+    pub wallet: Arc<Mutex<ShieldedWallet>>,
 }
 
 impl WalletService {
@@ -26,6 +26,21 @@ impl WalletService {
     pub async fn pk_hash(&self) -> [u8; 32] {
         let w = self.wallet.lock().await;
         w.pk_hash()
+    }
+
+    /// Get the raw ML-DSA-65 public key bytes (1952 bytes).
+    /// Used by relays to produce endorsement records where the pk_hash
+    /// must be derivable from the full public key.
+    pub async fn public_key_bytes(&self) -> Vec<u8> {
+        let w = self.wallet.lock().await;
+        w.keypair().public_key_bytes().to_vec()
+    }
+
+    /// Sign an arbitrary message with the wallet's ML-DSA-65 secret key.
+    /// Used by relays to endorse a block header hash (v2.5.3 relay pool).
+    pub async fn sign_message(&self, message: &[u8]) -> Vec<u8> {
+        let w = self.wallet.lock().await;
+        crate::crypto::signature::sign(message, w.keypair()).as_bytes().to_vec()
     }
 
     /// Get the wallet's address as hex string.

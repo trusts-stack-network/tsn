@@ -127,6 +127,15 @@ pub struct PeerInfo {
     pub protocol: String,
     /// Epoch seconds when height was last updated (for staleness detection)
     pub height_updated_at: Option<u64>,
+    /// v2.5.4 Bug #9 — hex-encoded Blake2s256 of the miner's ML-DSA-65
+    /// public key. Populated by the HTTP `/blocks` path whenever a peer
+    /// submits a mined block carrying its own `coinbase.miner_pk_hash`
+    /// (matched via the `X-TSN-PeerID` header). Lets the explorer derive
+    /// a STABLE display name for each peer tile — the same name as the
+    /// blocks row, instead of an ephemeral one keyed on the libp2p
+    /// PeerID that rotates on every node restart.
+    #[serde(default)]
+    pub miner_pk_hash: Option<String>,
 }
 
 /// Combined libp2p behaviour for TSN
@@ -185,6 +194,7 @@ impl P2pNode {
                 yamux::Config::default,
             )?
             .with_quic()
+            .with_dns()?
             .with_relay_client(noise::Config::new, yamux::Config::default)?
             .with_behaviour(|key, relay_client| {
                 // GossipSub with message deduplication
@@ -203,7 +213,18 @@ impl P2pNode {
                     .heartbeat_interval(Duration::from_millis(700)) // ETH2/Polkadot standard (was 5s)
                     .validation_mode(gossipsub::ValidationMode::Strict)
                     .message_id_fn(message_id_fn)
-                    .max_transmit_size(1 * 1024 * 1024) // M6 audit fix: 1MB max (was 4MB — too large for gossip)
+                    // v2.6.1 — raise to 8MB. The M6 audit dropped this from 4MB to
+                    // 1MB out of "too large for gossip" caution. But it did not
+                    // account for v2 transactions: each carries a Plonky3 STARK proof
+                    // + ML-DSA-65 signature ≈ ~500 KB JSON-serialized. With
+                    // V2_INCLUSION_CAP = 16, a single block can legitimately reach
+                    // 8 MB. Capping below that silently drops blocks (MessageTooLarge),
+                    // which keeps the producer mining alone — the exact failure mode
+                    // observed on 2026-04-25 (10K send → 8 consolidation v2 txs in one
+                    // block of 4.16 MB → publish refused → solo fork at h=6139). Eight
+                    // megabytes is well within typical residential bandwidth at our
+                    // 10 s block time and mesh_n=6 fanout.
+                    .max_transmit_size(8 * 1024 * 1024)
                     .flood_publish(false) // Mesh-only propagation: O(D×N) instead of O(N²) flood
                     .mesh_n_low(4)        // ETH2-inspired mesh params for 100+ nodes
                     .mesh_n(6)            // 6 mesh peers (scales to log_6(500) = 3.5 hops)
@@ -400,6 +421,11 @@ async fn p2p_event_loop(
     let mut peer_height_times: std::collections::HashMap<PeerId, u64> = std::collections::HashMap::new();
     // Track peer protocol versions (updated via identify)
     let mut peer_versions: std::collections::HashMap<PeerId, String> = std::collections::HashMap::new();
+    // v2.5.4 Bug #9 — map PeerID → hex miner_pk_hash. Populated whenever a
+    // peer broadcasts a block it mined (the coinbase carries its pk_hash).
+    // Used by `/network/status` so the explorer can label each peer tile
+    // with the same stable name that Recent Blocks uses.
+    let mut peer_miner_pk: std::collections::HashMap<PeerId, String> = std::collections::HashMap::new();
     // Backoff for outdated peers: don't spam disconnect logs every 30s
     // Maps PeerID → (next_allowed_log_time, disconnect_count)
     let mut outdated_backoff: std::collections::HashMap<PeerId, (std::time::Instant, u32)> = std::collections::HashMap::new();
@@ -429,6 +455,7 @@ async fn p2p_event_loop(
                     height: peer_heights.get(p).copied(),
                     protocol: peer_versions.get(p).cloned().unwrap_or_else(|| local_proto.clone()),
                     height_updated_at: peer_height_times.get(p).copied(),
+                    miner_pk_hash: peer_miner_pk.get(p).cloned(),
                 })
                 .collect();
             if let Ok(mut sp) = shared_peers.write() {
@@ -474,10 +501,21 @@ async fn p2p_event_loop(
                             if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&message.data) {
                                 if let Some(h) = v.get("coinbase").and_then(|c| c.get("height")).and_then(|h| h.as_u64()) {
                                     let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    // v2.5.4 Bug #9 — map the block's miner_pk_hash to the
+                                    // libp2p source that delivered it. The coinbase
+                                    // `miner_pk_hash` is the stable identity we want the
+                                    // explorer to display in the Network tile.
+                                    let miner_pk = v.get("coinbase")
+                                        .and_then(|c| c.get("miner_pk_hash"))
+                                        .and_then(|s| s.as_str())
+                                        .map(|s| s.to_string());
                                     // Track original source's height
                                     if let Some(source) = message.source {
                                         peer_heights.insert(source, h);
                                         peer_height_times.insert(source, now_secs);
+                                        if let Some(ref pk) = miner_pk {
+                                            peer_miner_pk.insert(source, pk.clone());
+                                        }
                                     }
                                     // v2.1.3: Also track propagation_source — the peer that
                                     // forwarded us this block must be at least at this height.
@@ -737,6 +775,7 @@ async fn p2p_event_loop(
                                 height: peer_heights.get(p).copied(),
                                 protocol: peer_versions.get(p).cloned().unwrap_or_else(|| local_proto.clone()),
                                 height_updated_at: peer_height_times.get(p).copied(),
+                                miner_pk_hash: peer_miner_pk.get(p).cloned(),
                             })
                             .collect();
                         reply.send(peers).ok();
