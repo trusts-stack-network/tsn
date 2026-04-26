@@ -46,13 +46,13 @@ struct Cli {
     #[arg(long, global = false)]
     no_seeds: bool,
 
-    /// v2.6.0 — auto-consolidate wallet notes in the background once the
-    /// unspent-note count exceeds the threshold. v2.6.6 default: OFF — too
-    /// chatty in current form, floods the mempool with consolidation tx
-    /// faster than blocks can absorb. Pass `--auto-consolidate` to enable
-    /// once the spam-rate fix lands. (See AGENT_TSN_v5.md, 2026-04-25 BACW
-    /// over-trigger incident.)
-    #[arg(long, global = false, default_value_t = false)]
+    /// v2.8.0 — auto-consolidate wallet notes in the background once the
+    /// unspent-note count exceeds the threshold. Default ON: when a wallet
+    /// is far above threshold (just bootstrapped, long-idle miner) the
+    /// worker now runs a small parallel burst per tick (max 4 batches) to
+    /// catch up quickly, then settles into one round per `--consolidation-
+    /// interval-secs`. Use `--auto-consolidate=false` to disable.
+    #[arg(long, global = false, default_value_t = true)]
     auto_consolidate: bool,
 
     /// v2.6.0 — background consolidation fires when `unspent_notes_count` goes
@@ -2038,6 +2038,30 @@ async fn send_single_tx(
             continue;
         }
 
+        // v2.8.0 — `SpendWitnessPQ::validate` (called by the prover before
+        // building the STARK) recomputes the leaf via
+        // `NoteCommitmentPQ::commit(value, pk, randomness)` and verifies the
+        // Merkle path against THAT recomputed commitment. If the wallet's
+        // randomness differs from the one the sender used to mint the note
+        // (legacy notes scanned before v2.0 stored a fallback randomness
+        // that no longer hashes to the on-chain leaf), the prover hashes
+        // up to a different root and rejects the witness. Catch it here so
+        // the consolidation loop skips the note instead of bailing the
+        // whole transaction.
+        let recomputed = NoteCommitmentPQ::commit(
+            note.note.value,
+            &note.note.recipient_pk_hash,
+            &randomness,
+        );
+        if recomputed.to_bytes() != stored_pq_cm {
+            eprintln!(
+                "    [Phase C] orphan: recomputed commitment != stored leaf at pos {} (legacy randomness)",
+                pos
+            );
+            orphan_positions.push(pos);
+            continue;
+        }
+
         spend_witnesses.push(SpendWitnessPQ {
             value: note.note.value,
             recipient_pk_hash: note.note.recipient_pk_hash,
@@ -2185,6 +2209,36 @@ async fn pre_validate_orphan_positions(
 
     if candidates.is_empty() {
         return std::collections::HashSet::new();
+    }
+
+    // v2.8.0 — when the wallet has a fully synced local tree, orphan
+    // detection is a pure-local operation. A note is an orphan when:
+    //   1. its position is past the tree tip (literally not in chain), or
+    //   2. the note's stored `pq_commitment` does not match the canonical
+    //      leaf at that position in the tree.
+    // Case 2 catches legacy-randomness notes whose recomputed commitment
+    // diverges from the on-chain leaf (the prover would reject these).
+    let local_tree_size = wallet.local_tree_size();
+    let max_pos = candidates.iter().map(|(p, _)| *p).max().unwrap_or(0);
+    if local_tree_size > max_pos {
+        let mut orphans = std::collections::HashSet::new();
+        for (pos, stored) in &candidates {
+            match wallet.local_leaf_at_v2(*pos) {
+                None => {
+                    orphans.insert(*pos);
+                }
+                Some(leaf) => {
+                    if &leaf != stored {
+                        orphans.insert(*pos);
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "  Validating {} note witness(es)... done (local tree, {} orphan(s))",
+            candidates.len(), orphans.len()
+        );
+        return orphans;
     }
 
     eprint!("  Validating {} note witness(es)... ", candidates.len());
@@ -2691,7 +2745,8 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
     }
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(5))
         .build()?;
 
     // Filter already-spent notes by checking nullifiers against the node
@@ -2742,18 +2797,26 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         }
     }
 
-    // v2.7.4 Phase C — Sync the wallet's local commitment tree to the
-    // chain tip BEFORE we start building witnesses. This single call
-    // replaces the dozens of `/witness/v2/position/{N}` round-trips that
-    // used to happen later in the proof loop, and makes orphan detection
-    // a local operation. If the sync fails (node down) we just continue —
-    // the orphan check below will still surface stale notes and the user
-    // gets a clean error.
+    // v2.8.0 Phase C — On a cold-start wallet we bootstrap the local
+    // commitment tree in one shot from the node's signed snapshot. After
+    // that we always run a delta `sync_local_tree_pq` to catch up the few
+    // leaves added between the snapshot height and the chain tip.
+    if wallet.local_tree_size() == 0 {
+        match bootstrap_local_tree_from_snapshot(&mut wallet, node_url).await {
+            Ok(true) => {
+                let _ = wallet.save(wallet_path);
+            }
+            Ok(false) => {
+                eprintln!("  [Phase C] no signed snapshot available, doing full bulk sync");
+            }
+            Err(e) => {
+                tracing::warn!("snapshot bootstrap failed (falling back to bulk): {}", e);
+            }
+        }
+    }
     if let Err(e) = sync_local_tree_pq(&mut wallet, node_url, &client).await {
         tracing::warn!("local tree sync failed (continuing with stale tree): {}", e);
     } else {
-        // Persist so the next cmd_send invocation does not re-pull the
-        // entire tree from scratch.
         let _ = wallet.save(wallet_path);
     }
 
@@ -2830,9 +2893,14 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
             / CONSOLIDATION_BATCH;
         let mut parallel_bad_positions = pre_orphan_positions.clone();
         if parallel_rounds_target >= 2 {
+            // v2.8.0 — drop fan-out from 8 to 4. With 8 batches we observed
+            // half the submits failing (HTTP saturation on the chosen seed
+            // and CPU thrash from 8 parallel STARK proofs); 4 keeps each
+            // batch comfortably inside the 120s client timeout and within
+            // the per-IP submit rate limit (Phase 1.3, 8 v2 tx / 60s).
             match auto_consolidate_parallel(
                 &mut wallet, wallet_path, node_url, fee_base, total_needed, &client,
-                parallel_bad_positions.clone(), 8,
+                parallel_bad_positions.clone(), 4,
             ).await {
                 Ok((rounds_done, new_bad)) => {
                     if rounds_done > 0 {
@@ -2986,6 +3054,108 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
     }
 
     Ok(())
+}
+
+/// v2.8.0 Phase C — Bootstrap the wallet's local commitment tree from the
+/// node's signed snapshot in a single round-trip. This replaces the cold
+/// start that used to walk `/leaves/bulk` from position 0 (50s+ for a tree
+/// past 20K leaves). The signed snapshot already carries a serialized
+/// `CommitmentTreeSnapshot`, so we restore it directly and only have to
+/// fetch the few hundred leaves between the snapshot height and the chain
+/// tip via `sync_local_tree_pq`.
+///
+/// Returns Ok(true) if the snapshot was applied, Ok(false) if there is no
+/// signed snapshot available (the caller should fall back to a leaf-by-leaf
+/// bulk sync). Errors only on hard validation failures (signature mismatch,
+/// chain_id mismatch, SHA-256 mismatch).
+async fn bootstrap_local_tree_from_snapshot(
+    wallet: &mut tsn::wallet::ShieldedWallet,
+    node_url: &str,
+) -> Result<bool, String> {
+    use sha2::Digest;
+
+    if wallet.local_tree_size() > 0 {
+        return Ok(false);
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("client build: {}", e))?;
+
+    let manifest_url = format!("{}/snapshot/latest", node_url);
+    let manifest_resp = match client.get(&manifest_url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) if r.status().as_u16() == 404 => {
+            eprintln!("  [Phase C] node has no signed snapshot yet, will fall back to bulk sync");
+            return Ok(false);
+        }
+        Ok(r) => return Err(format!("/snapshot/latest HTTP {}", r.status())),
+        Err(e) => return Err(format!("/snapshot/latest send: {}", e)),
+    };
+    let manifest: tsn::network::snapshot_manifest::SnapshotManifest =
+        manifest_resp.json().await.map_err(|e| format!("manifest parse: {}", e))?;
+
+    if manifest.chain_id != tsn::config::NETWORK_NAME {
+        return Err(format!(
+            "snapshot chain_id mismatch: manifest={} expected={}",
+            manifest.chain_id,
+            tsn::config::NETWORK_NAME
+        ));
+    }
+    if !manifest.verify_producer_signature() {
+        return Err("snapshot producer signature invalid".to_string());
+    }
+
+    // v2.8.0 — use /snapshot/signed (data file matching the signed manifest)
+    // not /snapshot/download (live cache that drifts past the signed height).
+    // Pre-v2.8 nodes do not have this endpoint, so we transparently fall
+    // back to /snapshot/download and accept the data only if its SHA-256
+    // still matches the manifest (which holds for `chain_height - signed
+    // height < CACHE_STALE_GAP`).
+    let signed_url = format!("{}/snapshot/signed", node_url);
+    let download_resp = match client.get(&signed_url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        Ok(_) => match client.get(format!("{}/snapshot/download", node_url)).send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => return Err(format!("/snapshot/download HTTP {}", r.status())),
+            Err(e) => return Err(format!("/snapshot/download send: {}", e)),
+        },
+        Err(e) => return Err(format!("/snapshot/signed send: {}", e)),
+    };
+    let compressed = download_resp
+        .bytes()
+        .await
+        .map_err(|e| format!("/snapshot body: {}", e))?;
+
+    let computed = hex::encode(sha2::Sha256::digest(&compressed));
+    if computed != manifest.snapshot_sha256 {
+        return Err(format!(
+            "snapshot sha256 mismatch: computed={} manifest={}",
+            &computed[..16],
+            &manifest.snapshot_sha256[..16]
+        ));
+    }
+
+    use std::io::Read;
+    let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
+    let mut raw = Vec::with_capacity(compressed.len() * 4);
+    decoder
+        .read_to_end(&mut raw)
+        .map_err(|e| format!("snapshot gunzip: {}", e))?;
+
+    let snap: tsn::core::StateSnapshotPQ =
+        serde_json::from_slice(&raw).map_err(|e| format!("snapshot parse: {}", e))?;
+
+    let tree_size = snap.tree_snapshot.size;
+    wallet.restore_local_tree_from_snapshot(snap.tree_snapshot);
+
+    eprintln!(
+        "  [Phase C] bootstrapped local tree from signed snapshot: height={} leaves={}",
+        manifest.height, tree_size
+    );
+    Ok(true)
 }
 
 /// v2.7.4 Phase C — Pull every commitment leaf the wallet does not yet have
@@ -3373,6 +3543,21 @@ async fn try_scan_via_api(wallet: &mut ShieldedWallet, node_url: &str, wallet_pa
 
     if blocks_to_scan > 50 {
         eprintln!(" done ({} new notes).", new_notes);
+    }
+
+    // v2.8.0 Phase C — incremental sync of the wallet's local commitment
+    // tree. We only do delta sync here (cold start is handled in cmd_send,
+    // where a signed snapshot can be fetched in one shot). When the tree
+    // already has leaves and the chain advanced, pull only the missing
+    // commitments through /leaves/bulk; the inner loop caps each batch at
+    // `target` so a delta of a few dozen leaves is a single small request.
+    if !up_to_date
+        && wallet.local_tree_size() > 0
+        && wallet.local_tree_size() < commitment_count
+    {
+        if let Err(e) = sync_local_tree_pq(wallet, node_url, &client).await {
+            tracing::debug!("local tree delta sync failed: {}", e);
+        }
     }
 
     // v2.3.9 — Persist the wallet when either new notes arrived OR existing
@@ -4954,6 +5139,52 @@ async fn cmd_node(
         ))),
     });
 
+    // v2.8.0 — hydrate signed snapshot manifests from disk so /snapshot/
+    // latest and /snapshot/signed answer immediately after restart, without
+    // waiting for the next eligible export height. Each manifest is
+    // re-validated against its producer signature; corrupt files are
+    // skipped silently.
+    {
+        let dir = std::path::PathBuf::from(&data_dir).join("snapshots");
+        if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+            let mut loaded: Vec<tsn::network::snapshot_manifest::SnapshotManifest> = Vec::new();
+            while let Ok(Some(e)) = entries.next_entry().await {
+                let path = e.path();
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if !name.ends_with(".manifest.json") {
+                    continue;
+                }
+                let bytes = match tokio::fs::read(&path).await {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+                let manifest: tsn::network::snapshot_manifest::SnapshotManifest =
+                    match serde_json::from_slice(&bytes) {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+                if manifest.chain_id != tsn::config::NETWORK_NAME {
+                    continue;
+                }
+                if !manifest.verify_producer_signature() {
+                    continue;
+                }
+                loaded.push(manifest);
+            }
+            loaded.sort_by_key(|m| m.height);
+            if !loaded.is_empty() {
+                let count = loaded.len();
+                let last_h = loaded.last().map(|m| m.height).unwrap_or(0);
+                let mut w = state.snapshot_manifests.write().unwrap();
+                *w = loaded;
+                tracing::info!(
+                    "Hydrated {} snapshot manifest(s) from disk (latest height: {})",
+                    count, last_h
+                );
+            }
+        }
+    }
+
     // v2.6.0 — keep AppState.chain_info_cache fresh every 200ms so GET
     // /chain/info never blocks on the blockchain RwLock. See api.rs for the
     // full rationale.
@@ -5034,28 +5265,53 @@ async fn cmd_node(
                                 tracing::warn!("BACW: balance {} too low for safe consolidation, skipping round", balance);
                                 continue;
                             }
-                            // v2.6.8 — exactly ONE consolidation round per tick.
-                            // The previous design called `auto_consolidate` with
-                            // total_needed = balance/8 which let the inner loop
-                            // run many rounds back-to-back, flooding the
-                            // mempool with consolidation tx faster than blocks
-                            // could absorb (observed 2026-04-25). One round per
-                            // tick + jitter on the next tick keeps the BACW
-                            // contribution to mempool churn small and even.
-                            let total_needed = fee_base.saturating_mul(2);
+                            // v2.8.0 — two-mode operation. When the wallet
+                            // is far above threshold (bootstrap mode), run
+                            // a small parallel burst (max 4 batches per
+                            // tick) to catch up quickly. In steady state
+                            // (`unspent` close to `threshold`), do exactly
+                            // one round per tick — the v2.6.8 behaviour —
+                            // so we never flood the mempool faster than
+                            // blocks absorb tx.
+                            let bootstrap_mode = unspent > threshold.saturating_mul(4);
                             let bacw_label = wallet_path_str.clone();
-                            let result = crate::auto_consolidate(
-                                &mut *wallet,
-                                &bacw_label,
-                                &bacw_node_url,
-                                fee_base,
-                                total_needed,
-                                &bacw_client,
-                                std::collections::HashSet::new(),
-                            ).await;
-                            match result {
+                            let outcome: Result<usize, anyhow::Error> = if bootstrap_mode {
+                                // Aim high so `auto_consolidate_parallel`
+                                // takes the parallel fast path; we cap the
+                                // number of batches per tick at 4.
+                                let total_needed = balance.saturating_sub(fee_base.saturating_mul(100));
+                                let parallel_res = crate::auto_consolidate_parallel(
+                                    &mut *wallet,
+                                    &bacw_label,
+                                    &bacw_node_url,
+                                    fee_base,
+                                    total_needed,
+                                    &bacw_client,
+                                    std::collections::HashSet::new(),
+                                    4,
+                                ).await;
+                                match parallel_res {
+                                    Ok((n, _)) => Ok(n),
+                                    Err(e) => Err(e),
+                                }
+                            } else {
+                                let total_needed = fee_base.saturating_mul(2);
+                                crate::auto_consolidate(
+                                    &mut *wallet,
+                                    &bacw_label,
+                                    &bacw_node_url,
+                                    fee_base,
+                                    total_needed,
+                                    &bacw_client,
+                                    std::collections::HashSet::new(),
+                                ).await
+                            };
+                            match outcome {
                                 Ok(rounds) if rounds > 0 => {
-                                    tracing::info!("BACW: 1-round consolidation complete ({} round actually executed)", rounds);
+                                    tracing::info!(
+                                        "BACW: consolidation done ({} round(s), bootstrap_mode={}, unspent_before={})",
+                                        rounds, bootstrap_mode, unspent
+                                    );
                                 }
                                 Ok(_) => {
                                     tracing::debug!("BACW: no round needed at this tick");

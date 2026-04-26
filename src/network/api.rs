@@ -579,6 +579,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/mining/submit", post(mining_submit))
         .route("/snapshot/info", get(snapshot_info))
         .route("/snapshot/download", get(snapshot_download))
+        .route("/snapshot/signed", get(snapshot_signed_data))
         .route("/snapshot/latest", get(snapshot_latest_manifest))
         .route("/snapshot/manifest/:height", get(snapshot_manifest_at_height))
         .route("/snapshot/history", get(snapshot_manifest_history))
@@ -4435,6 +4436,48 @@ pub fn log_node_error(state: &AppState, error_type: &str, message: &str) {
 // ========================================================================
 // SNAPSHOT MANIFEST ENDPOINTS (Phase 1)
 // ========================================================================
+
+/// v2.8.0 — GET /snapshot/signed — return the gzipped state snapshot file
+/// whose SHA-256 matches the latest signed manifest. Reads `snapshot-{H}
+/// .json.gz` from disk (persisted by `auto_snapshot_export`). Wallets use
+/// this endpoint to bootstrap their local commitment tree in one round
+/// trip with cryptographic integrity (SHA-256 of the body equals the
+/// `snapshot_sha256` field returned by `/snapshot/latest`).
+async fn snapshot_signed_data(
+    State(state): State<Arc<AppState>>,
+) -> Result<axum::response::Response, StatusCode> {
+    use axum::response::IntoResponse;
+    use axum::http::header;
+
+    let manifest = {
+        let manifests = state.snapshot_manifests.read().unwrap();
+        match manifests.last() {
+            Some(m) => m.clone(),
+            None => return Err(StatusCode::NOT_FOUND),
+        }
+    };
+
+    let data_dir = std::path::PathBuf::from(crate::config::get_data_dir());
+    let snap_path = data_dir
+        .join("snapshots")
+        .join(format!("snapshot-{}.json.gz", manifest.height));
+    let bytes = match tokio::fs::read(&snap_path).await {
+        Ok(b) => b,
+        Err(_) => return Err(StatusCode::NOT_FOUND),
+    };
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/gzip"),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"tsn-snapshot-signed.json.gz\""),
+        ],
+        [
+            (header::HeaderName::from_static("x-snapshot-height"), header::HeaderValue::from_str(&manifest.height.to_string()).unwrap()),
+            (header::HeaderName::from_static("x-snapshot-sha256"), header::HeaderValue::from_str(&manifest.snapshot_sha256).unwrap()),
+        ],
+        bytes,
+    ).into_response())
+}
 
 /// GET /snapshot/latest — return the latest signed snapshot manifest
 async fn snapshot_latest_manifest(

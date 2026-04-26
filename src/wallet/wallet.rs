@@ -624,6 +624,18 @@ impl ShieldedWallet {
         self.local_tree.size()
     }
 
+    /// v2.8.0 — Replace the wallet's local commitment tree with the one
+    /// reconstructed from a signed chain snapshot. Used by the bootstrap
+    /// path so the wallet starts with a tree of size N matching the chain
+    /// instead of pulling N leaves one batch at a time.
+    pub fn restore_local_tree_from_snapshot(
+        &mut self,
+        snap: crate::crypto::pq::merkle_pq::CommitmentTreeSnapshot,
+    ) {
+        self.local_tree =
+            crate::crypto::pq::merkle_pq::CommitmentTreePQ::from_snapshot(snap);
+    }
+
     /// Scan a block for incoming notes.
     /// Returns the number of new notes discovered.
     pub fn scan_block(&mut self, block: &ShieldedBlock, start_position: u64) -> usize {
