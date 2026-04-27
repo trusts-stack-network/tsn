@@ -26,12 +26,13 @@ pub mod auto_update;
 pub mod version_check;
 pub mod snapshot_manifest;
 pub mod snapshot_auto_fetch;
+pub mod compact_block;
 
 pub use api::{AppState, CachedSnapshot, MinerStats, NodeError, create_router, log_node_error};
 pub use sync_gate::SyncGate;
 pub use mempool::Mempool;
 pub use discovery::discovery_loop;
-pub use sync::{sync_from_peer, sync_loop, broadcast_block, broadcast_block_with_id};
+pub use sync::{sync_from_peer, sync_loop, broadcast_block, broadcast_block_with_id, broadcast_compact_block};
 pub use protocol::{TsnMessage, HandshakeData, ProtocolVersion};
 pub use peer::{PeerHandle, PeerManager};
 pub use rate_limiter::{RateLimiter, RateLimitConfig};

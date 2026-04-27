@@ -441,6 +441,30 @@ impl Mempool {
         self.v1_transactions.get(hash)
     }
 
+    /// v2.8.7 Phase 0.2 (BIP-152) — borrow-only iterator over all V1 txs in
+    /// the mempool. Used by `receive_compact_block` to build a short-id index
+    /// without cloning the whole pool. Caller drops the lock right after,
+    /// keeping the std::Mutex<Mempool> guard out of any `.await`.
+    pub fn v1_transactions_iter(&self) -> impl Iterator<Item = &ShieldedTransaction> {
+        self.v1_transactions.values()
+    }
+
+    /// v2.8.7 — borrow iterator over all V2/Migration `Transaction` entries.
+    /// The receiver filters Migration out (it tracks V1 anchors separately).
+    pub fn v2_transactions_iter(&self) -> impl Iterator<Item = &Transaction> {
+        self.v2_transactions.values()
+    }
+
+    /// v2.8.7 — borrow iterator over contract deploy txs in the mempool.
+    pub fn contract_deploys_iter(&self) -> impl Iterator<Item = &ContractDeployTransaction> {
+        self.contract_deploys.values()
+    }
+
+    /// v2.8.7 — borrow iterator over contract call txs in the mempool.
+    pub fn contract_calls_iter(&self) -> impl Iterator<Item = &ContractCallTransaction> {
+        self.contract_calls.values()
+    }
+
     /// Get a V2 transaction by hash.
     pub fn get_v2(&self, hash: &[u8; 32]) -> Option<&Transaction> {
         self.v2_transactions.get(hash)

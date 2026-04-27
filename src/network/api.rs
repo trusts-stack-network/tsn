@@ -562,6 +562,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let sync_routes = Router::new()
         .route("/chain/info", get(chain_info))
         .route("/blocks", post(receive_block))
+        .route("/cmpct_block", post(receive_compact_block))
+        .route("/blocktxn", post(receive_block_txn_request))
         .route("/blocks/since/:height", get(get_blocks_since))
         .route("/headers/since/:height", get(get_headers_since))
         .route("/peers", get(get_peers))
@@ -1809,6 +1811,195 @@ async fn receive_block(
 struct ReceiveBlockResponse {
     status: String,
     hash: String,
+}
+
+// ============ v2.8.7 Phase 0.2 — Compact Block Relay (BIP-152) ============
+
+/// Response to a `/cmpct_block` POST. Either the block was reconstructed and
+/// processed (`status = "accepted" | "stored" | "rejected"`), or the receiver
+/// could not resolve every short_id from its mempool and asks the sender to
+/// follow up with a `/blocktxn` POST containing the missing transactions.
+#[derive(Serialize)]
+struct CompactBlockResponse {
+    status: String,
+    /// When `status == "missing"`, the block-relative indexes the sender
+    /// must include in a follow-up `/blocktxn` request.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    missing: Vec<u32>,
+    /// Hex-encoded block hash (for diagnostics) — empty when the compact
+    /// block was malformed and no header could be derived.
+    #[serde(default)]
+    hash: String,
+}
+
+/// Receive a compact block envelope from a peer. Try to reconstruct the full
+/// block from local mempool; on success, fall through into the same accept
+/// pipeline as `receive_block`. On miss, return the missing indexes so the
+/// sender can complete the relay via `/blocktxn`.
+async fn receive_compact_block(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(cb): Json<super::compact_block::CompactBlock>,
+) -> Result<Json<CompactBlockResponse>, (StatusCode, String)> {
+    let ip = addr.ip().to_string();
+    if !crate::config::is_ip_whitelisted(&ip) {
+        return Err((StatusCode::FORBIDDEN, format!("IP {} not whitelisted", ip)));
+    }
+    let peer_ver = headers.get("X-TSN-Version").and_then(|v| v.to_str().ok());
+    if let Some(ver) = peer_ver {
+        if !crate::network::version_check::version_meets_minimum(ver) {
+            return Err((StatusCode::FORBIDDEN, format!(
+                "Node version {} is below minimum {}",
+                ver, crate::network::version_check::MINIMUM_VERSION
+            )));
+        }
+    }
+
+    // Snapshot the mempool *under lock* into plain Vecs so we can build the
+    // short-id index without holding the std::Mutex across `.await`. The
+    // index itself is created next under cheap CPU work only.
+    let key = super::compact_block::derive_key(&cb.header, cb.nonce);
+    let (v1s, v2s, deploys, calls): (
+        Vec<crate::core::ShieldedTransaction>,
+        Vec<crate::core::ShieldedTransactionV2>,
+        Vec<crate::contract::ContractDeployTransaction>,
+        Vec<crate::contract::ContractCallTransaction>,
+    ) = {
+        let mempool = state.mempool.read().unwrap_or_else(|e| e.into_inner());
+        let v1 = mempool.v1_transactions_iter().cloned().collect();
+        let v2 = mempool
+            .v2_transactions_iter()
+            .filter_map(|t| match t {
+                crate::core::Transaction::V2(tx) => Some(tx.clone()),
+                _ => None,
+            })
+            .collect();
+        let dep = mempool.contract_deploys_iter().cloned().collect();
+        let cal = mempool.contract_calls_iter().cloned().collect();
+        (v1, v2, dep, cal)
+    };
+    let index = super::compact_block::build_short_id_index(&key, &v1s, &v2s, &deploys, &calls);
+
+    let block_hash_hex = hex::encode(cb.header.hash()).chars().take(16).collect::<String>();
+
+    match super::compact_block::reconstruct(&cb, &index) {
+        super::compact_block::ReconstructResult::Complete(block) => {
+            // Hand off to the regular receive_block pipeline by re-invoking it
+            // (cleanest reuse — avoids duplicating the long block-acceptance
+            // logic). We forward the original ConnectInfo so peer-tracking is
+            // attributed correctly.
+            let resp = receive_block(
+                ConnectInfo(addr),
+                State(state.clone()),
+                headers,
+                Json(block),
+            )
+            .await
+            .map_err(|(c, m)| (c, m))?;
+            let inner = resp.0;
+            Ok(Json(CompactBlockResponse {
+                status: inner.status,
+                missing: Vec::new(),
+                hash: inner.hash,
+            }))
+        }
+        super::compact_block::ReconstructResult::Incomplete { missing } => {
+            info!(
+                "CompactBlock {} reconstructed with {} miss(es), requesting follow-up blocktxn",
+                block_hash_hex, missing.len()
+            );
+            Ok(Json(CompactBlockResponse {
+                status: "missing".into(),
+                missing,
+                hash: block_hash_hex,
+            }))
+        }
+        super::compact_block::ReconstructResult::Invalid(reason) => {
+            warn!("CompactBlock {} invalid: {}", block_hash_hex, reason);
+            Err((StatusCode::BAD_REQUEST, format!("Invalid compact block: {}", reason)))
+        }
+    }
+}
+
+/// Sender-side complement of `receive_compact_block`: the peer hands us the
+/// block hash and indexes it could not resolve, and we look up the full
+/// transactions in our local block store + mempool to send back. Used in
+/// the rare case the receiver's mempool was out of sync at compact-block
+/// time. We answer from the canonical chain (the block must exist locally
+/// because we just sent the cmpctblock for it).
+async fn receive_block_txn_request(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<super::compact_block::BlockTxnRequest>,
+) -> Result<Json<super::compact_block::BlockTxn>, (StatusCode, String)> {
+    let ip = addr.ip().to_string();
+    if !crate::config::is_ip_whitelisted(&ip) {
+        return Err((StatusCode::FORBIDDEN, format!("IP {} not whitelisted", ip)));
+    }
+
+    // Look up the block locally.
+    let chain = state.blockchain.read().await;
+    let block = match chain.get_block(&req.block_hash) {
+        Some(b) => b.clone(),
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("Block {} not found locally", hex::encode(&req.block_hash[..8])),
+            ));
+        }
+    };
+    drop(chain);
+
+    let total = super::compact_block::block_tx_count(&block);
+
+    // Build the canonical iteration order so we can index the requested slots
+    // without re-implementing the order in two places.
+    let mut bodies: Vec<super::compact_block::PrefilledTxBody> = Vec::with_capacity(req.indexes.len());
+    for &slot in &req.indexes {
+        let s = slot as usize;
+        if s >= total {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("requested slot {} out of bounds (total={})", slot, total),
+            ));
+        }
+        let body = if s < block.transactions.len() {
+            super::compact_block::PrefilledTxBody::V1(block.transactions[s].clone())
+        } else if s < block.transactions.len() + block.transactions_v2.len() {
+            let i = s - block.transactions.len();
+            super::compact_block::PrefilledTxBody::V2(block.transactions_v2[i].clone())
+        } else if s
+            < block.transactions.len()
+                + block.transactions_v2.len()
+                + block.contract_deploys.len()
+        {
+            let i = s - block.transactions.len() - block.transactions_v2.len();
+            super::compact_block::PrefilledTxBody::Deploy(block.contract_deploys[i].clone())
+        } else if s
+            < block.transactions.len()
+                + block.transactions_v2.len()
+                + block.contract_deploys.len()
+                + block.contract_calls.len()
+        {
+            let i = s
+                - block.transactions.len()
+                - block.transactions_v2.len()
+                - block.contract_deploys.len();
+            super::compact_block::PrefilledTxBody::Call(block.contract_calls[i].clone())
+        } else {
+            // The very last slot is the coinbase. Senders normally include
+            // the coinbase in `prefilled_txn` of the cmpctblock so it should
+            // never be requested; service it anyway for robustness.
+            super::compact_block::PrefilledTxBody::Coinbase(block.coinbase.clone())
+        };
+        bodies.push(body);
+    }
+
+    Ok(Json(super::compact_block::BlockTxn {
+        block_hash: req.block_hash,
+        transactions: bodies,
+    }))
 }
 
 /// Get all blocks since a given height (for chain sync).

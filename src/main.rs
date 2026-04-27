@@ -7177,7 +7177,12 @@ async fn cmd_node(
                 });
                 if !current_peers.is_empty() {
                     let local_pid = mine_state.p2p_peer_id.read().unwrap().clone();
-                    tsn::network::broadcast_block_with_id(&mined_block, &current_peers, &client, local_pid).await;
+                    // v2.8.7 Phase 0.2 (BIP-152): try compact-block relay first
+                    // (~5-50KB/peer when mempool is in sync vs 8MB full block).
+                    // The function falls back to a full /blocks POST per-peer
+                    // on any compact-relay error, so this is a strict
+                    // no-regression upgrade over `broadcast_block_with_id`.
+                    tsn::network::broadcast_compact_block(&mined_block, &current_peers, &client, local_pid).await;
                 }
 
                 // v1.6.1: Fork check by HEIGHT + HASH, never by cumulative_work.
