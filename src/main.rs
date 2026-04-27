@@ -5411,6 +5411,13 @@ async fn cmd_node(
     // full rationale.
     tsn::network::api::spawn_chain_info_refresher(state.clone());
 
+    // v2.8.9 — trusted-quorum checkpoint voter. Replaces the old per-node
+    // auto-checkpoint (which produced the permanent-fork bug observed at
+    // h=13800 on 2026-04-27 when node-1 self-checkpointed its minority
+    // branch). Polls TRUSTED_CHECKPOINT_VOTERS for agreement before
+    // finalizing a checkpoint.
+    let _ = tsn::consensus::checkpoint_vote::spawn(state.clone());
+
     // v2.8.1 — BACW (Background Auto-Consolidation Worker) removed.
     //
     // Earlier versions ran a background worker that periodically consolidated

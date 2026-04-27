@@ -1856,6 +1856,97 @@ async fn receive_compact_block(
         }
     }
 
+    // v2.8.9 Phase 0.2 protection #3 — count cap on `short_ids`.
+    // Honest blocks have at most ~200 v2 transactions today; anything past
+    // the cap is a "combinatorial bomb" attempt and is dropped before any
+    // mempool index work.
+    if cb.short_ids.len() > crate::config::MAX_COMPACT_SHORT_IDS {
+        warn!(
+            "cmpct_block from {}: short_ids count {} > cap {}, dropping",
+            ip, cb.short_ids.len(), crate::config::MAX_COMPACT_SHORT_IDS
+        );
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "short_ids count {} exceeds cap {}",
+                cb.short_ids.len(),
+                crate::config::MAX_COMPACT_SHORT_IDS
+            ),
+        ));
+    }
+
+    // v2.8.9 Phase 0.2 protection #1 — PoW gate. Validate the block header
+    // PoW BEFORE doing the heavy mempool index work, so an attacker cannot
+    // exhaust our CPU by spamming bogus envelopes that never had a valid
+    // proof. A real CompactBlock is always announced for a freshly mined
+    // block whose header has a valid PoW, so honest peers pass through.
+    {
+        // Use the same height-aware hash as the rest of validation; the
+        // height comes from the coinbase carried in `prefilled_txn`.
+        let mut block_height: Option<u64> = None;
+        for p in &cb.prefilled_txn {
+            if let super::compact_block::PrefilledTxBody::Coinbase(ref cbtx) = p.tx {
+                block_height = Some(cbtx.height);
+                break;
+            }
+        }
+        let valid = match block_height {
+            Some(h) => cb.header.meets_difficulty_for_height(h),
+            None => cb.header.meets_difficulty(), // pre-v0.7 path; honest senders embed coinbase
+        };
+        if !valid {
+            warn!("cmpct_block from {}: PoW invalid, dropping", ip);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "compact block header fails PoW".into(),
+            ));
+        }
+    }
+
+    // v2.8.9 Phase 0.2 protection #2 — per-IP rate limit on /cmpct_block.
+    // Uses a dedicated static LruCache so it doesn't share eviction with
+    // the v2 transaction submit_rate (different cap, different window).
+    {
+        use std::collections::VecDeque;
+        use std::sync::Mutex;
+        use std::time::Instant;
+        use lru::LruCache;
+        use std::num::NonZeroUsize;
+        use once_cell::sync::Lazy;
+
+        static CMPCT_RATE: Lazy<Mutex<LruCache<std::net::IpAddr, VecDeque<Instant>>>> =
+            Lazy::new(|| {
+                Mutex::new(LruCache::new(NonZeroUsize::new(4096).unwrap()))
+            });
+
+        let now = Instant::now();
+        let window = std::time::Duration::from_secs(crate::config::COMPACT_BLOCK_RATE_WINDOW_SECS);
+        let mut rate = CMPCT_RATE.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = rate.get_or_insert_mut(addr.ip(), VecDeque::new);
+        while let Some(front) = entry.front() {
+            if now.duration_since(*front) > window {
+                entry.pop_front();
+            } else {
+                break;
+            }
+        }
+        if entry.len() >= crate::config::COMPACT_BLOCK_RATE_LIMIT {
+            warn!(
+                "cmpct_block from {}: rate-limit ({} in {}s), dropping",
+                ip, entry.len(), crate::config::COMPACT_BLOCK_RATE_WINDOW_SECS
+            );
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "rate limit: max {} compact blocks per {}s",
+                    crate::config::COMPACT_BLOCK_RATE_LIMIT,
+                    crate::config::COMPACT_BLOCK_RATE_WINDOW_SECS
+                ),
+            ));
+        }
+        entry.push_back(now);
+    }
+
     // Snapshot the mempool *under lock* into plain Vecs so we can build the
     // short-id index without holding the std::Mutex across `.await`. The
     // index itself is created next under cheap CPU work only.

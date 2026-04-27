@@ -252,14 +252,79 @@ pub const FAUCET_MIN_TOKENS: u8 = 1;
 // Checkpoint Finality Configuration
 // ============================================================================
 
-/// Checkpoint interval in blocks. Every CHECKPOINT_INTERVAL blocks, a checkpoint
-/// is created that prevents chain reorganizations below that height.
-/// This provides economic finality and protects against deep reorgs.
+/// Checkpoint interval in blocks. Every CHECKPOINT_INTERVAL blocks, the
+/// node requests a quorum vote from `TRUSTED_CHECKPOINT_VOTERS`. Only when
+/// the quorum agrees on the same hash at that height does the checkpoint
+/// finalize. Without a quorum, the candidate height is retried later.
 pub const CHECKPOINT_INTERVAL: u64 = 100;
 
-/// Whether checkpoint finality is enabled.
-/// When enabled, reorgs that would go below the last checkpoint height are rejected.
-pub const CHECKPOINT_ENABLED: bool = true;
+/// v2.8.9 — auto-checkpoint per-node is REPLACED by a peer-consensus vote.
+/// `CHECKPOINT_ENABLED = false` keeps the rejection path that refuses
+/// rollbacks below a confirmed checkpoint, but the *creation* of a new
+/// checkpoint now requires quorum agreement (see TRUSTED_CHECKPOINT_VOTERS
+/// / CHECKPOINT_QUORUM and `consensus::checkpoint_vote`).
+///
+/// Background: prior versions self-checkpointed each node independently at
+/// every height % CHECKPOINT_INTERVAL == 0. When two nodes had divergent
+/// blocks in the immediate run-up to the checkpoint height (e.g. during a
+/// rolling deploy or a network blip), each node finalized its own branch
+/// hash at the same height — and from that moment they could never
+/// reconcile, because rollback below `last_checkpoint_height` is rejected.
+/// On 2026-04-27, node-1 self-checkpointed at h=13800 with a hash that
+/// disagreed with the other 4 seeds, and the network split permanently
+/// until intervention.
+pub const CHECKPOINT_ENABLED: bool = false;
+
+/// v2.8.9 — Trusted voters for the auto-checkpoint quorum. The node polls
+/// `block/height/{N}` on each of these endpoints when a candidate
+/// checkpoint height is reached. If at least `CHECKPOINT_QUORUM` of them
+/// return the same hash that this node has at height N, the checkpoint
+/// finalizes and rollbacks below it are rejected.
+///
+/// This list is the TSN team's controlled infrastructure. As the network
+/// matures, future binary releases will ADD entries (community partners,
+/// elected miners) gated by `TRUSTED_VOTERS_V2_ACTIVATION_HEIGHT`-style
+/// activation switches, not REPLACE the original entries.
+pub const TRUSTED_CHECKPOINT_VOTERS: &[&str] = &[
+    "http://nexus.tsnchain.com:9333",
+    "http://seed1.tsnchain.com:9333",
+    "http://seed2.tsnchain.com:9333",
+    "http://seed3.tsnchain.com:9333",
+    "http://seed4.tsnchain.com:9333",
+];
+
+/// v2.8.9 — minimum number of trusted voters that must agree on the same
+/// hash at the candidate checkpoint height before the checkpoint finalizes.
+/// 3/5 = 60%, tolerating up to two voters being unreachable, lagging, or
+/// adversarial. Raising this strengthens safety but reduces liveness when
+/// part of the trusted infrastructure is down.
+pub const CHECKPOINT_QUORUM: usize = 3;
+
+/// v2.8.9 — per-voter HTTP timeout when collecting checkpoint votes. Short
+/// enough that an unreachable voter does not stall the whole vote, long
+/// enough to absorb normal WAN latency.
+pub const CHECKPOINT_VOTE_TIMEOUT_SECS: u64 = 8;
+
+/// v2.8.9 — interval between checkpoint vote attempts (background loop).
+/// On each tick, if the chain tip has progressed past the next candidate
+/// checkpoint height and that height is not yet finalized, a vote round
+/// runs. Smaller values converge checkpoints faster after a tip change at
+/// a cost of more polling traffic.
+pub const CHECKPOINT_VOTE_TICK_SECS: u64 = 15;
+
+/// v2.8.9 — anti-DoS cap on the count of `short_ids` carried in a single
+/// `CompactBlock` (`/cmpct_block`). Honest blocks have at most ~200 v2
+/// transactions today; 1000 leaves comfortable headroom. Above this cap
+/// the receiver drops the envelope without building the mempool index,
+/// blocking the "combinatorial bomb" DoS variant of BIP-152.
+pub const MAX_COMPACT_SHORT_IDS: usize = 1000;
+
+/// v2.8.9 — anti-DoS rate limit on inbound `/cmpct_block` per source IP.
+/// 5 envelopes per 60-second window is roughly 5× the natural block rate
+/// and absorbs honest peer retries; sustained load above this from a
+/// single IP is rejected with HTTP 429.
+pub const COMPACT_BLOCK_RATE_LIMIT: usize = 5;
+pub const COMPACT_BLOCK_RATE_WINDOW_SECS: u64 = 60;
 
 /// Maximum reorg depth allowed. Any reorg deeper than this is rejected outright.
 /// Inspired by Dilithion's MAX_REORG_DEPTH = 100.

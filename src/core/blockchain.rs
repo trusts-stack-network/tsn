@@ -1794,7 +1794,19 @@ impl ShieldedBlockchain {
         self.height_index.push(hash);
         self.canonical_height = new_height;
 
-        // Checkpoint finalization
+        // v2.8.9 — checkpoint finalization MOVED OUT of the block-insert hot path.
+        // The legacy in-line auto-checkpoint per node produced the permanent-fork
+        // bug observed at h=13800 on 2026-04-27: two nodes with divergent recent
+        // blocks both stamped the same height with different hashes, and from
+        // that moment they could never reconcile (rollback below
+        // last_checkpoint_height is rejected).
+        //
+        // Checkpoint creation now lives in `consensus::checkpoint_vote`, a
+        // background task that polls `TRUSTED_CHECKPOINT_VOTERS` and only
+        // finalizes when at least `CHECKPOINT_QUORUM` voters report the same
+        // hash at the candidate height. If `CHECKPOINT_ENABLED` is left true
+        // for legacy reasons, we keep the old branch as an opt-in fallback,
+        // but the production default is now `false`.
         if crate::config::CHECKPOINT_ENABLED
             && new_height > 0
             && new_height % crate::config::CHECKPOINT_INTERVAL == 0
@@ -1804,7 +1816,7 @@ impl ShieldedBlockchain {
             self.last_checkpoint_hash = Some(hash);
             if full_mode {
                 tracing::info!(
-                    "Checkpoint finalized at height {} (hash: {})",
+                    "[LEGACY] auto-checkpoint at height {} (hash: {}) — disable in config",
                     new_height, hex::encode(hash)
                 );
             }
@@ -2950,6 +2962,63 @@ impl ShieldedBlockchain {
     /// Get the last finalized checkpoint height.
     pub fn last_checkpoint_height(&self) -> u64 {
         self.last_checkpoint_height
+    }
+
+    /// v2.8.9 — finalize a checkpoint that was just confirmed by the
+    /// quorum of trusted voters (`consensus::checkpoint_vote`). Returns
+    /// `Ok(())` on success, or `Err` if the candidate height/hash does not
+    /// match this node's local chain (which should never happen since the
+    /// vote is taken with our own hash, but kept defensive).
+    ///
+    /// This replaces the old in-line auto-checkpoint inside
+    /// `insert_block_internal`, which checkpointed every node
+    /// independently and produced the permanent-fork bug observed at
+    /// h=13800 on 2026-04-27.
+    pub fn set_checkpoint_via_quorum(
+        &mut self,
+        height: u64,
+        expected_hash: [u8; 32],
+    ) -> Result<(), BlockchainError> {
+        // Sanity: do not regress the checkpoint height.
+        if height <= self.last_checkpoint_height {
+            return Ok(());
+        }
+        // Verify our local hash at `height` still matches the one the
+        // quorum agreed on (a reorg between the vote and the write-lock
+        // could have moved us off that branch).
+        let local_hash = match self.height_index.get(height as usize) {
+            Some(h) => *h,
+            None => {
+                return Err(BlockchainError::StorageError(format!(
+                    "set_checkpoint_via_quorum: height {} not in local index (tip={})",
+                    height,
+                    self.height()
+                )));
+            }
+        };
+        if local_hash != expected_hash {
+            return Err(BlockchainError::StorageError(format!(
+                "set_checkpoint_via_quorum: local hash at h={} ({}) differs from voted hash ({}) — chain moved between vote and write",
+                height,
+                hex::encode(&local_hash[..8]),
+                hex::encode(&expected_hash[..8])
+            )));
+        }
+        self.last_checkpoint_height = height;
+        self.last_checkpoint_hash = Some(expected_hash);
+        // Persist to DB so the checkpoint survives node restart.
+        if let Some(ref db) = self.db {
+            let _ = db.set_metadata("last_checkpoint_height", &height.to_string());
+            let _ = db.set_metadata("last_checkpoint_hash", &hex::encode(expected_hash));
+        }
+        Ok(())
+    }
+
+    /// v2.8.9 — read the local block hash at a given height (or None if
+    /// out of range). Used by the checkpoint vote routine to publish our
+    /// candidate hash to the trusted voters.
+    pub fn local_hash_at(&self, height: u64) -> Option<[u8; 32]> {
+        self.height_index.get(height as usize).copied()
     }
 
     /// Get chain info for API responses.

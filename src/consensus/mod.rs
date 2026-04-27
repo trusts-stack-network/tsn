@@ -1,4 +1,5 @@
 pub mod banned_miners;
+pub mod checkpoint_vote;
 mod difficulty;
 pub mod poseidon_pow;
 mod pow;
