@@ -3648,6 +3648,25 @@ async fn receive_tip(
     let local_hash = hex::encode(chain.latest_hash());
     drop(chain);
 
+    // v2.8.5 Phase 0.2 (proactive tip-pull): when a peer announces a tip ahead
+    // of our local chain, kick off an immediate sync_from_peer task instead of
+    // waiting for the next periodic sync tick. This compresses the gap between
+    // a miner finding a block and the rest of the network adopting it,
+    // reducing the window in which two miners can race-mine on top of an
+    // older parent and create a transient fork. The check uses a small slack
+    // (3 blocks) to avoid sync storms when many peers announce the same tip
+    // within seconds of each other; the existing per-peer cooldown
+    // (sync.rs::fork_recovery_cooldown) protects against retry floods on
+    // failed pulls.
+    if req.height > local_height.saturating_add(3) {
+        let state_clone = state.clone();
+        let peer_url_clone = peer_url.clone();
+        tokio::spawn(async move {
+            // Best-effort pull; errors are already logged inside sync_from_peer.
+            let _ = super::sync::sync_from_peer(state_clone, &peer_url_clone).await;
+        });
+    }
+
     Ok(Json(TipResponse {
         height: local_height,
         hash: local_hash,
