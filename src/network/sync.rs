@@ -294,11 +294,22 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
         // Key identifies the fork target by (peer_tip_hash16, peer_height).
         let fork_hash_prefix = &peer_info.latest_hash[..16.min(peer_info.latest_hash.len())];
         let fork_key = format!("{}|{}", fork_hash_prefix, peer_info.height);
+        let peer_key = format!("peer:{}", peer_url);
         {
             let now = std::time::Instant::now();
             let mut cooldown = state.fork_recovery_cooldown.lock()
                 .unwrap_or_else(|e| e.into_inner());
             cooldown.retain(|_, until| *until > now);
+            // v2.8.2: per-peer cooldown set when a previous recovery attempt
+            // failed. Skip even if the fork tip changed slightly — we know
+            // this peer's chain is incompatible.
+            if cooldown.contains_key(&peer_key) {
+                debug!(
+                    "peer cooldown active for {}, skipping fork recovery",
+                    peer_id(peer_url)
+                );
+                return Ok(0);
+            }
             if cooldown.contains_key(&fork_key) {
                 debug!(
                     "dedup: fork recovery for {}@h={} already in cooldown, skipping peer {}",
@@ -601,7 +612,25 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                     // Under load (10+ miners), this caused a cascade that banned
                     // every peer within seconds, killing the entire network.
                     // Instead, just stop syncing with this peer for now.
-                    warn!("Recovery already attempted with {} — stopping sync (no ban)", peer_id(peer_url));
+                    //
+                    // v2.8.2: arm a per-peer cooldown so we don't immediately
+                    // re-poll the same peer next sync tick. Without this, the
+                    // outer scheduler kept calling sync_from_peer(peer) every
+                    // few seconds against a peer we already know is incompatible,
+                    // logging "Recovery already attempted" 17k+ times in 8h and
+                    // burning CPU/HTTP without progress. Reuses the existing
+                    // fork_recovery_cooldown HashMap with a `peer:` prefix to
+                    // avoid colliding with the (fork_hash, height) keys.
+                    {
+                        let now = std::time::Instant::now();
+                        let mut cooldown = state.fork_recovery_cooldown.lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        cooldown.insert(
+                            format!("peer:{}", peer_url),
+                            now + std::time::Duration::from_secs(60),
+                        );
+                    }
+                    warn!("Recovery already attempted with {} — 60s cooldown (no ban)", peer_id(peer_url));
                     break;
                 }
                 recovery_attempted = true;

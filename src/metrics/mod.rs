@@ -206,6 +206,24 @@ pub static CONSENSUS_METRICS: Lazy<ConsensusMetrics> = Lazy::new(|| {
     ConsensusMetrics::new().expect("INIT: failure creation metrics consensus Prometheus — noms duplicated?")
 });
 
+/// v2.8.3 Phase 0.1: cumulative_work drift counter.
+/// Incremented every time the deterministic recompute (height_index walk)
+/// disagrees with the stored value at startup or after a reorg.
+/// A growing counter signals chain-state inconsistency between this node
+/// and its peers — the actual root cause of fork-persistence bugs.
+pub static CUMULATIVE_WORK_DRIFT_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(opts!(
+        "tsn_cumulative_work_drift_total",
+        "Number of times the stored cumulative_work disagreed with the authoritative recompute"
+    ))
+    .expect("INIT: failure creating tsn_cumulative_work_drift_total")
+});
+
+/// Helper to bump the drift counter from any module without touching Prometheus directly.
+pub fn cumulative_work_drift_inc() {
+    CUMULATIVE_WORK_DRIFT_TOTAL.inc();
+}
+
 /// Collects all metrics in Prometheus format
 pub fn collect_metrics() -> Result<String, prometheus::Error> {
     let encoder = TextEncoder::new();

@@ -2835,6 +2835,18 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         let _ = wallet.save(wallet_path);
     }
 
+    // v2.8.4 Phase 1 (Iron Fish core): track the node tip so we can detect a
+    // reorg between the initial sync above and the final proof gen below.
+    // First call seeds the tracker; subsequent calls compare and reset the
+    // local tree if the previously-seen tip dropped out of the canonical chain.
+    let mut last_known_tip: Option<(u64, String)> = None;
+    if let Err(e) =
+        detect_reorg_and_reset_if_needed(&mut wallet, &mut last_known_tip, node_url, &client)
+            .await
+    {
+        tracing::warn!("initial reorg-tracker seed skipped: {}", e);
+    }
+
     // v2.3.3: pre-validate unspent note witnesses against the node. Flags
     // notes that were orphaned by chain reorgs since the last scan, so both
     // auto_consolidate and the final send skip them from their first batch
@@ -2959,6 +2971,31 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         println!();
     }
 
+    // v2.8.4 Phase 1 (Iron Fish core): re-check tip before final proof gen.
+    // Consolidation can take 30-90s during which a reorg may invalidate the
+    // anchor we plan to use. If the previously-tracked tip is no longer in
+    // the canonical chain, reset the local tree and re-sync so the proof is
+    // built against a fresh, valid anchor.
+    match detect_reorg_and_reset_if_needed(&mut wallet, &mut last_known_tip, node_url, &client)
+        .await
+    {
+        Ok(true) => {
+            eprintln!("  Reorg detected — re-syncing local tree before proof gen.");
+            if let Err(e) = sync_local_tree_pq(&mut wallet, node_url, &client).await {
+                tracing::warn!(
+                    "post-reorg local tree sync failed (may hit Invalid anchor): {}",
+                    e
+                );
+            } else {
+                let _ = wallet.save(wallet_path);
+            }
+        }
+        Ok(false) => {}
+        Err(e) => {
+            tracing::warn!("reorg pre-proof check skipped: {}", e);
+        }
+    }
+
     // Final greedy-select after any consolidation. v2.3.1: retry loop that
     // excludes orphan notes discovered mid-proof if the final selection still
     // happens to contain one. v2.3.3: seed the exclusion set with positions
@@ -2977,9 +3014,16 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
         }
 
         let selected: Vec<tsn::wallet::WalletNote> = {
-            let unspent = wallet.unspent_notes();
-            let mut sorted: Vec<&tsn::wallet::WalletNote> = unspent.iter()
-                .copied()
+            // v2.8.4 Phase 1: select only notes that have at least
+            // MIN_SPEND_CONFIRMATIONS confirmations. Falls back to
+            // unspent_notes() when the chain tip height is unknown
+            // (last_known_tip seed failed earlier).
+            let candidates: Vec<&tsn::wallet::WalletNote> = match last_known_tip.as_ref() {
+                Some((tip_h, _)) => wallet.spendable_notes(*tip_h),
+                None => wallet.unspent_notes(),
+            };
+            let mut sorted: Vec<&tsn::wallet::WalletNote> = candidates
+                .into_iter()
                 .filter(|n| !final_bad_positions.contains(&n.position))
                 .collect();
             sorted.sort_by(|a, b| b.note.value.cmp(&a.note.value));
@@ -3188,6 +3232,103 @@ async fn bootstrap_local_tree_from_snapshot(
         manifest.height, tree_size
     );
     Ok(true)
+}
+
+/// v2.8.4 Phase 1 (Iron Fish core): detect chain reorg between two send-side
+/// observations of the node tip. If the previously-seen tip is no longer in
+/// the canonical chain (its hash is absent from `/headers/since`), reset the
+/// wallet's local commitment tree and signal the caller to re-sync before
+/// generating a new proof. Returns Ok(true) if a reorg was detected and the
+/// tree was reset, Ok(false) if the chain just advanced normally, and Err
+/// for unrecoverable transport/parse failures (caller can choose to skip the
+/// check rather than abort the send).
+///
+/// `last_known_tip` is updated in place with the current tip after the check.
+async fn detect_reorg_and_reset_if_needed(
+    wallet: &mut ShieldedWallet,
+    last_known_tip: &mut Option<(u64, String)>,
+    node_url: &str,
+    client: &reqwest::Client,
+) -> Result<bool, String> {
+    let info_url = format!("{}/chain/info", node_url);
+    let resp = client
+        .get(&info_url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("chain/info: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("chain/info HTTP {}", resp.status()));
+    }
+    let info: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("chain/info parse: {}", e))?;
+    let current_height = info["height"].as_u64().unwrap_or(0);
+    let current_hash = info["latest_hash"]
+        .as_str()
+        .unwrap_or("")
+        .to_lowercase();
+
+    // First call after a fresh wallet load — no prior tip to compare against.
+    let (known_h, known_hash) = match last_known_tip.as_ref() {
+        Some((h, hash)) => (*h, hash.to_lowercase()),
+        None => {
+            *last_known_tip = Some((current_height, current_hash));
+            return Ok(false);
+        }
+    };
+
+    if known_hash == current_hash {
+        // No movement at all.
+        return Ok(false);
+    }
+
+    // Tip moved. Walk forward from `known_h - 1` and check that the hash at
+    // `known_h` still matches `known_hash`. If yes, the chain just advanced
+    // and the previous tip is still on the canonical lineage. If no, the
+    // canonical chain rewrote that height — a reorg.
+    let since = known_h.saturating_sub(1);
+    let limit = current_height.saturating_sub(since).saturating_add(1).min(500);
+    let headers_url = format!("{}/headers/since/{}?limit={}", node_url, since, limit);
+    let resp = client
+        .get(&headers_url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("headers/since: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("headers/since HTTP {}", resp.status()));
+    }
+    let headers: Vec<serde_json::Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("headers parse: {}", e))?;
+
+    let still_in_chain = headers.iter().any(|h| {
+        h["height"].as_u64() == Some(known_h)
+            && h["hash"]
+                .as_str()
+                .map(|s| s.to_lowercase())
+                .as_deref()
+                == Some(known_hash.as_str())
+    });
+
+    *last_known_tip = Some((current_height, current_hash.clone()));
+
+    if !still_in_chain {
+        tracing::warn!(
+            "chain reorg detected during send: previous tip {}@h{} no longer in canonical chain (now {}@h{}). Resetting local commitment tree before retry.",
+            &known_hash[..known_hash.len().min(16)],
+            known_h,
+            &current_hash[..current_hash.len().min(16)],
+            current_height
+        );
+        wallet.reset_local_tree();
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 /// v2.7.4 Phase C — Pull every commitment leaf the wallet does not yet have

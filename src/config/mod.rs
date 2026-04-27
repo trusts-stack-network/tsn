@@ -75,6 +75,13 @@ pub const FAST_SYNC_CHECKPOINTS: &[(u64, &str)] = &[];
 /// Default port for nodes
 pub const DEFAULT_PORT: u16 = 9333;
 
+/// v2.8.4 Phase 1 (Iron Fish core): minimum confirmations a note needs before
+/// it is spendable by the wallet. Mirrors Iron Fish DEFAULT_CONFIRMATIONS = 2.
+/// A note created at height H is selectable for sending only when chain.tip >= H + MIN_SPEND_CONFIRMATIONS.
+/// Eliminates "Invalid anchor (not a recent root)" errors caused by reorgs
+/// invalidating notes that were spent right at the tip.
+pub const MIN_SPEND_CONFIRMATIONS: u64 = 2;
+
 /// Initial block reward in base units (50 coins)
 pub const BLOCK_REWARD: u64 = 50_000_000_000;
 

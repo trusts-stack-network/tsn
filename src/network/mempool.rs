@@ -392,6 +392,50 @@ impl Mempool {
         }
     }
 
+    /// v2.8.5 Phase 3 light (Anchored Mempool): drop every V2 tx whose anchor
+    /// is no longer in `state.commitment_tree_pq.recent_roots()`. Called after
+    /// a reorg is accepted by the blockchain so stale txs (referencing a tree
+    /// state that no longer exists on the canonical chain) do not linger
+    /// 30 minutes hitting the global tx age cap. Returns the number of txs
+    /// evicted.
+    ///
+    /// Migration txs reference legacy V1 anchors, so they are checked against
+    /// `state.is_valid_anchor` (V1 tree). V1 txs are skipped — V1 spends are
+    /// being phased out and v2 is what users actually submit today.
+    /// Contract txs do not carry anchors so they are skipped too.
+    pub fn evict_stale_anchors(&mut self, state: &ShieldedState) -> usize {
+        let mut to_evict: Vec<[u8; 32]> = Vec::new();
+        for (hash, tx) in self.v2_transactions.iter() {
+            let anchors = tx.anchors();
+            if anchors.is_empty() {
+                continue;
+            }
+            // Eviction policy: any anchor not in recent_roots_pq → tx invalid.
+            // V2 spends use the PQ tree; Migration txs spend legacy V1 notes
+            // and produce PQ outputs, so their anchors are V1 — checked via
+            // is_valid_anchor (V1) for that variant.
+            let any_stale = match tx {
+                Transaction::Migration(_) => anchors.iter().any(|a| !state.is_valid_anchor(a)),
+                _ => anchors.iter().any(|a| !state.is_valid_anchor_pq(a)),
+            };
+            if any_stale {
+                to_evict.push(*hash);
+            }
+        }
+        let evicted = to_evict.len();
+        for hash in &to_evict {
+            // Use remove_v2 to keep nullifier/cost bookkeeping consistent.
+            self.remove_v2(hash);
+        }
+        if evicted > 0 {
+            warn!(
+                "Mempool: evicted {} v2 tx(s) with stale anchors after reorg",
+                evicted
+            );
+        }
+        evicted
+    }
+
     /// Get a V1 transaction by hash.
     pub fn get(&self, hash: &[u8; 32]) -> Option<&ShieldedTransaction> {
         self.v1_transactions.get(hash)

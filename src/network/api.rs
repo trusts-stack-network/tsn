@@ -1723,6 +1723,21 @@ async fn receive_block(
                 let nullifiers: Vec<[u8; 32]> = block.nullifiers().iter().map(|n| n.0).collect();
                 mempool.remove_spent_nullifiers(&nullifiers);
 
+                // v2.8.5 Phase 3 light (Anchored Mempool): on reorg, drop every
+                // mempool tx whose anchor is no longer in `recent_roots`.
+                // Prevents stale txs (referencing a tree state that does not
+                // exist on the canonical chain anymore) from sitting until the
+                // 30-min global age cap.
+                if reorged {
+                    let evicted = mempool.evict_stale_anchors(chain.state());
+                    if evicted > 0 {
+                        info!(
+                            "Reorg eviction: dropped {} mempool tx(s) with stale anchors",
+                            evicted
+                        );
+                    }
+                }
+
                 // Re-validate remaining mempool transactions
                 let removed = mempool.revalidate(chain.state());
                 if removed > 0 {

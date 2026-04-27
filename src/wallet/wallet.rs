@@ -521,6 +521,34 @@ impl ShieldedWallet {
         self.notes.iter().filter(|n| !n.is_spent).collect()
     }
 
+    /// v2.8.4 Phase 1 (Iron Fish core): notes that are confirmed enough to spend.
+    /// A note is spendable iff it is unspent AND `note.height + MIN_SPEND_CONFIRMATIONS <= chain_tip_height`.
+    /// Use this in place of `unspent_notes()` when selecting notes to send,
+    /// so a reorg of depth <= MIN_SPEND_CONFIRMATIONS cannot invalidate the
+    /// anchor used by an in-flight transaction.
+    pub fn spendable_notes(&self, chain_tip_height: u64) -> Vec<&WalletNote> {
+        let max_height = chain_tip_height
+            .saturating_sub(crate::config::MIN_SPEND_CONFIRMATIONS);
+        self.notes
+            .iter()
+            .filter(|n| !n.is_spent && n.height <= max_height)
+            .collect()
+    }
+
+    /// v2.8.4 Phase 1: balance restricted to notes meeting the spendable
+    /// confirmation threshold. Useful for `tsn balance` UX so users see what
+    /// they can actually send right now (vs `balance()` which counts every
+    /// unspent note including the just-mined one at the tip).
+    pub fn spendable_balance(&self, chain_tip_height: u64) -> u64 {
+        let max_height = chain_tip_height
+            .saturating_sub(crate::config::MIN_SPEND_CONFIRMATIONS);
+        self.notes
+            .iter()
+            .filter(|n| !n.is_spent && n.height <= max_height)
+            .map(|n| n.note.value)
+            .sum()
+    }
+
     /// Get all notes.
     pub fn notes(&self) -> &[WalletNote] {
         &self.notes
@@ -622,6 +650,15 @@ impl ShieldedWallet {
     /// v2.7.4 Phase C — Number of leaves currently in the local tree.
     pub fn local_tree_size(&self) -> u64 {
         self.local_tree.size()
+    }
+
+    /// v2.8.4 Phase 1 (Iron Fish core): drop the locally-built commitment tree
+    /// so the next `sync_local_tree_pq` rebuilds it from scratch. Called when
+    /// a chain reorg is detected during `cmd_send` and the local tree may
+    /// contain leaves from an abandoned fork. Phase 2 (BridgeTree) will
+    /// replace this with a checkpoint-based rewind to avoid the full re-sync.
+    pub fn reset_local_tree(&mut self) {
+        self.local_tree.reset();
     }
 
     /// v2.8.0 — Replace the wallet's local commitment tree with the one

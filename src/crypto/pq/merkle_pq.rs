@@ -239,6 +239,16 @@ impl CommitmentTreePQ {
         empty_root_pq()
     }
 
+    /// v2.8.4 Phase 1 (Iron Fish core): reset the tree to a fresh empty state.
+    /// Used by `Wallet::reset_local_tree()` when a chain reorg invalidates the
+    /// wallet's locally-built commitment tree, before re-syncing from the node.
+    /// Equivalent to `*self = Self::new()` but kept as a method for API clarity
+    /// and so future implementations can replace it with `rewind(target_size)`
+    /// (Phase 2 BridgeTree) without touching call sites.
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
+
     /// Get the number of commitments in the tree.
     pub fn size(&self) -> u64 {
         self.size

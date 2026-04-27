@@ -464,6 +464,17 @@ impl ShieldedBlock {
 
     /// Verify the block's structure and proof-of-work.
     pub fn verify(&self) -> Result<(), BlockError> {
+        // Defense-in-depth: a non-genesis block must declare a non-zero height.
+        // Observed in production (v2.8.x): peers occasionally serve blocks with
+        // coinbase.height=0 even when their tip is at h=11743. The merkle root
+        // is internally consistent (the sender hashed coinbase with height=0)
+        // so verify() then computes meets_difficulty_for_height(0), which uses
+        // the legacy BN254 path and rejects the otherwise-valid block. Catch
+        // the malformed case explicitly so it can't quietly poison sync.
+        if self.coinbase.height == 0 && self.header.prev_hash != [0u8; BLOCK_HASH_SIZE] {
+            return Err(BlockError::InvalidBlockHeight);
+        }
+
         // Verify merkle root
         let mut tx_hashes: Vec<[u8; 32]> = self.transactions.iter().map(|tx| tx.hash()).collect();
         tx_hashes.extend(self.transactions_v2.iter().map(|tx| tx.hash()));
@@ -618,6 +629,9 @@ pub enum BlockError {
 
     #[error("Invalid transaction")]
     InvalidTransaction,
+
+    #[error("Invalid block height: coinbase.height=0 on non-genesis block")]
+    InvalidBlockHeight,
 }
 
 /// Compute the merkle root of a list of hashes.

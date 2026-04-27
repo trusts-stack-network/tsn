@@ -430,36 +430,95 @@ impl ShieldedBlockchain {
             // v1.7.0: Read cumulative_work from DB (single source of truth).
             // The per-height tree has the exact value stored at each block import.
             // Fallback: recalculate from blocks and store (one-time migration).
-            let cumulative_work: u128 = if let Ok(Some(stored_work)) = db.get_cumulative_work(height) {
-                tracing::info!("cumulative_work: restored from DB at height {} = {}", height, stored_work);
-                stored_work
-            } else {
-                // Migration fallback: recalculate from blocks (LRU + DB) and store
-                let mut work: u128 = 0;
-                let mut counted = 0u64;
-                for h in 0..=height {
-                    if let Some(hash) = height_index.get(h as usize) {
-                        if *hash != [0u8; 32] {
-                            // Try LRU cache first, then DB
-                            let difficulty = blocks.get(hash)
-                                .map(|b| b.header.difficulty)
-                                .or_else(|| {
-                                    db.load_block(hash).ok().flatten()
-                                        .map(|b| b.header.difficulty)
-                                });
-                            if let Some(diff) = difficulty {
-                                work += diff as u128;
-                                counted += 1;
-                            }
+            //
+            // v2.8.3 Phase 0.1: deterministic drift detection at startup.
+            // Walk height_index summing block difficulties (authoritative source).
+            // Compare with stored value; if they disagree, log WARN, increment
+            // tsn_cumulative_work_drift_total, and use the recomputed value as
+            // the source of truth. This prevents two nodes on the same canonical
+            // tip from disagreeing on cumulative_work and making opposite
+            // fork-choice decisions on the next block (root cause of persistent
+            // mini-forks observed in v2.4.3-v2.8.2).
+            let mut authoritative_work: u128 = 0;
+            let mut authoritative_counted: u64 = 0;
+            let mut authoritative_missing: u64 = 0;
+            for h in 0..=height {
+                if let Some(hash) = height_index.get(h as usize) {
+                    if *hash != [0u8; 32] {
+                        let difficulty = blocks.get(hash)
+                            .map(|b| b.header.difficulty)
+                            .or_else(|| {
+                                db.load_block(hash).ok().flatten()
+                                    .map(|b| b.header.difficulty)
+                            });
+                        if let Some(diff) = difficulty {
+                            authoritative_work = authoritative_work.saturating_add(diff as u128);
+                            authoritative_counted += 1;
+                        } else {
+                            authoritative_missing += 1;
                         }
                     }
-                    let _ = db.save_cumulative_work(h, work);
                 }
-                tracing::info!(
-                    "cumulative_work: migrated from {} real blocks, total work={} (stored in DB)",
-                    counted, work
-                );
-                work
+            }
+
+            let stored_cw_opt = db.get_cumulative_work(height).ok().flatten();
+            let cumulative_work: u128 = match stored_cw_opt {
+                Some(stored_work) if authoritative_missing == 0 && stored_work != authoritative_work => {
+                    // Drift detected and the recompute is complete (no missing blocks).
+                    let drift = if stored_work > authoritative_work {
+                        stored_work - authoritative_work
+                    } else {
+                        authoritative_work - stored_work
+                    };
+                    tracing::warn!(
+                        "cumulative_work DRIFT at height {}: stored={} authoritative={} drift={} blocks_counted={}. Repairing to authoritative value.",
+                        height, stored_work, authoritative_work, drift, authoritative_counted
+                    );
+                    crate::metrics::cumulative_work_drift_inc();
+                    let _ = db.save_cumulative_work(height, authoritative_work);
+                    let _ = db.set_metadata("cumulative_work", &authoritative_work.to_string());
+                    authoritative_work
+                }
+                Some(stored_work) => {
+                    if authoritative_missing > 0 {
+                        tracing::info!(
+                            "cumulative_work: restored from DB at height {} = {} (recompute incomplete: missing={} counted={})",
+                            height, stored_work, authoritative_missing, authoritative_counted
+                        );
+                    } else {
+                        tracing::info!(
+                            "cumulative_work: restored from DB at height {} = {} (verified, no drift)",
+                            height, stored_work
+                        );
+                    }
+                    stored_work
+                }
+                None => {
+                    // No stored cw — first run / migration. Persist per-height + summary.
+                    let mut running: u128 = 0;
+                    for h in 0..=height {
+                        if let Some(hash) = height_index.get(h as usize) {
+                            if *hash != [0u8; 32] {
+                                let difficulty = blocks.get(hash)
+                                    .map(|b| b.header.difficulty)
+                                    .or_else(|| {
+                                        db.load_block(hash).ok().flatten()
+                                            .map(|b| b.header.difficulty)
+                                    });
+                                if let Some(diff) = difficulty {
+                                    running = running.saturating_add(diff as u128);
+                                }
+                            }
+                        }
+                        let _ = db.save_cumulative_work(h, running);
+                    }
+                    let _ = db.set_metadata("cumulative_work", &running.to_string());
+                    tracing::info!(
+                        "cumulative_work: migrated from {} real blocks (missing={}), total work={} (stored in DB)",
+                        authoritative_counted, authoritative_missing, running
+                    );
+                    running
+                }
             };
 
             // Verify genesis hash if configured (skip in test builds)
@@ -1967,6 +2026,36 @@ impl ShieldedBlockchain {
                 block_height, fork_work, self.cumulative_work
             );
             self.reorganize_to_block(block)?;
+
+            // v2.8.3 Phase 0.1: deterministic cw recompute after reorg accepted.
+            // Without this, drift accumulates across reorgs because each reorg
+            // computes new_work as ancestor_work + sum(fork_diffs), where
+            // ancestor_work is read from DB (potentially already drifted).
+            // Walking height_index summing block difficulties is authoritative.
+            let pre_recompute_cw = self.cumulative_work;
+            match self.recompute_cumulative_work() {
+                Ok(authoritative_cw) => {
+                    if authoritative_cw != pre_recompute_cw {
+                        let drift = if pre_recompute_cw > authoritative_cw {
+                            pre_recompute_cw - authoritative_cw
+                        } else {
+                            authoritative_cw - pre_recompute_cw
+                        };
+                        tracing::warn!(
+                            "cumulative_work DRIFT after reorg at height {}: was={} authoritative={} drift={}",
+                            self.height(), pre_recompute_cw, authoritative_cw, drift
+                        );
+                        crate::metrics::cumulative_work_drift_inc();
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "recompute_cumulative_work failed after reorg at height {}: {} (cw left as-is)",
+                        self.height(), e
+                    );
+                }
+            }
+
             self.process_orphans()?;
             return Ok(true);
         }
@@ -2150,30 +2239,25 @@ impl ShieldedBlockchain {
         accumulated_difficulty
     }
 
-    /// v1.4.0: Determine if a candidate fork should replace the current chain.
-    /// Compares: cumulative work first, then tip difficulty, then hash as final tiebreaker.
-    /// Returns true if the candidate chain should be preferred.
+    /// Determine if a candidate fork should replace the current chain.
+    ///
+    /// **First-seen rule** (Bitcoin-style): we only reorg on STRICTLY greater
+    /// cumulative work. Equal-work or equal-difficulty ties keep the existing
+    /// tip. Any deterministic-but-symmetric tiebreaker (lower hash, etc.) lets
+    /// two nodes mining concurrent equal-work blocks reorg back-and-forth as
+    /// each peer relays a fresh equal-work candidate. In production at v2.8.x
+    /// we observed thousands of `Reorg accepted: fork_work=X local_work=X`
+    /// events per hour, with the chain ping-ponging between two competing tips
+    /// and never advancing. Refusing to reorg on ties is the canonical fix:
+    /// the locally-first-seen tip stays canonical until a peer extends one
+    /// branch with strictly more work.
     fn should_prefer_candidate(
         &self,
         candidate_work: u128,
-        candidate_difficulty: u64,
-        candidate_hash: [u8; 32],
+        _candidate_difficulty: u64,
+        _candidate_hash: [u8; 32],
     ) -> bool {
-        if candidate_work > self.cumulative_work {
-            return true;
-        }
-        if candidate_work < self.cumulative_work {
-            return false;
-        }
-        // Equal work: prefer higher difficulty tip (harder to produce)
-        if candidate_difficulty > self.difficulty {
-            return true;
-        }
-        if candidate_difficulty < self.difficulty {
-            return false;
-        }
-        // Equal work and difficulty: lower hash wins (deterministic tiebreaker)
-        candidate_hash < self.latest_hash()
+        candidate_work > self.cumulative_work
     }
 
     /// Get the cumulative work of the current chain.
