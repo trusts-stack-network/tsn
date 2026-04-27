@@ -3088,12 +3088,45 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
                 break (tx_hash, nullifiers, selected_total);
             }
             Err(e) => {
-                let orphans = parse_orphan_positions(&e.to_string());
+                let err_str = e.to_string();
+                let orphans = parse_orphan_positions(&err_str);
                 if !orphans.is_empty() {
                     eprintln!("orphan notes detected, retrying without them");
                     for p in &orphans {
                         final_bad_positions.insert(*p);
                         eprintln!("  ⚠ excluding orphan note at position {}", p);
+                    }
+                    continue;
+                }
+                // v2.8.8 Phase 1 hardening — Invalid anchor retry. The proof's
+                // anchor was built from `wallet.local_anchor_v2()` at the time
+                // the proof started; by submit time the chain may have moved
+                // far enough that the wallet's local_tree root is no longer in
+                // the node's `recent_roots` window (or the local_tree was
+                // populated from a stale snapshot whose root never was). Reset
+                // the tree, re-sync against the node's current state, and
+                // re-enter the loop to re-prove and re-submit. Capped at 3
+                // attempts so a persistently broken peer cannot loop forever.
+                let is_anchor_error = err_str.to_lowercase().contains("invalid anchor")
+                    || err_str.to_lowercase().contains("not a recent root");
+                if is_anchor_error && final_attempt <= 3 {
+                    eprintln!("anchor stale, refreshing local tree and retrying");
+                    wallet.reset_local_tree();
+                    if let Err(sync_err) = sync_local_tree_pq(&mut wallet, node_url, &client).await {
+                        tracing::warn!(
+                            "post-anchor-error tree resync failed: {} (will continue with empty tree)",
+                            sync_err
+                        );
+                    } else {
+                        let _ = wallet.save(wallet_path);
+                    }
+                    // Update last_known_tip to current chain to prevent the
+                    // detect_reorg helper from misclassifying this refresh
+                    // as a reorg on the next iteration.
+                    if let Err(seed_err) = detect_reorg_and_reset_if_needed(
+                        &mut wallet, &mut last_known_tip, node_url, &client,
+                    ).await {
+                        tracing::warn!("re-seeding tip tracker after refresh: {}", seed_err);
                     }
                     continue;
                 }
