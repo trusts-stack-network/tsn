@@ -1328,6 +1328,14 @@ impl ShieldedBlockchain {
         &self.state
     }
 
+    /// v2.9.9 — Cloned Arc to the on-disk Database, or None for in-memory
+    /// chains. Used by background tasks like the historical-block backfill
+    /// loop that need to persist sled writes without holding the chain
+    /// `RwLock` for their entire run.
+    pub fn db_arc(&self) -> Option<Arc<Database>> {
+        self.db.clone()
+    }
+
     /// Get the current commitment tree root.
     pub fn commitment_root(&self) -> [u8; 32] {
         self.state.commitment_root()

@@ -5557,6 +5557,18 @@ async fn cmd_node(
     // finalizing a checkpoint.
     let _ = tsn::consensus::checkpoint_vote::spawn(state.clone());
 
+    // v2.9.9 — Background backfill of historical blocks missing from sled
+    // after a fast-sync or /admin/force-resync. Walks the height range
+    // [1..tip-SAFETY_DEPTH] in batches, asks a healthy peer for any
+    // missing block via /blocks/since, and persists with db.save_block.
+    // Without this, /block/height/{N} returns 404 for everything below
+    // fast_sync_base and the explorer's Dashboard / Blocks / Charts panels
+    // render empty even when the chain is in steady state.
+    {
+        let backfill_peers: Vec<String> = tsn::config::get_seed_nodes();
+        let _ = tsn::network::backfill::spawn(state.clone(), backfill_peers);
+    }
+
     // v2.8.1 — BACW (Background Auto-Consolidation Worker) removed.
     //
     // Earlier versions ran a background worker that periodically consolidated

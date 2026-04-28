@@ -27,6 +27,7 @@ pub mod version_check;
 pub mod snapshot_manifest;
 pub mod snapshot_auto_fetch;
 pub mod compact_block;
+pub mod backfill;
 
 pub use api::{AppState, CachedSnapshot, MinerStats, NodeError, create_router, log_node_error};
 pub use sync_gate::SyncGate;
