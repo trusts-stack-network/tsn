@@ -293,12 +293,28 @@ pub const TRUSTED_CHECKPOINT_VOTERS: &[&str] = &[
     "http://seed4.tsnchain.com:9333",
 ];
 
-/// v2.8.9 — minimum number of trusted voters that must agree on the same
-/// hash at the candidate checkpoint height before the checkpoint finalizes.
-/// v2.9.2 raises this 3 -> 4 (4 / 5 = 80%): tolerating one voter being
-/// unreachable / lagging / adversarial. Stricter safety at the cost of one
-/// less degree of liveness when the trusted infrastructure is degraded.
-pub const CHECKPOINT_QUORUM: usize = 4;
+/// v2.9.8 — Quorum threshold expressed as a percentage of the trusted-voter
+/// set, so the rule scales naturally when voters are added later. The
+/// finalize requirement is `ceil(voters * percent / 100)` voters in agreement.
+///
+/// Examples for 80%:
+///   - 5 voters  -> 4 (5 * 80 / 100 = 4.0 exact)
+///   - 7 voters  -> 6 (7 * 80 = 560, ceil(560/100) = 6)
+///   - 8 voters  -> 7 (8 * 80 = 640, ceil(640/100) = 7)
+///   - 10 voters -> 8 (10 * 80 / 100 = 8.0 exact)
+pub const CHECKPOINT_QUORUM_PERCENT: usize = 80;
+
+/// v2.9.8 — Effective quorum threshold for the current voter set.
+/// Computed from `TRUSTED_CHECKPOINT_VOTERS.len()` so a future voter-set
+/// widening (current 4 seeds + nexus -> + N community relays) auto-adjusts
+/// the bar without a separate constant bump and a redeploy. Ceil
+/// rounding so 80% of 8 = 7, not 6.
+///
+/// `TRUSTED_CHECKPOINT_VOTERS.len()` is const-eval since Rust 1.39, so this
+/// is itself const and existing `if agree >= CHECKPOINT_QUORUM` call sites
+/// (with no parentheses) keep compiling.
+pub const CHECKPOINT_QUORUM: usize =
+    (TRUSTED_CHECKPOINT_VOTERS.len() * CHECKPOINT_QUORUM_PERCENT + 99) / 100;
 
 /// v2.8.9 — per-voter HTTP timeout when collecting checkpoint votes. Short
 /// enough that an unreachable voter does not stall the whole vote, long

@@ -5532,9 +5532,17 @@ async fn cmd_node(
     // build inside `verify_proof`, blocking block import. We swallow the
     // count; the cache fills in the background and any miss is recovered
     // on demand.
+    // v2.9.8 — Warm up only the COMMON shapes (1-5 spends × 1-2 outputs =
+    // 10 circuits ~300 MB total) instead of every shape (50 × 4 = 200
+    // circuits, ~6 GB resident). The full warmup was the root cause of the
+    // 5.2 GB anonymous mapping observed by pmap on the seeds and the OOM
+    // restart loop on 4 GB nodes. Less common shapes are built on demand
+    // by `verify_proof` -> `GLOBAL_CIRCUIT_CACHE.get_or_build()` and stay
+    // cached for the rest of the process lifetime, so the only cost is a
+    // ~1 s latency on the first block carrying that shape.
     tokio::task::spawn_blocking(|| {
-        let built = tsn::crypto::pq::proof_pq::warmup_global_circuits();
-        tracing::info!("Circuit cache warmed: {} shapes", built);
+        let built = tsn::crypto::pq::proof_pq::GLOBAL_CIRCUIT_CACHE.prebuild_common();
+        tracing::info!("Circuit cache warmed (common shapes only): {} shapes", built);
     });
 
     // v2.6.0 — keep AppState.chain_info_cache fresh every 200ms so GET
