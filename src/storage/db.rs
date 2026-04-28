@@ -60,7 +60,14 @@ impl Database {
     /// Open or create a database at the given path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DatabaseError> {
         let path_buf = path.as_ref().to_path_buf();
-        let db = sled::open(&path_buf)?;
+        // v2.9.1: cap sled in-memory page cache at 256 MiB. The default 1 GiB
+        // is too aggressive for low-memory seeds (4 GB total) which were OOM
+        // killed every ~2 min in steady-state. 256 MiB still keeps hot pages
+        // resident; cold pages get re-read from disk transparently.
+        let db = sled::Config::new()
+            .path(&path_buf)
+            .cache_capacity(256 * 1024 * 1024)
+            .open()?;
         let blocks = db.open_tree("blocks")?;
         let block_heights = db.open_tree("block_heights")?;
         let nullifiers = db.open_tree("nullifiers")?;

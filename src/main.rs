@@ -3112,13 +3112,29 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
                 if is_anchor_error && final_attempt <= 3 {
                     eprintln!("anchor stale, refreshing local tree and retrying");
                     wallet.reset_local_tree();
-                    if let Err(sync_err) = sync_local_tree_pq(&mut wallet, node_url, &client).await {
-                        tracing::warn!(
-                            "post-anchor-error tree resync failed: {} (will continue with empty tree)",
-                            sync_err
-                        );
-                    } else {
-                        let _ = wallet.save(wallet_path);
+                    // v2.9.1 — global 60s timeout on the retry-path resync.
+                    // The previous version called sync_local_tree_pq with no
+                    // outer bound; if the node was overloaded or libp2p-stalled
+                    // the call could sit waiting for batch responses for tens
+                    // of minutes (one operator observed a 22-min hang). Cap at
+                    // 60s; on timeout we proceed with an empty tree so the
+                    // next loop iteration can fail fast rather than freeze.
+                    let resync_fut = sync_local_tree_pq(&mut wallet, node_url, &client);
+                    match tokio::time::timeout(std::time::Duration::from_secs(60), resync_fut).await {
+                        Ok(Ok(())) => {
+                            let _ = wallet.save(wallet_path);
+                        }
+                        Ok(Err(sync_err)) => {
+                            tracing::warn!(
+                                "post-anchor-error tree resync failed: {} (will continue with empty tree)",
+                                sync_err
+                            );
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                "post-anchor-error tree resync timed out after 60s (will continue with empty tree)"
+                            );
+                        }
                     }
                     // Update last_known_tip to current chain to prevent the
                     // detect_reorg helper from misclassifying this refresh

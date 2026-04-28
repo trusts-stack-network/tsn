@@ -96,7 +96,11 @@ impl ShieldedBlockchain {
         let genesis = ShieldedBlock::genesis(difficulty, genesis_coinbase.clone());
         let genesis_hash = genesis.hash();
 
-        let mut blocks = LruCache::new(NonZeroUsize::new(1000).unwrap());
+        // v2.9.1: block LRU 1000 -> 200. The hot-path of fork-choice and
+        // recent block lookups only needs the last few hundred blocks; older
+        // ones are fetched from disk on demand. 1000 was wasting ~80-100 MB
+        // resident on a typical 50-200 KB block.
+        let mut blocks = LruCache::new(NonZeroUsize::new(200).unwrap());
         blocks.put(genesis_hash, genesis);
         // Initialize state with genesis coinbase
         let mut state = ShieldedState::new();
@@ -174,7 +178,8 @@ impl ShieldedBlockchain {
             // Load existing chain
             tracing::info!("Loading blockchain from disk (height: {})", height);
 
-            let mut blocks = LruCache::new(NonZeroUsize::new(1000).unwrap());
+            // v2.9.1: block LRU 1000 -> 200 (see ShieldedBlockchain::new comment)
+            let mut blocks = LruCache::new(NonZeroUsize::new(200).unwrap());
             let mut height_index: Vec<[u8; 32]>;
             let mut state = ShieldedState::new();
 
@@ -602,7 +607,8 @@ impl ShieldedBlockchain {
             db.flush()
                 .map_err(|e| BlockchainError::StorageError(e.to_string()))?;
 
-            let mut blocks = LruCache::new(NonZeroUsize::new(1000).unwrap());
+            // v2.9.1: block LRU 1000 -> 200 (see ShieldedBlockchain::new comment)
+            let mut blocks = LruCache::new(NonZeroUsize::new(200).unwrap());
             blocks.put(genesis_hash, genesis);
 
             // Initialize state with genesis coinbase
@@ -2295,14 +2301,53 @@ impl ShieldedBlockchain {
     /// nodes make opposite fork-choice decisions on the next block, which is
     /// the actual fork-persistence root cause.
     pub fn recompute_cumulative_work(&mut self) -> Result<u128, BlockchainError> {
-        let mut running: u128 = 0;
-        for (h, hash) in self.height_index.iter().enumerate() {
-            let h = h as u64;
-            // Genesis: height 0 contributes 0 work (no difficulty entry).
-            if h == 0 { continue; }
-            // Pull difficulty from the block at this height. Prefer the cached
-            // block in LRU/DB; if missing, we cannot recompute reliably and
-            // signal failure so the caller can decide (ignore vs. refuse).
+        // v2.9.1 — fast-sync awareness. After a snapshot import, height_index
+        // is filled with [0u8;32] placeholders for heights 0..fast_sync_base
+        // (the actual blocks were never written to disk). A fresh walk would
+        // try to fetch block bodies for those placeholder hashes, fail, and
+        // return Err — so the post-reorg drift hook would silently leave the
+        // chain on a stale stored cw.
+        //
+        // Strategy: if we're fast-synced, seed `running` with the persisted cw
+        // at the fast_sync_base height (which the snapshot import wrote), then
+        // walk forward from base+1. Placeholders before the base are skipped
+        // implicitly. If we ever hit a placeholder ABOVE the base, that's a
+        // real corruption — return Err so the caller refuses the recompute.
+        let (start_h, mut running): (u64, u128) = if self.fast_sync_base_height > 0 {
+            let base = self.fast_sync_base_height;
+            let seed = self
+                .db
+                .as_ref()
+                .and_then(|db| db.get_cumulative_work(base).ok().flatten())
+                .unwrap_or(0);
+            (base + 1, seed)
+        } else {
+            (1, 0)
+        };
+
+        let total_height = self.height_index.len() as u64;
+        if start_h >= total_height {
+            // Chain has no real blocks above the fast-sync base — nothing to
+            // walk. The seeded value is authoritative.
+            self.cumulative_work = running;
+            if let Some(ref db) = self.db {
+                let _ = db.set_metadata("cumulative_work", &running.to_string());
+            }
+            return Ok(running);
+        }
+
+        for h in start_h..total_height {
+            let hash = match self.height_index.get(h as usize) {
+                Some(h) => h,
+                None => break,
+            };
+            // Placeholder above the fast-sync base: chain is corrupt, refuse.
+            if *hash == [0u8; 32] {
+                return Err(BlockchainError::StorageError(format!(
+                    "recompute_cumulative_work: placeholder hash at height {} above fast_sync_base={}",
+                    h, self.fast_sync_base_height
+                )));
+            }
             let difficulty = match self.get_block(hash) {
                 Some(b) => b.header.difficulty,
                 None => {
@@ -2313,8 +2358,6 @@ impl ShieldedBlockchain {
                 }
             };
             running = running.saturating_add(difficulty as u128);
-            // Persist the corrected value so parent_work lookups on the next
-            // block are authoritative going forward.
             if let Some(ref db) = self.db {
                 let _ = db.save_cumulative_work(h, running);
             }
