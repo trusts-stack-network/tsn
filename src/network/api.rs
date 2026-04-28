@@ -242,6 +242,64 @@ pub struct AppState {
     /// inside `SUBMIT_RATE_WINDOW_SECS` return 429. The LruCache bounds memory
     /// under DoS (oldest IPs are evicted when capacity is reached).
     pub submit_rate: std::sync::Arc<std::sync::Mutex<lru::LruCache<std::net::IpAddr, std::collections::VecDeque<std::time::Instant>>>>,
+
+    /// v2.9.2 — Last-known result of the trusted-quorum checkpoint vote tick.
+    /// Updated by the background `consensus::checkpoint_vote::run_loop` after
+    /// every tick (default every 15s). Read by `GET /chain/quorum_status`
+    /// so the explorer can render a live "blockchain in quorum" indicator
+    /// without re-polling every voter from the browser.
+    pub quorum_status: arc_swap::ArcSwap<QuorumStatus>,
+}
+
+/// v2.9.2 — Snapshot of the most recent trusted-quorum checkpoint vote tick.
+/// Held under `AppState::quorum_status` and overwritten in place by
+/// `consensus::checkpoint_vote::tick()` so HTTP handlers can read it
+/// lock-free.
+#[derive(Clone, serde::Serialize)]
+pub struct QuorumStatus {
+    /// Candidate height the last tick evaluated (0 if no tick has run yet
+    /// or the chain has not reached the next candidate height).
+    pub candidate_height: u64,
+    /// Number of trusted voters that returned the same hash as the local
+    /// node at `candidate_height`.
+    pub agree: usize,
+    /// Number of trusted voters that returned a different hash.
+    pub disagree: usize,
+    /// Number of trusted voters that did not respond, were lagging, or
+    /// did not have the block at `candidate_height` yet.
+    pub unreachable: usize,
+    /// Total number of trusted voters polled (constant, but echoed for the
+    /// frontend's convenience).
+    pub total: usize,
+    /// Quorum threshold currently configured (e.g. 4 of 5 in v2.9.2).
+    pub quorum_required: usize,
+    /// `true` iff the most recent tick reached `agree >= quorum_required`.
+    /// This is the single field the explorer checks to render the halo.
+    pub is_quorum: bool,
+    /// Last finalized checkpoint height in the local chain (snapshot at the
+    /// time the tick observed it). Lets the UI distinguish "voters agree on
+    /// a fresh candidate" from "we are stuck on an old finalized checkpoint".
+    pub last_finalized_height: u64,
+    /// Wall-clock time (millis since epoch) when this snapshot was written.
+    /// The UI can flag staleness if no tick has updated this in N seconds.
+    pub last_check_unix_ms: u64,
+}
+
+impl QuorumStatus {
+    /// Initial value installed at boot, before any tick has run.
+    pub fn initial() -> Self {
+        Self {
+            candidate_height: 0,
+            agree: 0,
+            disagree: 0,
+            unreachable: 0,
+            total: crate::config::TRUSTED_CHECKPOINT_VOTERS.len(),
+            quorum_required: crate::config::CHECKPOINT_QUORUM,
+            is_quorum: false,
+            last_finalized_height: 0,
+            last_check_unix_ms: 0,
+        }
+    }
 }
 
 /// v2.5.4 — cached `/network/status` payload with absolute expiry instant.
@@ -561,6 +619,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // internal node-to-node sync bursts and the ban map absorbs spam.
     let sync_routes = Router::new()
         .route("/chain/info", get(chain_info))
+        .route("/chain/quorum_status", get(chain_quorum_status))
         .route("/blocks", post(receive_block))
         .route("/cmpct_block", post(receive_compact_block))
         .route("/blocktxn", post(receive_block_txn_request))
@@ -721,6 +780,14 @@ async fn chain_info(State(state): State<Arc<AppState>>) -> Json<ChainInfo> {
     // task (spawn_chain_info_refresher) keeps this snapshot within 200ms of
     // the live chain state.
     Json((**state.chain_info_cache.load()).clone())
+}
+
+/// v2.9.2 — Public read of the trusted-quorum checkpoint vote state.
+/// Read by the explorer to render the "blockchain in quorum" halo / banner.
+/// Lock-free: snapshot is overwritten in place by `consensus::checkpoint_vote`
+/// after each tick (every `CHECKPOINT_VOTE_TICK_SECS`).
+async fn chain_quorum_status(State(state): State<Arc<AppState>>) -> Json<QuorumStatus> {
+    Json((**state.quorum_status.load()).clone())
 }
 
 /// v2.6.0 — Periodically refresh `AppState.chain_info_cache` from the live

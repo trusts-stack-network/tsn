@@ -295,10 +295,10 @@ pub const TRUSTED_CHECKPOINT_VOTERS: &[&str] = &[
 
 /// v2.8.9 — minimum number of trusted voters that must agree on the same
 /// hash at the candidate checkpoint height before the checkpoint finalizes.
-/// 3/5 = 60%, tolerating up to two voters being unreachable, lagging, or
-/// adversarial. Raising this strengthens safety but reduces liveness when
-/// part of the trusted infrastructure is down.
-pub const CHECKPOINT_QUORUM: usize = 3;
+/// v2.9.2 raises this 3 -> 4 (4 / 5 = 80%): tolerating one voter being
+/// unreachable / lagging / adversarial. Stricter safety at the cost of one
+/// less degree of liveness when the trusted infrastructure is degraded.
+pub const CHECKPOINT_QUORUM: usize = 4;
 
 /// v2.8.9 — per-voter HTTP timeout when collecting checkpoint votes. Short
 /// enough that an unreachable voter does not stall the whole vote, long

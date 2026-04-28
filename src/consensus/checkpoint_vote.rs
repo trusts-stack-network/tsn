@@ -182,6 +182,29 @@ async fn tick(state: &Arc<AppState>, client: &reqwest::Client) -> Result<(), Str
         // hash (peers catching up) or a new hash (we reorged in between).
     }
 
+    // v2.9.2 — Publish the result of this tick to the lock-free
+    // `quorum_status` snapshot read by `GET /chain/quorum_status`.
+    // We re-read `last_checkpoint_height` after the (possible) finalize so
+    // the UI sees the freshly committed value when `is_quorum=true`.
+    let last_finalized_height = state.blockchain.read().await.last_checkpoint_height();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    state
+        .quorum_status
+        .store(std::sync::Arc::new(crate::network::api::QuorumStatus {
+            candidate_height,
+            agree,
+            disagree,
+            unreachable,
+            total: TRUSTED_CHECKPOINT_VOTERS.len(),
+            quorum_required: CHECKPOINT_QUORUM,
+            is_quorum: agree >= CHECKPOINT_QUORUM,
+            last_finalized_height,
+            last_check_unix_ms: now_ms,
+        }));
+
     Ok(())
 }
 

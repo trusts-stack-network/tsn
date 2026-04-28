@@ -5363,6 +5363,11 @@ async fn cmd_node(
         submit_rate: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
             std::num::NonZeroUsize::new(tsn::network::api::SUBMIT_RATE_TRACKER_CAPACITY).unwrap(),
         ))),
+        // v2.9.2 — Initial quorum status snapshot, overwritten by the
+        // checkpoint-vote background task once it ticks.
+        quorum_status: arc_swap::ArcSwap::from_pointee(
+            tsn::network::api::QuorumStatus::initial(),
+        ),
     });
 
     // v2.8.0 — hydrate signed snapshot manifests from disk so /snapshot/
