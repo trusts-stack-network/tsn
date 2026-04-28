@@ -1988,18 +1988,34 @@ async fn send_single_tx(
     let mut spend_witnesses = Vec::new();
     let mut orphan_positions: Vec<u64> = Vec::new();
     let local_tree_size = wallet.local_tree_size();
-    let _ = client; // network fetch no longer needed in the hot path
-    let _ = node_url;
     eprintln!("    [Phase C] proof loop: local_tree_size={} candidates={}", local_tree_size, selected_notes.len());
     for note in selected_notes {
         let pos = note.position;
+        // v2.9.8 — Fallback HTTP witness fetch when the local tree has not
+        // grown to position `pos`. Phase C built the local tree to skip an
+        // HTTP round-trip per spend, but the tree only grows on
+        // `sync_local_tree_pq` calls; if the wallet scanned a coinbase
+        // recently and `sync_local_tree_pq` hasn't caught up, every send
+        // attempt would mark the note as orphan and fail with
+        // "Insufficient spendable notes". We now ask the node for the
+        // witness via /witness/v2/position/{pos} when local lookup misses.
+        // The HTTP response also carries the leaf, so we pass it down
+        // and avoid a second `local_leaf_at_v2` miss.
+        let mut http_leaf_override: Option<[u8; 32]> = None;
         let witness = match wallet.local_witness_v2(pos) {
             Some(w) => w,
-            None => {
-                eprintln!("    [Phase C] orphan: local witness miss at pos {} (tree_size={})", pos, local_tree_size);
-                orphan_positions.push(pos);
-                continue;
-            }
+            None => match fetch_witness_v2_http(client, node_url, pos).await {
+                Ok((w, leaf_opt)) => {
+                    eprintln!("    [Phase C] note pos {} witnessed via HTTP fallback (tree_size={})", pos, local_tree_size);
+                    http_leaf_override = leaf_opt;
+                    w
+                }
+                Err(e) => {
+                    eprintln!("    [Phase C] orphan: local miss + HTTP fallback failed at pos {} (tree_size={}): {}", pos, local_tree_size, e);
+                    orphan_positions.push(pos);
+                    continue;
+                }
+            },
         };
 
         let randomness = match note.pq_randomness {
@@ -2024,9 +2040,17 @@ async fn send_single_tx(
         let stored_pq_cm = match wallet.local_leaf_at_v2(pos) {
             Some(leaf) => leaf,
             None => {
-                eprintln!("    [Phase C] orphan: leaf miss at pos {}", pos);
-                orphan_positions.push(pos);
-                continue;
+                // v2.9.8 — accept the leaf returned by the HTTP fallback if
+                // the wallet's local tree doesn't have it. Without this we
+                // would mark the note as orphan even though the witness
+                // was successfully fetched above.
+                if let Some(leaf) = http_leaf_override {
+                    leaf
+                } else {
+                    eprintln!("    [Phase C] orphan: leaf miss at pos {}", pos);
+                    orphan_positions.push(pos);
+                    continue;
+                }
             }
         };
         if !witness.verify(&NoteCommitmentPQ(stored_pq_cm)) {
@@ -2183,6 +2207,89 @@ async fn send_single_tx(
     }
 
     Ok((tx_hash, nullifiers_hex))
+}
+
+/// v2.9.8 — Fetch a Merkle witness for a given position from a node over HTTP.
+/// Used as a fallback when `wallet.local_witness_v2(pos)` returns None (the
+/// local Phase-C tree has not been synced past `pos`). Without this fallback
+/// every send right after a coinbase scan would fail with "Insufficient
+/// spendable notes" because the new note's position is above the local tree
+/// size until the next sync_local_tree_pq round.
+async fn fetch_witness_v2_http(
+    client: &reqwest::Client,
+    node_url: &str,
+    pos: u64,
+) -> anyhow::Result<(tsn::crypto::pq::merkle_pq::MerkleWitnessPQ, Option<[u8; 32]>)> {
+    use tsn::crypto::pq::merkle_pq::{MerklePathPQ, MerkleWitnessPQ};
+
+    let url = format!("{}/witness/v2/position/{}", node_url.trim_end_matches('/'), pos);
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("HTTP send: {}", e))?;
+    if !resp.status().is_success() {
+        anyhow::bail!("HTTP {}", resp.status());
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("JSON: {}", e))?;
+
+    let root_hex = body["root"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'root'"))?;
+    let root_bytes = hex::decode(root_hex)
+        .map_err(|e| anyhow::anyhow!("root decode: {}", e))?;
+    if root_bytes.len() != 32 {
+        anyhow::bail!("root length {} != 32", root_bytes.len());
+    }
+    let mut root = [0u8; 32];
+    root.copy_from_slice(&root_bytes);
+
+    let path_arr = body["path"].as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let mut siblings: Vec<[u8; 32]> = Vec::with_capacity(path_arr.len());
+    for v in path_arr {
+        let h = v.as_str().ok_or_else(|| anyhow::anyhow!("path entry not string"))?;
+        let b = hex::decode(h).map_err(|e| anyhow::anyhow!("path decode: {}", e))?;
+        if b.len() != 32 { anyhow::bail!("path entry length {} != 32", b.len()); }
+        let mut a = [0u8; 32];
+        a.copy_from_slice(&b);
+        siblings.push(a);
+    }
+
+    let idx_arr = body["indices"].as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing 'indices'"))?;
+    let mut indices: Vec<u8> = Vec::with_capacity(idx_arr.len());
+    for v in idx_arr {
+        let n = v.as_u64().ok_or_else(|| anyhow::anyhow!("indices entry not u64"))?;
+        indices.push(n as u8);
+    }
+
+    let position = body["position"].as_u64().unwrap_or(pos);
+
+    // Optional leaf field — caller uses it as the `stored_pq_cm` when the
+    // wallet's local tree doesn't have it.
+    let leaf: Option<[u8; 32]> = body["leaf"].as_str().and_then(|s| {
+        let b = hex::decode(s).ok()?;
+        if b.len() == 32 {
+            let mut a = [0u8; 32];
+            a.copy_from_slice(&b);
+            Some(a)
+        } else {
+            None
+        }
+    });
+
+    Ok((
+        MerkleWitnessPQ {
+            path: MerklePathPQ { siblings, indices },
+            position,
+            root,
+        },
+        leaf,
+    ))
 }
 
 /// v2.3.3: pre-validate the wallet's unspent notes against the node's Merkle
@@ -5368,6 +5475,9 @@ async fn cmd_node(
         quorum_status: arc_swap::ArcSwap::from_pointee(
             tsn::network::api::QuorumStatus::initial(),
         ),
+        // v2.9.7 — Empty checkpoint history; checkpoint_vote::tick pushes
+        // a new record on every successful finalize.
+        checkpoint_history: arc_swap::ArcSwap::from_pointee(Vec::new()),
     });
 
     // v2.8.0 — hydrate signed snapshot manifests from disk so /snapshot/
@@ -6044,6 +6154,9 @@ async fn cmd_node(
                     else if node_role == NodeRole::Cortex { "cortex" }
                     else { "relay" }),
                 agent_version: format!("h={}", startup_height),
+                // v2.9.7 — pass the node's data_dir so libp2p persists its
+                // Ed25519 key across restarts (stable PeerId).
+                data_dir: data_dir.to_string(),
             };
 
             let p2p = P2pNode::start(p2p_config).await

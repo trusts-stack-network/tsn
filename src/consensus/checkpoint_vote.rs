@@ -235,6 +235,15 @@ async fn tick(state: &Arc<AppState>, client: &reqwest::Client) -> Result<(), Str
                     &our_hash_hex[..16],
                     agree, disagree, unreachable
                 );
+                // v2.9.7 — push to the bounded checkpoint history exposed by
+                // GET /chain/checkpoints (Explorer's Checkpoints tab).
+                push_checkpoint_record(
+                    state,
+                    candidate_height,
+                    &our_hash_hex,
+                    agree,
+                    TRUSTED_CHECKPOINT_VOTERS.len(),
+                );
             }
             Err(e) => {
                 // Local chain moved between the vote and the lock — reorg
@@ -272,6 +281,43 @@ async fn tick(state: &Arc<AppState>, client: &reqwest::Client) -> Result<(), Str
     let _ = last_cp_observed; // captured for parity with publish_status callers
 
     Ok(())
+}
+
+/// v2.9.7 — Append a finalized checkpoint to the bounded history shown by
+/// the explorer's Checkpoints tab. Newest first; keeps at most
+/// `CHECKPOINT_HISTORY_CAP` entries.
+fn push_checkpoint_record(
+    state: &Arc<AppState>,
+    height: u64,
+    hash_hex: &str,
+    agree: usize,
+    total: usize,
+) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let record = crate::network::api::CheckpointRecord {
+        height,
+        hash: hash_hex.to_string(),
+        agree,
+        total,
+        finalized_at_unix_ms: now_ms,
+    };
+    let current = state.checkpoint_history.load();
+    // Avoid pushing the same height twice (set_checkpoint_via_quorum is
+    // idempotent within one tick but the loop could re-elect the same
+    // height after a reorg; keep the freshest record).
+    let mut next: Vec<crate::network::api::CheckpointRecord> = current
+        .iter()
+        .filter(|r| r.height != height)
+        .cloned()
+        .collect();
+    next.insert(0, record);
+    if next.len() > crate::network::api::CHECKPOINT_HISTORY_CAP {
+        next.truncate(crate::network::api::CHECKPOINT_HISTORY_CAP);
+    }
+    state.checkpoint_history.store(std::sync::Arc::new(next));
 }
 
 /// v2.9.3 — Publish the current tick's result to the lock-free

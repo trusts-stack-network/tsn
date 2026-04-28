@@ -49,6 +49,10 @@ pub struct P2pConfig {
     /// Backward-compatible: peers that don't parse this simply ignore it.
     /// Empty string disables the hint.
     pub agent_version: String,
+    /// v2.9.7 — directory where we persist `p2p_key.bin` so the libp2p
+    /// PeerId is stable across restarts. Empty string falls back to in-memory
+    /// keys (the pre-v2.9.7 behaviour) — useful for one-shot test runs.
+    pub data_dir: String,
 }
 
 impl Default for P2pConfig {
@@ -60,6 +64,7 @@ impl Default for P2pConfig {
             relay_server: false,
             protocol_version: format!("tsn/{}", env!("CARGO_PKG_VERSION")),
             agent_version: String::new(),
+            data_dir: String::new(),
         }
     }
 }
@@ -179,8 +184,50 @@ impl P2pNode {
     /// Create and start a new P2P node.
     /// Returns the node handle and spawns the event loop as a tokio task.
     pub async fn start(config: P2pConfig) -> anyhow::Result<Self> {
-        // Generate or load Ed25519 keypair for P2P identity
-        let local_key = libp2p::identity::Keypair::generate_ed25519();
+        // v2.9.7 — Load or generate-and-persist the Ed25519 keypair so the
+        // node's PeerId is stable across restarts. The previous version
+        // generated a fresh keypair every boot, so a node that OOM-restarts
+        // would re-appear with a brand-new PeerId; the libp2p Identify
+        // cache on its peers then carried both the old (now dead) and the
+        // new entry, surfacing as duplicate "ghost" relays in the explorer
+        // for the next ~5 min.
+        let local_key = if config.data_dir.is_empty() {
+            // No data_dir provided (test run / in-memory mode) — behave
+            // like pre-v2.9.7 and use a fresh keypair.
+            libp2p::identity::Keypair::generate_ed25519()
+        } else {
+            let key_path = std::path::PathBuf::from(&config.data_dir).join("p2p_key.bin");
+            // The file holds 32 raw secret-key bytes. ed25519_from_bytes
+            // takes a mutable buffer it consumes, so we read into a Vec.
+            match std::fs::read(&key_path) {
+                Ok(mut bytes) if bytes.len() == 32 => {
+                    match libp2p::identity::Keypair::ed25519_from_bytes(&mut bytes[..]) {
+                        Ok(kp) => {
+                            info!("P2P: loaded existing Ed25519 key from {:?}", key_path);
+                            kp
+                        }
+                        Err(e) => {
+                            warn!("P2P: existing key at {:?} unreadable ({}), regenerating", key_path, e);
+                            let kp = libp2p::identity::Keypair::generate_ed25519();
+                            persist_p2p_key(&key_path, &kp);
+                            kp
+                        }
+                    }
+                }
+                Ok(_) => {
+                    warn!("P2P: key file {:?} has wrong length, regenerating", key_path);
+                    let kp = libp2p::identity::Keypair::generate_ed25519();
+                    persist_p2p_key(&key_path, &kp);
+                    kp
+                }
+                Err(_) => {
+                    let kp = libp2p::identity::Keypair::generate_ed25519();
+                    persist_p2p_key(&key_path, &kp);
+                    info!("P2P: generated new Ed25519 key, persisted to {:?}", key_path);
+                    kp
+                }
+            }
+        };
         let peer_id = PeerId::from(local_key.public());
 
         info!("P2P node starting with PeerID: {}", peer_id);
@@ -840,6 +887,30 @@ pub fn seeds_to_bootstrap(seed_urls: &[String], _local_p2p_port: u16) -> Vec<Mul
         };
         multiaddr_str.parse().ok()
     }).collect()
+}
+
+/// v2.9.7 — Persist a freshly generated Ed25519 keypair to disk so the
+/// PeerId is stable across restarts. Failure to write is logged but not
+/// fatal — the node will simply regenerate a new key next boot.
+fn persist_p2p_key(path: &std::path::Path, keypair: &libp2p::identity::Keypair) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match keypair.clone().try_into_ed25519() {
+        Ok(ed) => {
+            let secret_bytes = ed.secret().as_ref().to_vec();
+            match std::fs::write(path, &secret_bytes) {
+                Ok(()) => {
+                    let _ = std::fs::set_permissions(
+                        path,
+                        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+                    );
+                }
+                Err(e) => warn!("P2P: failed to persist key to {:?}: {}", path, e),
+            }
+        }
+        Err(e) => warn!("P2P: cannot extract ed25519 secret for persistence: {:?}", e),
+    }
 }
 
 #[cfg(test)]

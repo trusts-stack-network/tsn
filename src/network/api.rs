@@ -249,7 +249,31 @@ pub struct AppState {
     /// so the explorer can render a live "blockchain in quorum" indicator
     /// without re-polling every voter from the browser.
     pub quorum_status: arc_swap::ArcSwap<QuorumStatus>,
+
+    /// v2.9.7 — Bounded history of finalized quorum checkpoints
+    /// (newest first). Pushed by `checkpoint_vote::tick()` whenever
+    /// `set_checkpoint_via_quorum` succeeds. Served by
+    /// `GET /chain/checkpoints` so the explorer can render a "Checkpoints"
+    /// tab listing every committed checkpoint with its vote count.
+    pub checkpoint_history: arc_swap::ArcSwap<Vec<CheckpointRecord>>,
 }
+
+/// v2.9.7 — One entry of the finalized checkpoint history. Held inside
+/// `AppState::checkpoint_history` and exposed verbatim by
+/// `GET /chain/checkpoints`. The list is bounded to
+/// `CHECKPOINT_HISTORY_CAP` entries (newest first) so the JSON response
+/// stays small even on a long-running node.
+#[derive(Clone, serde::Serialize)]
+pub struct CheckpointRecord {
+    pub height: u64,
+    pub hash: String,
+    pub agree: usize,
+    pub total: usize,
+    pub finalized_at_unix_ms: u64,
+}
+
+/// Maximum number of checkpoint records held in memory.
+pub const CHECKPOINT_HISTORY_CAP: usize = 100;
 
 /// v2.9.2 — Snapshot of the most recent trusted-quorum checkpoint vote tick.
 /// Held under `AppState::quorum_status` and overwritten in place by
@@ -620,6 +644,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let sync_routes = Router::new()
         .route("/chain/info", get(chain_info))
         .route("/chain/quorum_status", get(chain_quorum_status))
+        .route("/chain/checkpoints", get(chain_checkpoints))
         .route("/blocks", post(receive_block))
         .route("/cmpct_block", post(receive_compact_block))
         .route("/blocktxn", post(receive_block_txn_request))
@@ -790,6 +815,18 @@ async fn chain_quorum_status(State(state): State<Arc<AppState>>) -> Json<QuorumS
     Json((**state.quorum_status.load()).clone())
 }
 
+/// v2.9.7 — Public read of the bounded finalized-checkpoint history.
+/// Newest first. Used by the explorer's Checkpoints tab to render a
+/// table of every checkpoint the local node has finalized via the
+/// trusted-quorum vote.
+async fn chain_checkpoints(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let history = state.checkpoint_history.load();
+    Json(serde_json::json!({
+        "count": history.len(),
+        "checkpoints": &**history,
+    }))
+}
+
 /// v2.6.0 — Periodically refresh `AppState.chain_info_cache` from the live
 /// blockchain, so GET /chain/info serves from a lock-free atomic snapshot
 /// instead of blocking on the chain RwLock during long imports.
@@ -864,6 +901,10 @@ struct VersionInfoResponse {
     version: &'static str,
     minimum_version: &'static str,
     protocol_version: u16,
+    /// v2.9.7 — Network identifier the node is running against
+    /// (e.g. "tsn-testnet-v12"). Surfaced in the explorer HUD so users
+    /// can tell which network they are looking at.
+    network_name: &'static str,
 }
 
 /// GET /version.json — returns node version info.
@@ -872,6 +913,7 @@ async fn version_info() -> Json<VersionInfoResponse> {
         version: env!("CARGO_PKG_VERSION"),
         minimum_version: crate::network::version_check::MINIMUM_VERSION,
         protocol_version: 3,
+        network_name: crate::config::NETWORK_NAME,
     })
 }
 
@@ -2462,6 +2504,7 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
                 "name": name,
                 "ip": ip,
                 "height": null,
+                "hash": null,
                 "version": null,
                 "online": false,
                 "status": "offline",
@@ -2475,6 +2518,15 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
                     let h = data["height"].as_u64();
                     seed_info["height"] = serde_json::json!(h);
                     seed_info["online"] = serde_json::json!(true);
+                    // v2.9.7 — Expose the seed's tip hash so the explorer can
+                    // verify all seeds agree on the same (height, hash)
+                    // before lighting the in-quorum indicator. Height alone
+                    // would let two nodes on different forks pass.
+                    if let Some(h_hex) = data["hash"].as_str() {
+                        seed_info["hash"] = serde_json::json!(h_hex);
+                    } else if let Some(h_hex) = data["latest_hash"].as_str() {
+                        seed_info["hash"] = serde_json::json!(h_hex);
+                    }
                     if let Some(h) = h {
                         let lag = tip_height.saturating_sub(h);
                         seed_info["lag"] = serde_json::json!(lag);
