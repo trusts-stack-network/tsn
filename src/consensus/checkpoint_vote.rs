@@ -89,39 +89,71 @@ async fn tick(state: &Arc<AppState>, client: &reqwest::Client) -> Result<(), Str
     // accepting the first non-placeholder hash we find. This lets a
     // fast-synced node start voting from the first real block in its
     // height_index without operator intervention.
+    // v2.9.5 — Fast-sync fallback window. After a snapshot import all blocks
+    // below `fast_sync_base_height` are placeholders [0u8;32], and on a
+    // fresh fast-synced fleet the only non-placeholder candidate slots are
+    // very close to (or above) the snapshot height — typically above
+    // `tip - MAX_REORG_DEPTH`. The strict v2.9.3 window then yields no
+    // candidate and the quorum cannot be evaluated until the chain has
+    // moved another `MAX_REORG_DEPTH` blocks past the snapshot.
+    //
+    // We now do two passes:
+    //   1. Strict: window = [last_cp+1 .. tip - MAX_REORG_DEPTH], full
+    //      reorg-safety. This is the path taken in steady state.
+    //   2. Shallow fallback: if no candidate is found, retry with the
+    //      window stretched to [last_cp+1 .. tip - SHALLOW_DEPTH]. Used
+    //      only during the post-fast-sync transition; a candidate
+    //      checkpoint is more useful even with a tighter reorg buffer
+    //      than no checkpoint at all.
+    const SHALLOW_DEPTH: u64 = 10;
+    let scan_for_candidate =
+        |chain: &crate::core::ShieldedBlockchain,
+         first_target: u64,
+         max_candidate: u64|
+         -> Option<(u64, [u8; 32])> {
+            if first_target > max_candidate {
+                return None;
+            }
+            let mut h = first_target;
+            while h <= max_candidate {
+                if let Some(hash) = chain.local_hash_at(h) {
+                    if hash != [0u8; 32] {
+                        return Some((h, hash));
+                    }
+                }
+                h = h.saturating_add(CHECKPOINT_INTERVAL);
+            }
+            None
+        };
+
     let (candidate_height, our_hash, last_cp_observed) = {
         let chain = state.blockchain.read().await;
         let tip = chain.height();
         let last_cp = chain.last_checkpoint_height();
-        let max_candidate = tip.saturating_sub(crate::config::MAX_REORG_DEPTH);
         let first_target = ((last_cp / CHECKPOINT_INTERVAL) + 1) * CHECKPOINT_INTERVAL;
-        if first_target > max_candidate {
-            // Tip not yet far enough above the next checkpoint slot. Publish
-            // a "no-candidate" snapshot so the UI can distinguish "tick
-            // running but waiting for tip" from "tick is dead".
-            publish_status(state, 0, 0, 0, 0, last_cp).await;
-            return Ok(());
-        }
-        // Walk slots upward looking for the first one whose local hash is
-        // a real (non-placeholder) hash. This handles fast-synced nodes
-        // where the early heights are all placeholders.
-        let mut chosen: Option<(u64, [u8; 32])> = None;
-        let mut h = first_target;
-        while h <= max_candidate {
-            if let Some(hash) = chain.local_hash_at(h) {
-                if hash != [0u8; 32] {
-                    chosen = Some((h, hash));
-                    break;
-                }
+        let max_strict = tip.saturating_sub(crate::config::MAX_REORG_DEPTH);
+        let max_shallow = tip.saturating_sub(SHALLOW_DEPTH);
+
+        // Pass 1: strict reorg-safe window.
+        let mut chosen = scan_for_candidate(&chain, first_target, max_strict);
+
+        // Pass 2: shallow fallback for the post-fast-sync transition.
+        if chosen.is_none() && max_shallow > max_strict {
+            chosen = scan_for_candidate(&chain, first_target, max_shallow);
+            if let Some((h, _)) = chosen {
+                debug!(
+                    "checkpoint_vote: candidate h={} chosen from shallow window (post-fast-sync transition)",
+                    h
+                );
             }
-            h = h.saturating_add(CHECKPOINT_INTERVAL);
         }
+
         match chosen {
             Some((c_h, c_hash)) => (c_h, c_hash, last_cp),
             None => {
-                // Every candidate slot in the window is a placeholder — we
-                // are still inside the fast-sync base. Same "no-candidate"
-                // snapshot as above.
+                // Tip not yet far enough above the next checkpoint slot OR
+                // every candidate slot in both windows is a placeholder.
+                // Publish "no-candidate" so the UI can show "waiting".
                 publish_status(state, 0, 0, 0, 0, last_cp).await;
                 return Ok(());
             }
