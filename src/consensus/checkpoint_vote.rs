@@ -79,23 +79,52 @@ async fn run_loop(state: Arc<AppState>) {
 async fn tick(state: &Arc<AppState>, client: &reqwest::Client) -> Result<(), String> {
     // Snapshot the candidate height + our local hash under the read lock,
     // then drop the lock before doing HTTP.
-    let (candidate_height, our_hash) = {
+    //
+    // v2.9.3 — On a fast-synced node, `local_hash_at(next_target)` returns a
+    // placeholder [0u8;32] for any height below `fast_sync_base_height`. The
+    // previous version early-returned on the first placeholder it hit, so the
+    // checkpoint-vote loop never produced a snapshot. We now scan upward in
+    // CHECKPOINT_INTERVAL steps from `last_cp+INTERVAL` to the highest
+    // candidate that is still `MAX_REORG_DEPTH` blocks below the tip,
+    // accepting the first non-placeholder hash we find. This lets a
+    // fast-synced node start voting from the first real block in its
+    // height_index without operator intervention.
+    let (candidate_height, our_hash, last_cp_observed) = {
         let chain = state.blockchain.read().await;
         let tip = chain.height();
         let last_cp = chain.last_checkpoint_height();
-        let next_target = ((last_cp / CHECKPOINT_INTERVAL) + 1) * CHECKPOINT_INTERVAL;
-
-        // Require the tip to be enough above the candidate that all voters
-        // have realistically had time to receive and store it. The
-        // `MAX_REORG_DEPTH` window is the natural confirmation depth that
-        // makes a height "stable enough to vote on".
-        if tip < next_target.saturating_add(crate::config::MAX_REORG_DEPTH) {
+        let max_candidate = tip.saturating_sub(crate::config::MAX_REORG_DEPTH);
+        let first_target = ((last_cp / CHECKPOINT_INTERVAL) + 1) * CHECKPOINT_INTERVAL;
+        if first_target > max_candidate {
+            // Tip not yet far enough above the next checkpoint slot. Publish
+            // a "no-candidate" snapshot so the UI can distinguish "tick
+            // running but waiting for tip" from "tick is dead".
+            publish_status(state, 0, 0, 0, 0, last_cp).await;
             return Ok(());
         }
-
-        match chain.local_hash_at(next_target) {
-            Some(h) if h != [0u8; 32] => (next_target, h),
-            _ => return Ok(()), // height not in our index yet, or placeholder
+        // Walk slots upward looking for the first one whose local hash is
+        // a real (non-placeholder) hash. This handles fast-synced nodes
+        // where the early heights are all placeholders.
+        let mut chosen: Option<(u64, [u8; 32])> = None;
+        let mut h = first_target;
+        while h <= max_candidate {
+            if let Some(hash) = chain.local_hash_at(h) {
+                if hash != [0u8; 32] {
+                    chosen = Some((h, hash));
+                    break;
+                }
+            }
+            h = h.saturating_add(CHECKPOINT_INTERVAL);
+        }
+        match chosen {
+            Some((c_h, c_hash)) => (c_h, c_hash, last_cp),
+            None => {
+                // Every candidate slot in the window is a placeholder — we
+                // are still inside the fast-sync base. Same "no-candidate"
+                // snapshot as above.
+                publish_status(state, 0, 0, 0, 0, last_cp).await;
+                return Ok(());
+            }
         }
     };
 
@@ -182,11 +211,35 @@ async fn tick(state: &Arc<AppState>, client: &reqwest::Client) -> Result<(), Str
         // hash (peers catching up) or a new hash (we reorged in between).
     }
 
-    // v2.9.2 — Publish the result of this tick to the lock-free
-    // `quorum_status` snapshot read by `GET /chain/quorum_status`.
-    // We re-read `last_checkpoint_height` after the (possible) finalize so
-    // the UI sees the freshly committed value when `is_quorum=true`.
+    // v2.9.2 — Publish the result of this tick. We re-read
+    // `last_checkpoint_height` after the (possible) finalize so the UI sees
+    // the freshly committed value when `is_quorum=true`.
     let last_finalized_height = state.blockchain.read().await.last_checkpoint_height();
+    publish_status(
+        state,
+        candidate_height,
+        agree,
+        disagree,
+        unreachable,
+        last_finalized_height,
+    )
+    .await;
+    let _ = last_cp_observed; // captured for parity with publish_status callers
+
+    Ok(())
+}
+
+/// v2.9.3 — Publish the current tick's result to the lock-free
+/// `quorum_status` snapshot read by `GET /chain/quorum_status`. Always
+/// stamps `last_check_unix_ms = now`, so the UI can flag a dead loop.
+async fn publish_status(
+    state: &Arc<AppState>,
+    candidate_height: u64,
+    agree: usize,
+    disagree: usize,
+    unreachable: usize,
+    last_finalized_height: u64,
+) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -204,8 +257,6 @@ async fn tick(state: &Arc<AppState>, client: &reqwest::Client) -> Result<(), Str
             last_finalized_height,
             last_check_unix_ms: now_ms,
         }));
-
-    Ok(())
 }
 
 /// Ask one trusted voter for the hash at `height`. Returns:
