@@ -1947,10 +1947,24 @@ async fn receive_compact_block(
         entry.push_back(now);
     }
 
-    // Snapshot the mempool *under lock* into plain Vecs so we can build the
-    // short-id index without holding the std::Mutex across `.await`. The
-    // index itself is created next under cheap CPU work only.
+    // v2.9.0 RAM fix — filter mempool by short_id BEFORE cloning. The
+    // previous v2.8.7-v2.8.9 implementation cloned *every* transaction
+    // currently in the mempool to build a short-id index per envelope.
+    // Under load (100+ V2 txs each carrying a ~500 KB STARK proof) this
+    // peaked at ~50 MB of allocation per receive, multiplied by every
+    // concurrent peer pushing the same fresh block — the seed servers
+    // (4 GB RAM) OOM-killed in this path several times during the 27/04
+    // recovery deploy.
+    //
+    // The new code computes `target_set` = the short_ids the sender wants
+    // us to look up, then iterates the mempool ONCE and clones only the
+    // transactions whose short_id is in that set. Worst case clone is
+    // bounded by `MAX_COMPACT_SHORT_IDS = 1000` regardless of mempool
+    // size; typical clone is ~10-200 txs that actually appear in the
+    // block being relayed, a 5-50× reduction over the legacy code.
     let key = super::compact_block::derive_key(&cb.header, cb.nonce);
+    let target_set: std::collections::HashSet<super::compact_block::ShortTxId> =
+        cb.short_ids.iter().copied().collect();
     let (v1s, v2s, deploys, calls): (
         Vec<crate::core::ShieldedTransaction>,
         Vec<crate::core::ShieldedTransactionV2>,
@@ -1958,18 +1972,42 @@ async fn receive_compact_block(
         Vec<crate::contract::ContractCallTransaction>,
     ) = {
         let mempool = state.mempool.read().unwrap_or_else(|e| e.into_inner());
-        let v1 = mempool.v1_transactions_iter().cloned().collect();
+        let v1 = mempool
+            .v1_transactions_iter()
+            .filter(|tx| {
+                target_set.contains(&super::compact_block::compute_short_id(&tx.hash(), &key))
+            })
+            .cloned()
+            .collect();
         let v2 = mempool
             .v2_transactions_iter()
             .filter_map(|t| match t {
-                crate::core::Transaction::V2(tx) => Some(tx.clone()),
+                crate::core::Transaction::V2(tx)
+                    if target_set
+                        .contains(&super::compact_block::compute_short_id(&tx.hash(), &key)) =>
+                {
+                    Some(tx.clone())
+                }
                 _ => None,
             })
             .collect();
-        let dep = mempool.contract_deploys_iter().cloned().collect();
-        let cal = mempool.contract_calls_iter().cloned().collect();
+        let dep = mempool
+            .contract_deploys_iter()
+            .filter(|tx| {
+                target_set.contains(&super::compact_block::compute_short_id(&tx.hash(), &key))
+            })
+            .cloned()
+            .collect();
+        let cal = mempool
+            .contract_calls_iter()
+            .filter(|tx| {
+                target_set.contains(&super::compact_block::compute_short_id(&tx.hash(), &key))
+            })
+            .cloned()
+            .collect();
         (v1, v2, dep, cal)
     };
+    drop(target_set); // free the lookup set before the heavier reconstruction step
     let index = super::compact_block::build_short_id_index(&key, &v1s, &v2s, &deploys, &calls);
 
     let block_hash_hex = hex::encode(cb.header.hash()).chars().take(16).collect::<String>();
