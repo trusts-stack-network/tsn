@@ -182,14 +182,19 @@ async fn tick(
     Ok(inserted_total)
 }
 
-/// Walk `[from..=to]` in `block_heights` and return the first height that is
-/// missing, or None if every height in the range is present. Uses
-/// `get_block_hash_by_height` so we never deserialize the full block — just
-/// a 32-byte hash lookup per height.
+/// Walk `[from..=to]` in `block_heights` looking for missing entries.
+///
+/// v2.9.11 — Scan DESCENDING from `to` toward `from`, not ascending.
+/// Rationale: a freshly fast-synced node fails to validate any block above
+/// fast_sync_base because the FULL block at fast_sync_base is not in sled
+/// (the snapshot import wrote only the hash). The sync loop then sits on a
+/// "Reorg too deep: can't find block X" forever. By backfilling the
+/// MOST RECENT blocks first we restore the validation parents the live
+/// sync loop needs, so the seeds catch up to the tip even if the deep
+/// historical range can't be backfilled (no peer has it either).
 ///
 /// "Missing" means either the entry is absent OR it's a `[0u8;32]`
-/// placeholder written by the snapshot import (the actual block is not
-/// in the `blocks` table even though the height is in `block_heights`).
+/// placeholder written by the snapshot import.
 fn find_first_missing(
     db: &crate::storage::Database,
     from: u64,
@@ -201,19 +206,20 @@ fn find_first_missing(
             Some(hash) if hash != [0u8; 32]
         )
     };
-    // Cheap fast path: if `from` itself is missing, return it.
-    if !is_real(from) {
-        return Some(from);
-    }
-    // Otherwise jump through the range in BATCH steps and return the first
-    // step that lands on a missing height. Linear search inside the missing
-    // batch is then performed by `tick` via the /blocks/since response.
-    let mut h = from;
-    while h <= to {
+    if to < from { return None; }
+    // Scan descending in BATCH steps: return the highest missing height.
+    let mut h = to;
+    loop {
         if !is_real(h) {
             return Some(h);
         }
-        h = h.saturating_add(BATCH);
+        if h <= from { return None; }
+        // Step DOWN by BATCH, but never below `from`.
+        h = h.saturating_sub(BATCH).max(from);
+        if h == from {
+            // Final boundary check.
+            if !is_real(from) { return Some(from); }
+            return None;
+        }
     }
-    None
 }
