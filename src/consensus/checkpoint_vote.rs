@@ -130,7 +130,20 @@ async fn tick(state: &Arc<AppState>, client: &reqwest::Client) -> Result<(), Str
         let chain = state.blockchain.read().await;
         let tip = chain.height();
         let last_cp = chain.last_checkpoint_height();
-        let first_target = ((last_cp / CHECKPOINT_INTERVAL) + 1) * CHECKPOINT_INTERVAL;
+        let fsb = chain.fast_sync_base_height();
+        // v2.9.6 — Anchor the candidate scan above the fast-sync base.
+        // After /admin/force-resync the height_index is filled with
+        // [0u8;32] placeholders for h < fast_sync_base. The previous
+        // first_target = (last_cp/INTERVAL+1)*INTERVAL was 100, way below
+        // fast_sync_base (typically tip-N), so the scan walked thousands
+        // of placeholder slots and never reached a real one within the
+        // shallow window either. We now start the scan at the highest of
+        // {last_cp+INTERVAL, fast_sync_base+INTERVAL}, which is the first
+        // slot that can actually have a real hash on a freshly fast-synced
+        // node.
+        let lcp_first = ((last_cp / CHECKPOINT_INTERVAL) + 1) * CHECKPOINT_INTERVAL;
+        let fsb_first = ((fsb / CHECKPOINT_INTERVAL) + 1) * CHECKPOINT_INTERVAL;
+        let first_target = lcp_first.max(fsb_first);
         let max_strict = tip.saturating_sub(crate::config::MAX_REORG_DEPTH);
         let max_shallow = tip.saturating_sub(SHALLOW_DEPTH);
 
