@@ -231,6 +231,6 @@ sudo ufw allow from 127.0.0.1 to any port 8333
 
 ---
 
-**Support :** [GitHub](https://github.com/Trust-Stack-Network/TSN) • [Discord](https://discord.gg/tsn) • [Docs](https://tsnchain.com/docs)
+**Support :** [GitHub](https://github.com/Trust-Stack-Network/TSN) • [Discord](https://discord.gg/cfDeQm3hfQ) • [Docs](https://tsnchain.com/docs)
 
 **Mission :** Construire l'infrastructure de confiance pour l'ère post-quantique 🚀

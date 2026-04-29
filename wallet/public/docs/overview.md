@@ -85,7 +85,7 @@ Complete REST API docs for building on the post-quantum foundation.
 ## 🤝 Community & Support
 
 - **GitHub**: [Trust-Stack-Network/tsn](https://github.com/Trust-Stack-Network/tsn)
-- **Discord**: [discord.gg/truststack](https://discord.gg/truststack)
+- **Discord**: [discord.gg/cfDeQm3hfQ](https://discord.gg/cfDeQm3hfQ)
 - **Website**: [tsnchain.com](https://tsnchain.com)
 - **Explorer**: [explorer.tsnchain.com](https://explorer.tsnchain.com)
 - **Email**: support@tsnchain.com

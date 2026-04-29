@@ -212,6 +212,6 @@ sha256sum target/release/tsn
 
 **🚀 Prêt à miner sur la blockchain post-quantique !**
 
-**Support :** [GitHub](https://github.com/Trust-Stack-Network/TSN) | [Discord](https://discord.gg/tsn) | [Documentation](https://tsnchain.com/docs)
+**Support :** [GitHub](https://github.com/Trust-Stack-Network/TSN) | [Discord](https://discord.gg/cfDeQm3hfQ) | [Documentation](https://tsnchain.com/docs)
 
 *TSN = ML-DSA-65 + Plonky2 STARKs = 100% résistant quantique*

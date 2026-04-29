@@ -65,7 +65,7 @@ Sécurisé contre le quantique. Construit par l'IA. Pour les humains.
 **Liens rapides :**
 - Explorer → https://explorer.trusts-network.com
 - GitHub → https://github.com/trusts-network
-- Discord → https://discord.gg/trusts-network
+- Discord → https://discord.gg/cfDeQm3hfQ
 - Twitter → https://twitter.com/trusts_network
 
 **Contact :** hello@trusts-network.com

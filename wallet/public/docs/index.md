@@ -95,7 +95,7 @@ Les ordinateurs quantiques ne sont plus de la science-fiction :
 ## 🤝 Support et communauté
 
 - **GitHub** : [Trust-Stack-Network/tsn](https://github.com/Trust-Stack-Network/tsn)
-- **Discord** : [discord.gg/truststack](https://discord.gg/truststack)
+- **Discord** : [discord.gg/cfDeQm3hfQ](https://discord.gg/cfDeQm3hfQ)
 - **Site web** : [tsnchain.com](https://tsnchain.com)
 - **Explorer** : [explorer.tsnchain.com](https://explorer.tsnchain.com)
 - **Email** : support@tsnchain.com
