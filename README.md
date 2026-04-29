@@ -23,7 +23,7 @@
   <a href="https://tsnchain.com/blog.html">Blog</a> &bull;
   <a href="https://explorer.tsnchain.com">Explorer</a> &bull;
   <a href="https://tsnchain.com/run-node.html">Run a Node</a> &bull;
-  <a href="https://discord.gg/wxxNVDVn6N">Discord</a>
+  <a href="https://discord.gg/cfDeQm3hfQ">Discord</a>
 </p>
 
 ---
@@ -584,7 +584,7 @@ Full security audit: 29 findings, 23 fixes applied. Score: **5.4/10 → 8.1/10**
 - **Blog**: [tsnchain.com/blog.html](https://tsnchain.com/blog.html)
 - **X/Twitter**: [x.com/tsn_chain](https://x.com/tsn_chain)
 - **Medium**: [medium.com/@trusts-stack-network](https://medium.com/@trusts-stack-network)
-- **Discord**: [discord.gg/wxxNVDVn6N](https://discord.gg/wxxNVDVn6N)
+- **Discord**: [discord.gg/cfDeQm3hfQ](https://discord.gg/cfDeQm3hfQ)
 
 ## License
 

@@ -169,7 +169,7 @@ TSN se connecte automatiquement à un réseau de seed nodes distribués mondiale
 ## 🔗 Ressources
 
 - **GitHub** : [Trust-Stack-Network/TSN](https://github.com/Trust-Stack-Network/TSN)
-- **Discord** : [Communauté TSN](https://discord.gg/tsn)
+- **Discord** : [Communauté TSN](https://discord.gg/cfDeQm3hfQ)
 - **Documentation** : [tsnchain.com/docs](https://tsnchain.com/docs)
 - **Whitepaper** : Technical specs & cryptography analysis
 

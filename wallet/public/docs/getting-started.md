@@ -110,7 +110,7 @@ Pendant que les autres projets paniquent face à l'arrivée des ordinateurs quan
 
 ---
 
-🌐 **Communauté** : [Discord](https://discord.gg/truststack) • [GitHub](https://github.com/Trust-Stack-Network/tsn)
+🌐 **Communauté** : [Discord](https://discord.gg/cfDeQm3hfQ) • [GitHub](https://github.com/Trust-Stack-Network/tsn)
 🔗 **Explorer** : [explorer.tsnchain.com](https://explorer.tsnchain.com)
 📧 **Support** : support@tsnchain.com
 

@@ -371,7 +371,7 @@ done
 ### Contacts rapides
 
 - **GitHub Issues** : [github.com/Trust-Stack-Network/tsn/issues](https://github.com/Trust-Stack-Network/tsn/issues)
-- **Discord #support** : [discord.gg/truststack](https://discord.gg/truststack)
+- **Discord #support** : [discord.gg/cfDeQm3hfQ](https://discord.gg/cfDeQm3hfQ)
 - **Email urgent** : support@tsnchain.com
 
 ### Informations à fournir

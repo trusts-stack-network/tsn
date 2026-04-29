@@ -191,4 +191,4 @@ Activation Poseidon2: Height 1100
 
 ---
 
-🔗 **Support** : [GitHub Issues](https://github.com/trust-stack-network/tsn/issues) | 💬 **Discord** : [TSN Community](https://discord.gg/tsnchain)
+🔗 **Support** : [GitHub Issues](https://github.com/trust-stack-network/tsn/issues) | 💬 **Discord** : [TSN Community](https://discord.gg/cfDeQm3hfQ)
