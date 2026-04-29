@@ -46,11 +46,12 @@ struct Cli {
     #[arg(long, global = false)]
     no_seeds: bool,
 
-    /// v2.8.1 — accepted for backwards-compat but no longer wired up.
-    /// The background worker has been removed; consolidation is the user's
-    /// responsibility, matching how Zcash, Penumbra, Aleo and Aztec all
-    /// handle a fragmented mining wallet.
-    #[arg(long, global = false, default_value_t = false, hide = true)]
+    /// v2.9.12 — re-enabled and on by default. The miner spawns a background
+    /// worker (see cmd_node) that fires every `consolidation_interval_secs`
+    /// when `unspent_notes_count > consolidation_threshold` and folds the
+    /// smallest notes into one larger note via the same auto_consolidate
+    /// path cmd_send uses. Set to `false` to opt out.
+    #[arg(long, global = false, default_value_t = true)]
     auto_consolidate: bool,
 
     /// v2.6.0 — background consolidation fires when `unspent_notes_count` goes
@@ -555,8 +556,15 @@ enum Commands {
     },
     /// Run a full node
     Node {
-        /// Node role: miner, relay, light (default: miner)
-        #[arg(long, default_value = "miner")]
+        /// Node role: miner, relay, light, cortex (default: relay).
+        /// v2.9.12 — default flipped from `miner` to `relay`. Seeds are
+        /// launched without `--role` and historically defaulted to miner,
+        /// causing them to advertise role=miner in /node/info even when no
+        /// `--mine` flag was set. The default is now `relay`, which is the
+        /// safe behaviour for any non-mining full node (seeds, light hosts,
+        /// gateway nodes). Only EPYC1 / EPYC2 / external miners pass
+        /// `--role miner --mine` explicitly.
+        #[arg(long, default_value = "relay")]
         role: String,
         /// Port to listen on (or set TSN_PORT env var)
         #[arg(short, long)]
@@ -2194,8 +2202,19 @@ async fn send_single_tx(
         &format!("submit tx {}", &tx_hash[..16]),
     ).await?;
     if !resp.status().is_success() {
+        // v2.9.12 — always include the HTTP status so the user gets a usable
+        // signal even when the node returns an empty body. The previous
+        // behaviour ("Transaction rejected: " with no detail) hid real
+        // failures like "Invalid anchor (not a recent root)" because some
+        // axum error paths don't always serialize the message into the body.
+        let status = resp.status();
         let err = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Transaction rejected: {}", err);
+        let detail = if err.trim().is_empty() {
+            format!("(no body, HTTP {})", status.as_u16())
+        } else {
+            err
+        };
+        anyhow::bail!("Transaction rejected [HTTP {}]: {}", status.as_u16(), detail);
     }
 
     // Relay directly to seeds for faster propagation
@@ -5426,6 +5445,8 @@ async fn cmd_node(
         snapshot_cache: tokio::sync::RwLock::new(None),
         orphan_count: std::sync::atomic::AtomicU64::new(0),
         reorg_count: std::sync::atomic::AtomicU64::new(0),
+        stuck_sync_failures: std::sync::atomic::AtomicU64::new(0),
+        last_auto_resync: std::sync::Mutex::new(None),
         reorg_lock: tokio::sync::RwLock::new(()),
         banned_peers: std::sync::RwLock::new(std::collections::HashMap::new()),
         peer_info: std::sync::RwLock::new(std::collections::HashMap::new()),
@@ -5583,7 +5604,8 @@ async fn cmd_node(
     // (Phase A.1) and (b) a higher MAX_SPENDS so a typical 10K send fits in
     // a single transaction (Phase B.1). With those in place a `tsn send` no
     // longer needs a pre-warmed wallet.
-    let _ = (auto_consolidate, consolidation_threshold, consolidation_interval_secs);
+    // (auto_consolidate, consolidation_threshold, consolidation_interval_secs)
+    // are now used by the v2.9.12 BG worker spawned later in this function.
 
     // ========================================================================
     // CHECKPOINT VALIDATION AT STARTUP
@@ -7496,6 +7518,121 @@ async fn cmd_node(
                 }
             }
         });
+    }
+
+    // v2.9.12 — auto-consolidate background worker.
+    //
+    // Re-enabled (was deprecated in v2.8.1) after the user reported wallets
+    // accumulating 900+ notes between sends, which forced every send to
+    // run a 4-batch consolidation on the hot path that took 8+ minutes
+    // and frequently failed with "Invalid anchor (not a recent root)"
+    // because the wallet's last-scan height was hundreds of blocks behind.
+    //
+    // This worker fires every `consolidation_interval_secs` (default 300s)
+    // when the wallet has more than `consolidation_threshold` unspent notes
+    // (default 30). It consolidates the smallest notes into one big note
+    // until the wallet is back under threshold, using the same auto_consolidate
+    // path cmd_send uses.
+    //
+    // Lock contention: the WalletService Arc<Mutex<>> is briefly contended
+    // with the miner's note-scan path, but each operation is short and
+    // releases the lock between rounds, so neither side starves.
+    // Capture the flag value early so we can refer to the auto_consolidate()
+    // function inside the spawn closure without the parameter binding shadowing
+    // the function name. (Rust resolves `auto_consolidate` to the parameter
+    // bool first, hiding the async fn of the same name in this module.)
+    // The worker holds the wallet mutex across an `await` boundary (the HTTP
+    // submit inside auto_consolidate). The wallet contains rusqlite's
+    // `RefCell<InnerConnection>` and a thread-local RNG, neither of which are
+    // `Send`/`Sync`, so the resulting future cannot be moved between tokio
+    // worker threads. This is exactly why v2.8.1 deprecated the in-runtime
+    // background task. We sidestep it by running the worker on a dedicated OS
+    // thread with its own current-thread tokio runtime: the future never
+    // crosses a thread boundary, so the !Send wallet is fine.
+    let auto_consolidate_enabled = auto_consolidate;
+    if let (Some(ws), Some(wallet_path_str)) = (wallet_service.clone(), mine_wallet.clone()) {
+        if auto_consolidate_enabled && consolidation_threshold > 0 {
+            let interval_secs = consolidation_interval_secs;
+            let threshold = consolidation_threshold;
+            let node_url = format!("http://127.0.0.1:{}", port);
+            std::thread::Builder::new()
+                .name("auto-consolidate".into())
+                .spawn(move || {
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!("auto-consolidate: rt build failed: {} — disabled", e);
+                            return;
+                        }
+                    };
+                    rt.block_on(async move {
+                        // Initial settle: let the chain catch up + circuits warm.
+                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                        tracing::info!(
+                            "auto-consolidate worker started (interval={}s, threshold={} notes)",
+                            interval_secs, threshold
+                        );
+                        // Build a dedicated HTTP client local to this runtime.
+                        let client = match reqwest::Client::builder()
+                            .timeout(std::time::Duration::from_secs(30))
+                            .connect_timeout(std::time::Duration::from_secs(5))
+                            .build()
+                        {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::warn!("auto-consolidate: http client build failed: {}", e);
+                                return;
+                            }
+                        };
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+                            let count = {
+                                let w = ws.wallet.lock().await;
+                                w.unspent_notes().len()
+                            };
+                            if count < threshold {
+                                continue;
+                            }
+                            tracing::info!(
+                                "auto-consolidate: {} unspent notes >= threshold {}, running round",
+                                count, threshold
+                            );
+                            // Bound the work: ask for ~1000 TSN worth of
+                            // consolidated value — converges in a few rounds
+                            // without monopolising the prover or hitting the
+                            // per-IP submit rate limit.
+                            let total_needed: u64 = 1_000u64
+                                .saturating_mul(10u64.pow(config::COIN_DECIMALS));
+                            let fee_base: u64 = 1_000_000; // 0.001 TSN
+                            let mut w = ws.wallet.lock().await;
+                            match crate::auto_consolidate(
+                                &mut *w,
+                                &wallet_path_str,
+                                &node_url,
+                                fee_base,
+                                total_needed,
+                                &client,
+                                std::collections::HashSet::new(),
+                            ).await {
+                                Ok(rounds) => {
+                                    let new_count = w.unspent_notes().len();
+                                    tracing::info!(
+                                        "auto-consolidate: {} rounds done, notes {} → {}",
+                                        rounds, count, new_count
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!("auto-consolidate round failed: {}", e);
+                                }
+                            }
+                        }
+                    });
+                })
+                .ok();
+        }
     }
 
     let chain_height = state.blockchain.read().await.height();

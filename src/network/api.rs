@@ -146,6 +146,18 @@ pub struct AppState {
     pub orphan_count: std::sync::atomic::AtomicU64,
     /// Total blocks received that triggered a reorg
     pub reorg_count: std::sync::atomic::AtomicU64,
+    /// v2.9.13 — count of consecutive sync failures where the local chain
+    /// could not reorg/extend because of "Reorg too deep / Invalid prev hash"
+    /// (parent block missing from RAM and DB after fast-sync). Reset to 0 on
+    /// any successful add_block. When it crosses
+    /// `crate::config::AUTO_FORCE_RESYNC_THRESHOLD` the node calls
+    /// `reset_for_snapshot_resync()` and re-fetches the snapshot from a
+    /// healthy peer, instead of staying stuck forever as in v2.9.12.
+    pub stuck_sync_failures: std::sync::atomic::AtomicU64,
+    /// Wall-clock instant of the last auto force-resync triggered by the
+    /// stuck-sync detector. Used as a cooldown so we don't loop on the
+    /// resync (~30 s for a snapshot fetch + apply).
+    pub last_auto_resync: std::sync::Mutex<Option<std::time::Instant>>,
     /// Reorg lock: WRITE during rollback+resync, READ during mining template+add_block.
     /// Prevents mining from producing stale blocks while a reorg is in progress.
     pub reorg_lock: TokioRwLock<()>,
@@ -4975,21 +4987,79 @@ async fn snapshot_manifest_at_height(
     }
 }
 
-/// GET /snapshot/history — list all available snapshot manifests
+/// GET /snapshot/history — list snapshot manifests with status classification.
+///
+/// v2.9.12 — entries are tagged `verified` (>=1 conf), `pending` (<6h, 0 conf),
+/// or `stale` (>6h, 0 conf). Stale entries are filtered out by default; pass
+/// `?include_stale=1` to keep them. Entries older than 24h with 0 confirmations
+/// are pruned outright (not returned even with include_stale). The most
+/// recent verified entry is always preserved regardless of age.
 async fn snapshot_manifest_history(
     State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<Vec<super::snapshot_manifest::SnapshotEntry>> {
+    use chrono::DateTime;
+    let include_stale = params.get("include_stale").map(|v| v == "1" || v == "true").unwrap_or(false);
+    let now = chrono::Utc::now();
+    const STALE_AFTER_HOURS: i64 = 6;
+    const PRUNE_AFTER_HOURS: i64 = 24;
+
     let manifests = state.snapshot_manifests.read().unwrap();
-    let entries: Vec<super::snapshot_manifest::SnapshotEntry> = manifests.iter().map(|m| {
+
+    // First pass: classify everything, keep latest verified pointer.
+    let mut entries: Vec<super::snapshot_manifest::SnapshotEntry> = manifests.iter().map(|m| {
+        let confs = m.valid_confirmation_count();
+        let age_h = DateTime::parse_from_rfc3339(&m.created_at)
+            .map(|t| now.signed_duration_since(t.with_timezone(&chrono::Utc)).num_hours())
+            .unwrap_or(0);
+        let status = if confs >= 1 {
+            "verified"
+        } else if age_h >= STALE_AFTER_HOURS {
+            "stale"
+        } else {
+            "pending"
+        };
         super::snapshot_manifest::SnapshotEntry {
             height: m.height,
             block_hash: m.block_hash.clone(),
             state_root: m.state_root.clone(),
             snapshot_sha256: m.snapshot_sha256.clone(),
             created_at: m.created_at.clone(),
-            confirmations: m.valid_confirmation_count(),
+            confirmations: confs,
+            status: status.to_string(),
         }
     }).collect();
+
+    // The most recent verified entry must always survive even if old.
+    let latest_verified_height: Option<u64> = entries.iter()
+        .filter(|e| e.status == "verified")
+        .map(|e| e.height)
+        .max();
+
+    entries.retain(|e| {
+        // Always keep verified.
+        if e.status == "verified" {
+            return true;
+        }
+        // Keep the newest verified anchor regardless of age (defense-in-depth).
+        if Some(e.height) == latest_verified_height {
+            return true;
+        }
+        // Prune anything older than 24h with 0 confirmations.
+        let age_h = DateTime::parse_from_rfc3339(&e.created_at)
+            .map(|t| now.signed_duration_since(t.with_timezone(&chrono::Utc)).num_hours())
+            .unwrap_or(0);
+        if age_h >= PRUNE_AFTER_HOURS {
+            return false;
+        }
+        // Stale entries: kept only if explicitly requested.
+        if e.status == "stale" {
+            return include_stale;
+        }
+        // Pending: always kept.
+        true
+    });
+
     Json(entries)
 }
 

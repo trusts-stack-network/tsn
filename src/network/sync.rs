@@ -564,6 +564,10 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                     batch_added += 1;
                     synced += 1;
                     current_sync_height = chain.height();
+                    // v2.9.13 — successful block reset the stuck-sync counter
+                    // so a transient divergence doesn't slowly accumulate
+                    // toward the auto-resync trigger.
+                    state.stuck_sync_failures.store(0, std::sync::atomic::Ordering::Relaxed);
                     debug!(
                         "SYNC_DEBUG: BLOCK_RESULT idx={}/{} result=ACCEPTED new_height={}",
                         idx + 1, batch_size, current_sync_height
@@ -602,6 +606,46 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 "Sync: {} blocks from {} but none accepted (attempt {}) — diverged",
                 batch_size, peer_id(peer_url), consecutive_empty_batches
             );
+            // v2.9.13 — increment the global stuck-sync counter. Once it
+            // crosses AUTO_FORCE_RESYNC_THRESHOLD (5) we trigger an
+            // automatic chain wipe + snapshot fast-sync, because the local
+            // DB is missing parents that all peers reference (typical
+            // post-fast-sync deep-reorg trap). Cooldown prevents thrashing.
+            let stuck = state.stuck_sync_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if stuck >= crate::config::AUTO_FORCE_RESYNC_THRESHOLD {
+                let should_resync = {
+                    let mut last = state.last_auto_resync.lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let now = std::time::Instant::now();
+                    let cooldown = std::time::Duration::from_secs(
+                        crate::config::AUTO_FORCE_RESYNC_COOLDOWN_SECS
+                    );
+                    match *last {
+                        Some(t) if now.duration_since(t) < cooldown => false,
+                        _ => { *last = Some(now); true }
+                    }
+                };
+                if should_resync {
+                    warn!(
+                        "v2.9.13 auto-recovery: {} consecutive stuck-sync failures, \
+                         triggering reset_for_snapshot_resync() — node will fast-sync \
+                         from a fresh peer snapshot instead of staying stuck",
+                        stuck
+                    );
+                    {
+                        let mut chain = state.blockchain.write().await;
+                        chain.reset_for_snapshot_resync();
+                    }
+                    {
+                        let mut bans = state.banned_peers.write()
+                            .unwrap_or_else(|e| e.into_inner());
+                        bans.clear();
+                    }
+                    state.stuck_sync_failures.store(0, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(synced);
+                }
+            }
 
             if consecutive_empty_batches >= 1 {
                 // Three strikes — this peer's chain is incompatible with ours

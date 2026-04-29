@@ -79,6 +79,11 @@ pub struct SnapshotEntry {
     pub snapshot_sha256: String,
     pub created_at: String,
     pub confirmations: usize,
+    /// v2.9.12 — `pending` (< 6h, 0 confs), `stale` (> 6h, 0 confs),
+    /// or `verified` (>= 1 conf). The explorer renders `stale` greyed
+    /// out and excludes it from the "Latest Verified" tile.
+    #[serde(default)]
+    pub status: String,
 }
 
 impl SnapshotManifest {

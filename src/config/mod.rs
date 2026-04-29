@@ -346,6 +346,20 @@ pub const COMPACT_BLOCK_RATE_WINDOW_SECS: u64 = 60;
 /// Inspired by Dilithion's MAX_REORG_DEPTH = 100.
 pub const MAX_REORG_DEPTH: u64 = 100;
 
+/// v2.9.13 — when the sync loop fails to apply blocks because of "Reorg too
+/// deep" / missing-parent errors this many times in a row, the node assumes
+/// its post-fast-sync DB is unrecoverable from the current peer set and
+/// triggers an automatic `reset_for_snapshot_resync()` to fast-sync from a
+/// fresh snapshot. Without this auto-recovery (v2.9.12 and earlier) the
+/// node sat stuck broadcasting tip announcements but accepting no new
+/// blocks, requiring manual `/admin/force-resync` intervention.
+pub const AUTO_FORCE_RESYNC_THRESHOLD: u64 = 5;
+
+/// Cooldown between auto force-resyncs. A snapshot fetch + import takes
+/// ~30 s, and we don't want a spurious failure to retrigger the wipe
+/// during that window. Anything above ~120 s is safe.
+pub const AUTO_FORCE_RESYNC_COOLDOWN_SECS: u64 = 180;
+
 /// Interval between automatic signed snapshot exports (in blocks).
 /// A snapshot is triggered when a new multiple of this interval becomes finalized
 /// (i.e. tip >= multiple + MAX_REORG_DEPTH). With 10s blocks, 500 blocs ~ 1.4h,
