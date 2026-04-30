@@ -95,9 +95,80 @@ pub const SUBMIT_RATE_MAX_PER_IP: usize = 8;
 /// keeps memory bounded under DoS).
 pub const SUBMIT_RATE_TRACKER_CAPACITY: usize = 4096;
 
+/// v2.9.14 (W1B) — refresh the lock-free state-check caches after a block
+/// has been added to the chain. Must be called from the same scope that
+/// holds `blockchain.write()` (or before the lock is released to a new
+/// reader), so `submit_v2` never observes a tx whose nullifier or anchor
+/// isn't yet visible to the cache.
+///
+/// `new_anchor_pq` is the post-add commitment_root_pq of the chain.
+/// `chain_info` is the post-add `chain.info()` snapshot — published into
+/// `chain_info_cache` so GET /chain/info returns fresh data even when the
+/// background refresher is starved by writer churn (H-G fix).
+pub fn update_state_caches_after_block(
+    state: &std::sync::Arc<AppState>,
+    block: &crate::core::ShieldedBlock,
+    new_anchor_pq: [u8; 32],
+    chain_info: crate::core::ChainInfo,
+) {
+    let v2_nullifiers: Vec<[u8; 32]> = block
+        .transactions_v2
+        .iter()
+        .flat_map(|tx| tx.spends.iter().map(|s| s.nullifier))
+        .collect();
+
+    if !v2_nullifiers.is_empty() {
+        let mut nf = state.spent_nullifiers_cache.write().unwrap_or_else(|e| e.into_inner());
+        for n in v2_nullifiers {
+            nf.insert(n);
+        }
+    }
+
+    {
+        let mut anchors = state.recent_anchors_cache.write().unwrap_or_else(|e| e.into_inner());
+        anchors.push_back(new_anchor_pq);
+        while anchors.len() > 1000 {
+            anchors.pop_front();
+        }
+    }
+
+    state.chain_info_cache.store(std::sync::Arc::new(chain_info));
+}
+
+/// v2.9.14 (W1B) — populate the caches at startup from the existing chain
+/// state. Called once from `cmd_node` right after the AppState is built.
+pub fn init_state_caches_from_chain(
+    state: &std::sync::Arc<AppState>,
+    chain: &ShieldedBlockchain,
+) {
+    let st = chain.state();
+    {
+        let mut nf = state.spent_nullifiers_cache.write().unwrap_or_else(|e| e.into_inner());
+        for n in st.nullifier_set().iter() {
+            nf.insert(n.0);
+        }
+    }
+    {
+        let mut anchors = state.recent_anchors_cache.write().unwrap_or_else(|e| e.into_inner());
+        for r in st.commitment_tree_pq().recent_roots().iter() {
+            anchors.push_back(*r);
+        }
+    }
+}
+
 /// Shared application state for the API.
 pub struct AppState {
     pub blockchain: TokioRwLock<ShieldedBlockchain>,
+    /// v2.9.14 (W1B) — concurrent cache of spent V2 nullifiers, refreshed
+    /// by every add_block site. Lets `submit_transaction_v2` and
+    /// `check_nullifiers` run their state checks without acquiring
+    /// `blockchain.read()`, bypassing the fairness queue starvation
+    /// observed under continuous writer load.
+    pub spent_nullifiers_cache: RwLock<std::collections::HashSet<[u8; 32]>>,
+    /// v2.9.14 (W1B) — concurrent cache of recent commitment-tree PQ roots
+    /// (anchors). Capped to RECENT_ROOTS_COUNT (1000) entries to mirror
+    /// the in-state recent_roots window.
+    pub recent_anchors_cache: RwLock<std::collections::VecDeque<[u8; 32]>>,
     pub mempool: RwLock<Mempool>,
     /// Phase 3 / v2.4.0 — soft ban set for miners that repeatedly violate
     /// the V2 inclusion rule. Persisted to `banned_miners_path` when set.
@@ -1625,14 +1696,34 @@ async fn submit_transaction_v2(
     })?;
 
     {
-        let chain = state.blockchain.read().await;
-        chain
-            .state()
-            .validate_transaction_v2_state_check(&public_inputs)
-            .map_err(|e| {
-                warn!("V2 state check failed: {}", e);
-                (StatusCode::BAD_REQUEST, e.to_string())
-            })?;
+        // v2.9.14 (W1B) — lock-free state check via concurrent caches.
+        // Replaces `state.blockchain.read().await` + `state_check`, which
+        // was starved by the tokio::sync::RwLock fairness queue under
+        // continuous writer load (mining + p2p block reception). With
+        // separate cache structures the reader never enqueues behind
+        // writers; lookups are O(1) HashSet contains + small VecDeque
+        // contains. Cache freshness invariant: writers populate the caches
+        // in the same scope as `chain.add_block` (see
+        // `update_state_caches_after_block`), so a tx whose nullifier was
+        // just mined is rejected here before mempool insert.
+        {
+            let nf_cache = state.spent_nullifiers_cache.read().unwrap_or_else(|e| e.into_inner());
+            for nf in public_inputs.nullifiers.iter() {
+                if nf_cache.contains(nf) {
+                    warn!("V2 state check failed: nullifier already spent");
+                    return Err((StatusCode::BAD_REQUEST, "Nullifier already spent".to_string()));
+                }
+            }
+        }
+        {
+            let anchor_cache = state.recent_anchors_cache.read().unwrap_or_else(|e| e.into_inner());
+            for root in public_inputs.merkle_roots.iter() {
+                if !anchor_cache.contains(root) {
+                    warn!("V2 state check failed: invalid anchor");
+                    return Err((StatusCode::BAD_REQUEST, "Invalid anchor".to_string()));
+                }
+            }
+        }
     }
     // Permit released here so the semaphore frees up before relay/broadcast.
     drop(permit);
@@ -1819,6 +1910,15 @@ async fn receive_block(
                 let reorged = old_tip != chain.get_block_by_height(old_height.min(new_height - 1))
                     .map(|b| b.hash())
                     .unwrap_or([0u8; 32]);
+
+                // v2.9.14 (W1B + H-G) — refresh the lock-free state-check
+                // caches before the write lock is released so submit_v2 /
+                // check_nullifiers / chain_info never observe a tx whose
+                // nullifier was just included via this HTTP block.
+                let new_anchor_pq = chain.state().commitment_root_pq();
+                crate::network::api::update_state_caches_after_block(
+                    &state, &block, new_anchor_pq, chain.info(),
+                );
 
                 if reorged {
                     info!("Chain reorganization! New tip: {} (height: {})", &block_hash[..16], new_height);
@@ -3282,8 +3382,16 @@ async fn check_nullifiers(
         &req.nullifiers
     };
 
-    let chain = state.blockchain.read().await;
-    let nullifier_set = chain.state().nullifier_set();
+    // v2.9.14 (H-G) — use the lock-free spent_nullifiers_cache instead of
+    // blockchain.read(). Same rationale as W1B for submit_v2: under
+    // continuous writer load the fairness queue starves any reader that
+    // takes blockchain.read(), so /nullifiers/check returned stale data
+    // (or timed out client-side at 10s reqwest default), which made
+    // wait_nullifiers_mined report 0/N spent for tens of seconds while
+    // the chain was already past the inclusion. The cache is populated
+    // by every add_block site, so a poll right after the next block
+    // sees the updated nullifier set immediately.
+    let nf_cache = state.spent_nullifiers_cache.read().unwrap_or_else(|e| e.into_inner());
 
     let mut spent = Vec::new();
 
@@ -3292,9 +3400,7 @@ async fn check_nullifiers(
             if nf_bytes.len() == 32 {
                 let mut arr = [0u8; 32];
                 arr.copy_from_slice(&nf_bytes);
-                let nullifier = Nullifier::from_bytes(arr);
-
-                if nullifier_set.contains(&nullifier) {
+                if nf_cache.contains(&arr) {
                     spent.push(nf_hex.clone());
                 }
             }

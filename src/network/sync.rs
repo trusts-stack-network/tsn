@@ -553,6 +553,10 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 continue;
             }
 
+            // v2.9.14 (W1B + H-G) — clone block before try_add_block consumes
+            // it so we can refresh the lock-free state-check caches in the
+            // same scope.
+            let block_for_caches = block.clone();
             let mut chain = state.blockchain.write().await;
             debug!(
                 "SYNC_DEBUG: BLOCK_ATTEMPT idx={}/{} block={} height={} prev={}",
@@ -568,6 +572,11 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                     // so a transient divergence doesn't slowly accumulate
                     // toward the auto-resync trigger.
                     state.stuck_sync_failures.store(0, std::sync::atomic::Ordering::Relaxed);
+                    // v2.9.14 (W1B + H-G) — refresh lock-free state caches.
+                    let new_anchor_pq = chain.state().commitment_root_pq();
+                    crate::network::api::update_state_caches_after_block(
+                        &state, &block_for_caches, new_anchor_pq, chain.info(),
+                    );
                     debug!(
                         "SYNC_DEBUG: BLOCK_RESULT idx={}/{} result=ACCEPTED new_height={}",
                         idx + 1, batch_size, current_sync_height

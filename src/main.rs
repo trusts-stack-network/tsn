@@ -2646,12 +2646,15 @@ async fn auto_consolidate(
         }
 
         eprint!("    waiting for mining... ");
-        // v2.8.1: 90s cap. A nullifier should land within 1-2 blocks (~20s);
-        // 30 minutes only ever masked unrelated network failures with a
-        // multi-minute hang.
+        // v2.9.14 (Option A): 180s cap. 90s was too short for blocks that
+        // include 5+ V2 tx with 49 spends each — block_template builds ~1.5s,
+        // PoW search adds 5-30s, and the previous block_interval gate (8s)
+        // can stack them. A single nullifier still lands within ~20s under
+        // normal load; 180s only kicks in for the heavy consolidation path
+        // (10K+ sends, parallel rounds).
         wait_nullifiers_mined(
             &nullifiers, node_url, client,
-            std::time::Duration::from_secs(90),
+            std::time::Duration::from_secs(180),
         ).await?;
         eprintln!("confirmed");
 
@@ -2817,10 +2820,12 @@ async fn auto_consolidate_parallel(
     }
 
     eprint!("    waiting for all nullifiers... ");
-    // v2.8.1: 90s cap, see auto_consolidate above.
+    // v2.9.14 (Option A): 180s cap, see auto_consolidate above. Parallel
+    // consolidation submits 4 tx of 49 spends each — block_template + PoW
+    // for the inclusion block is the main delay, not the polling itself.
     wait_nullifiers_mined(
         &all_nullifiers, node_url, client,
-        std::time::Duration::from_secs(90),
+        std::time::Duration::from_secs(180),
     ).await?;
     eprintln!("confirmed ({} nullifiers)", all_nullifiers.len());
 
@@ -3139,14 +3144,17 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
             );
         }
 
-        let selected: Vec<tsn::wallet::WalletNote> = {
-            // v2.8.4 Phase 1: select only notes that have at least
-            // MIN_SPEND_CONFIRMATIONS confirmations. Falls back to
-            // unspent_notes() when the chain tip height is unknown
-            // (last_known_tip seed failed earlier).
-            let candidates: Vec<&tsn::wallet::WalletNote> = match last_known_tip.as_ref() {
-                Some((tip_h, _)) => wallet.spendable_notes(*tip_h),
-                None => wallet.unspent_notes(),
+        // v2.9.14 (FIX-D): selection with auto-fallback to unspent_notes
+        // when the MIN_SPEND_CONFIRMATIONS gate excludes notes that
+        // auto_consolidate just produced on-chain. The newly consolidated
+        // notes have their nullifiers visible on-chain (wait_nullifiers_mined
+        // returned SUCCESS), so the gate is overly conservative for the
+        // immediate retry. Reorg protection is preserved via
+        // detect_reorg_and_reset_if_needed running on every retry above.
+        let select_with = |use_gate: bool| -> Vec<tsn::wallet::WalletNote> {
+            let candidates: Vec<&tsn::wallet::WalletNote> = match (use_gate, last_known_tip.as_ref()) {
+                (true, Some((tip_h, _))) => wallet.spendable_notes(*tip_h),
+                _ => wallet.unspent_notes(),
             };
             let mut sorted: Vec<&tsn::wallet::WalletNote> = candidates
                 .into_iter()
@@ -3162,11 +3170,20 @@ async fn cmd_send(wallet_path: &str, node_url: &str, to: &str, amount: f64, fee:
             }
             out
         };
+        let mut selected: Vec<tsn::wallet::WalletNote> = select_with(true);
         if selected.len() > CONSOLIDATION_BATCH {
-            anyhow::bail!(
-                "After consolidation, still need {} notes (max {}). Unexpected.",
-                selected.len(), CONSOLIDATION_BATCH
-            );
+            // Gate too tight: a freshly-consolidated note (height == tip_h)
+            // is being excluded by MIN_SPEND_CONFIRMATIONS. Fall back to the
+            // ungated selection on the next attempt.
+            let relaxed = select_with(false);
+            if relaxed.len() <= CONSOLIDATION_BATCH {
+                selected = relaxed;
+            } else {
+                anyhow::bail!(
+                    "After consolidation, still need {} notes (max {}). Unexpected.",
+                    selected.len(), CONSOLIDATION_BATCH
+                );
+            }
         }
         let selected_total: u64 = selected.iter().map(|n| n.note.value).sum();
         if selected_total < total_needed {
@@ -5420,6 +5437,9 @@ async fn cmd_node(
 
     let state = Arc::new(AppState {
         blockchain: tokio::sync::RwLock::new(blockchain),
+        // v2.9.14 (W1B) — concurrent state-check caches (populated below).
+        spent_nullifiers_cache: RwLock::new(std::collections::HashSet::new()),
+        recent_anchors_cache: RwLock::new(std::collections::VecDeque::new()),
         mempool: RwLock::new(mempool),
         banned_miners: RwLock::new(banned_miners),
         banned_miners_path: Some(banned_miners_path),
@@ -5500,6 +5520,14 @@ async fn cmd_node(
         // a new record on every successful finalize.
         checkpoint_history: arc_swap::ArcSwap::from_pointee(Vec::new()),
     });
+
+    // v2.9.14 (W1B) — populate the lock-free state-check caches from the
+    // just-opened chain so submit_v2 can serve state_check before the
+    // first new block.
+    {
+        let chain_r = state.blockchain.read().await;
+        tsn::network::api::init_state_caches_from_chain(&state, &chain_r);
+    }
 
     // v2.8.0 — hydrate signed snapshot manifests from disk so /snapshot/
     // latest and /snapshot/signed answer immediately after restart, without
@@ -6296,11 +6324,24 @@ async fn cmd_node(
                                         block.transactions_v2.iter()
                                             .flat_map(|tx| tx.spends.iter().map(|s| s.nullifier))
                                     );
+                                    // v2.9.14 (W1B + H-G) — clone the block before
+                                    // try_add_block consumes it, so we can refresh
+                                    // the lock-free state caches in the same scope
+                                    // as the write lock.
+                                    let block_for_caches = block.clone();
                                     let result = {
                                         // v2.0.9: Take reorg_lock to prevent race with miner
                                         let _reorg_guard = p2p_blockchain.reorg_lock.read().await;
                                         let mut chain = p2p_blockchain.blockchain.write().await;
-                                        chain.try_add_block(block)
+                                        let r = chain.try_add_block(block);
+                                        if let Ok(true) = &r {
+                                            let new_anchor_pq = chain.state().commitment_root_pq();
+                                            tsn::network::api::update_state_caches_after_block(
+                                                &p2p_blockchain, &block_for_caches,
+                                                new_anchor_pq, chain.info(),
+                                            );
+                                        }
+                                        r
                                     };
                                     match result {
                                         Ok(true) => {
@@ -7294,76 +7335,100 @@ async fn cmd_node(
                     }
                 }
 
-                // Add to local chain
+                // v2.9.14 (W1) — Path-local fix for the deadlock observed
+                // under parallel V2 consolidation: the previous scope held
+                // `blockchain.write()` for the entire post-add work — wallet
+                // flock + SQLite open/scan/save + `mempool.write()` +
+                // revalidate — easily seconds. Combined with another thread
+                // taking `mempool.*` then `blockchain.*`, it produced a hard
+                // deadlock (533+ threads sleeping). Keep only the actual
+                // blockchain mutation under the write lock; run wallet I/O
+                // and mempool ops outside, with the mempool section
+                // re-acquiring `blockchain.read()` briefly in the canonical
+                // order (blockchain → mempool) for `revalidate(chain.state())`.
+
+                // Step 1 — Add block under blockchain.write() (minimal scope).
+                let block_start_pos: u64;
+                let new_height: u64;
                 {
                     let mut chain = mine_state.blockchain.write().await;
                     match chain.add_block(mined_block.clone()) {
                         Ok(()) => {
-                            println!(
-                                "\x1b[1;33m🧱 Potential mined block #{} (hash: {})\x1b[0m",
-                                chain.height(),
-                                mined_block.hash_hex()
+                            // Capture the tree-size while still holding the
+                            // lock so the wallet scan picks the correct
+                            // global position.
+                            let tree_size = chain.state().commitment_count() as u64;
+                            let coinbase_commitments = if mined_block.coinbase.has_dev_fee() { 2u64 } else { 1u64 };
+                            let tx_commitments: u64 = mined_block.transactions.iter().map(|t| t.outputs.len() as u64).sum::<u64>()
+                                + mined_block.transactions_v2.iter().map(|t| t.outputs.len() as u64).sum::<u64>();
+                            block_start_pos = tree_size - coinbase_commitments - tx_commitments;
+                            new_height = chain.height();
+                            // v2.9.14 (W1B + H-G) — refresh the lock-free
+                            // state-check caches BEFORE we drop the write lock
+                            // so submit_v2 / check_nullifiers / chain_info
+                            // never observe a tx whose nullifier was just
+                            // included here.
+                            let new_anchor_pq = chain.state().commitment_root_pq();
+                            tsn::network::api::update_state_caches_after_block(
+                                &mine_state, &mined_block, new_anchor_pq, chain.info(),
                             );
-
-                            // Save mined coinbase note to wallet (so balance updates immediately)
-                            // Use the correct global position in the commitment tree
-                            if let Some(ref wp) = mine_wallet_path {
-                                // Acquire exclusive lock to prevent race with ./tsn wallet
-                                let _lock = match WalletLock::acquire(wp) {
-                                    Ok(l) => l,
-                                    Err(e) => {
-                                        tracing::error!("Failed to lock wallet for mining: {}", e);
-                                        continue;
-                                    }
-                                };
-                                if let Ok(mut wallet) = ShieldedWallet::open(wp) {
-                                    // The miner reward commitment was just added to the tree.
-                                    // Its position = tree_size_before_this_block's commitments
-                                    // = current_tree_size - N (where N = commitments in this block)
-                                    let tree_size = chain.state().commitment_count() as u64;
-                                    // This block added: 1 (miner) + optionally 1 (dev fee) = 1-2 commitments
-                                    let coinbase_commitments = if mined_block.coinbase.has_dev_fee() { 2u64 } else { 1u64 };
-                                    let tx_commitments: u64 = mined_block.transactions.iter().map(|t| t.outputs.len() as u64).sum::<u64>()
-                                        + mined_block.transactions_v2.iter().map(|t| t.outputs.len() as u64).sum::<u64>();
-                                    let block_start_pos = tree_size - coinbase_commitments - tx_commitments;
-
-                                    let new_notes = wallet.scan_block(&mined_block, block_start_pos);
-                                    if new_notes > 0 {
-                                        if let Err(e) = wallet.save(wp) {
-                                            tracing::error!("Failed to save wallet after mining: {}", e);
-                                        }
-                                    }
-                                }
-                                // _lock dropped here — releases flock
-                            }
-
-                            // Remove mined transactions from mempool (both V1 and V2)
-                            let mut tx_hashes: Vec<[u8; 32]> = mined_block
-                                .transactions
-                                .iter()
-                                .map(|tx| tx.hash())
-                                .collect();
-                            tx_hashes.extend(mined_block.transactions_v2.iter().map(|tx| tx.hash()));
-
-                            let mut mempool = mine_state.mempool.write().unwrap();
-                            mempool.remove_confirmed(&tx_hashes);
-
-                            // Remove transactions with spent nullifiers (both V1 and V2)
-                            let mut nullifiers: Vec<[u8; 32]> = mined_block.nullifiers().iter().map(|n| n.0).collect();
-                            nullifiers.extend(mined_block.transactions_v2.iter().flat_map(|tx| tx.spends.iter().map(|s| s.nullifier)));
-                            mempool.remove_spent_nullifiers(&nullifiers);
-
-                            // Re-validate remaining mempool transactions
-                            let removed = mempool.revalidate(chain.state());
-                            if removed > 0 {
-                                println!("  Removed {} invalid transactions from mempool", removed);
-                            }
                         }
                         Err(e) => {
                             println!("Failed to add mined block: {}", e);
                             mine_state.orphan_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             continue;
                         }
+                    }
+                } // blockchain.write() dropped here.
+
+                println!(
+                    "\x1b[1;33m🧱 Potential mined block #{} (hash: {})\x1b[0m",
+                    new_height,
+                    mined_block.hash_hex()
+                );
+
+                // Step 2 — Wallet I/O OUTSIDE the blockchain lock.
+                if let Some(ref wp) = mine_wallet_path {
+                    let _lock = match WalletLock::acquire(wp) {
+                        Ok(l) => l,
+                        Err(e) => {
+                            tracing::error!("Failed to lock wallet for mining: {}", e);
+                            continue;
+                        }
+                    };
+                    if let Ok(mut wallet) = ShieldedWallet::open(wp) {
+                        let new_notes = wallet.scan_block(&mined_block, block_start_pos);
+                        if new_notes > 0 {
+                            if let Err(e) = wallet.save(wp) {
+                                tracing::error!("Failed to save wallet after mining: {}", e);
+                            }
+                        }
+                    }
+                    // _lock dropped here — releases flock.
+                }
+
+                // Step 3 — Mempool ops OUTSIDE the blockchain write lock.
+                // Canonical order: blockchain.read() before mempool.write(),
+                // so we never race with another thread that holds blockchain
+                // and waits on mempool.
+                {
+                    let mut tx_hashes: Vec<[u8; 32]> = mined_block
+                        .transactions
+                        .iter()
+                        .map(|tx| tx.hash())
+                        .collect();
+                    tx_hashes.extend(mined_block.transactions_v2.iter().map(|tx| tx.hash()));
+
+                    let mut nullifiers: Vec<[u8; 32]> = mined_block.nullifiers().iter().map(|n| n.0).collect();
+                    nullifiers.extend(mined_block.transactions_v2.iter().flat_map(|tx| tx.spends.iter().map(|s| s.nullifier)));
+
+                    let chain_r = mine_state.blockchain.read().await;
+                    let mut mempool = mine_state.mempool.write().unwrap();
+                    mempool.remove_confirmed(&tx_hashes);
+                    mempool.remove_spent_nullifiers(&nullifiers);
+                    let removed = mempool.revalidate(chain_r.state());
+                    if removed > 0 {
+                        println!("  Removed {} invalid transactions from mempool", removed);
                     }
                 }
 
