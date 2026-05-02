@@ -126,8 +126,10 @@ struct ReleaseManifest {
 #[derive(Debug, Clone, Deserialize)]
 struct AssetInfo {
     url: String,
-    sha256: String,
+    #[serde(default)]
+    sha256: Option<String>,
     #[allow(dead_code)]
+    #[serde(default)]
     size: u64,
 }
 
@@ -215,14 +217,17 @@ async fn check_for_update(
 /// Also fetches the companion `.sha256` file from the same GitHub release
 /// so we can verify the download without depending on the fallback manifest.
 async fn check_github(client: &reqwest::Client) -> Option<ResolvedUpdate> {
-    let resp = client
+    let mut req = client
         .get(GITHUB_RELEASE_URL)
         .header("User-Agent", user_agent())
         .header("Accept", "application/vnd.github+json")
-        .timeout(Duration::from_secs(15))
-        .send()
-        .await
-        .ok()?;
+        .timeout(Duration::from_secs(15));
+    // Optional token to raise rate limit from 60 req/h to 5000 req/h.
+    // Set TSN_GITHUB_TOKEN in the node's systemd environment or shell.
+    if let Ok(token) = std::env::var("TSN_GITHUB_TOKEN") {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+    let resp = req.send().await.ok()?;
 
     if !resp.status().is_success() {
         warn!(status = %resp.status(), "GitHub API returned non-200");
@@ -322,7 +327,7 @@ async fn check_fallback(client: &reqwest::Client) -> Option<ResolvedUpdate> {
     Some(ResolvedUpdate {
         version: manifest.version,
         download_url: asset_info.url.clone(),
-        expected_sha256: Some(asset_info.sha256.clone()),
+        expected_sha256: asset_info.sha256.clone().filter(|s| !s.is_empty()),
     })
 }
 
@@ -346,7 +351,7 @@ async fn fetch_expected_sha256(
     }
 
     let asset_name = get_platform_asset_name(version);
-    manifest.assets.get(&asset_name).map(|a| a.sha256.clone())
+    manifest.assets.get(&asset_name).and_then(|a| a.sha256.clone()).filter(|s| !s.is_empty())
 }
 
 /// Fetch the Ed25519 signature hex string for a given version from the fallback manifest.

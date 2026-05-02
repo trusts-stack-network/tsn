@@ -67,10 +67,32 @@ jobs:
           tar czf tsn-${TAG}-linux-x86_64.tar.gz tsn
           echo "ASSET=tsn-${TAG}-linux-x86_64.tar.gz" >> $GITHUB_ENV
 
+      - name: Compute SHA256
+        run: |
+          sha256sum ${{ env.ASSET }} | awk '{print $1}' > ${{ env.ASSET }}.sha256
+          echo "SHA256=$(cat ${{ env.ASSET }}.sha256)" >> $GITHUB_ENV
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          files: ${{ env.ASSET }}
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update release manifest on tsnchain.com
+        run: |
+          TAG=${{ steps.tag.outputs.tag }}
+          ASSET=${{ env.ASSET }}
+          SHA256=${{ env.SHA256 }}
+          DL_URL="https://github.com/trusts-stack-network/tsn/releases/download/${TAG}/${ASSET}"
+          printf '{"version":"%s","assets":{"%s":{"url":"%s","sha256":"%s"}}}\n' \
+            "${TAG#v}" "$ASSET" "$DL_URL" "$SHA256" > latest.json
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${{ secrets.MANIFEST_DEPLOY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            --data-binary @latest.json \
+            "${{ secrets.MANIFEST_DEPLOY_URL }}"
+        if: ${{ secrets.MANIFEST_DEPLOY_TOKEN != '' }}
