@@ -4,6 +4,13 @@ All notable changes to Trust Stack Network are documented here.
 
 ---
 
+## [2.9.17] — 2026-05-02
+
+### Fixed
+- **Version ban blocks upgraded peers**: The IP-ban fast-path in the version gate middleware rejected requests unconditionally when an IP was within its ban window, without checking the current version headers. A peer that had accumulated 11+ offenses (24-hour ban) remained blocked even after upgrading to a compliant version. Fix: peek at `X-TSN-Version/Network/Genesis` headers in the fast path — if all are now compliant, fall through to step 3 which clears the stale ban.
+
+---
+
 ## [2.9.16] — 2026-05-02
 
 ### Fixed
