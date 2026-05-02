@@ -188,7 +188,7 @@ impl ManagedKey {
     }
 }
 
-/// Gestionnaire de rotation automatique of keys SLH-DSA
+/// Automatic SLH-DSA key rotation manager
 pub struct KeyRotationManager {
     /// Keys manageds indexed par ID
     keys: HashMap<KeyId, ManagedKey>,
@@ -395,7 +395,7 @@ impl Default for KeyRotationManager {
     }
 }
 
-/// Statistiques of the rotation manager
+/// Key rotation manager statistics
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct KeyRotationStats {
     pub total: usize,

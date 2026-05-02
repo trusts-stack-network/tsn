@@ -387,7 +387,7 @@ impl ValidationSystem {
     }
 }
 
-/// Statistiques of the cache
+/// Statistics of the cache
 #[derive(Debug, Clone)]
 pub struct CacheStats {
     pub size: usize,
@@ -395,7 +395,7 @@ pub struct CacheStats {
     pub hit_ratio: f64,
 }
 
-/// Statistiques completees of the system de validation
+/// Statistics completees of the system de validation
 #[derive(Debug, Clone)]
 pub struct ValidationSystemStats {
     pub validator_metrics: super::signature_validator::ValidatorMetrics,

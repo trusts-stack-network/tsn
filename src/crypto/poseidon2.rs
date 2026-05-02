@@ -364,7 +364,7 @@ mod tests {
         drop(hasher);
         
         // En production, on utiliserait zeroize() explicitement
-        // Ici on verifies juste que the compilation fonctionne
+        // verifies juste que the compilation fonctionne
     }
 }
 

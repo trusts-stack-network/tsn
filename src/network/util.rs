@@ -17,7 +17,7 @@ pub fn parse_addr(s: &str) -> Result<SocketAddr> {
     s.parse().map_err(|_| anyhow!("Adresse invalid : {}", s))
 }
 
-/// Timestamp current in secondes from epoch
+/// Current timestamp in seconds since epoch
 pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

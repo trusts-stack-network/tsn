@@ -289,7 +289,7 @@ impl RateLimiter {
     }
 }
 
-/// Statistiques de rate limiting for a peer
+/// Per-peer rate limiting statistics
 #[derive(Debug, Clone, Copy)]
 pub struct PeerRateStats {
     pub tokens_available: f64,

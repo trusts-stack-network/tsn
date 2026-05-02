@@ -206,7 +206,7 @@ pub fn verify(pk: &PublicKey, message: &[u8], signature: &Signature) -> bool {
     let r = &signature.bytes[0..32];
     let proof = &signature.bytes[32..64];
 
-    // Recalculer the preuve attendue : HASH(PK || R || message)
+    // Recalculer the proof attendue : HASH(PK || R || message)
     let mut proof_input = pk.bytes.to_vec();
     proof_input.extend_from_slice(r);
     proof_input.extend_from_slice(message);

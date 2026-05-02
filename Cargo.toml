@@ -1,6 +1,6 @@
 [package]
 name = "tsn"
-version = "2.9.14"
+version = "2.9.15"
 edition = "2021"
 description = "TSN (Trust Stack Network) - A privacy-preserving post-quantum cryptocurrency"
 license = "MIT"
@@ -171,12 +171,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 wat = "1"
 
 [features]
-# Feature pour activer les modules de démonstration vulnérables (TESTS UNIQUEMENT)
-# ⚠️ Ces modules ne doivent JAMAIS être utilisés en production
-# Utilisation : cargo build --features vulnerable-demo
+# Feature to enable vulnerable demo modules (TESTS ONLY)
+# ⚠️ These modules must NEVER be used in production
+# Usage: cargo build --features vulnerable-demo
 vulnerable-demo = []
-# Feature pour utiliser pqcrypto-sphincsplus (implémentation C optimisée)
+# Feature to use pqcrypto-sphincsplus (optimized C implementation)
 pqcrypto-sphincsplus = []
-# Feature pour désactiver certains tests (timing, sécurité, etc.)
-# Utilisation : cargo test --features disabled_test
+# Feature to disable certain tests (timing, security, etc.)
+# Usage: cargo test --features disabled_test
 disabled_test = []

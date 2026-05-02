@@ -96,7 +96,7 @@ where
     result
 }
 
-/// Profile a operation de generation de preuve ZK
+/// Profile a operation de generation de proof ZK
 pub fn profile_zk_proof_generate<T, F>(proof_type: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -109,13 +109,13 @@ where
         operation = "zk_proof_generate",
         proof_type = %proof_type,
         duration_ms = %duration.as_millis(),
-        "Generation de preuve ZK profiled"
+        "Generation de proof ZK profiled"
     );
     
     result
 }
 
-/// Profile a operation de verification de preuve ZK
+/// Profile a operation de verification de proof ZK
 pub fn profile_zk_proof_verify<T, F>(proof_type: &str, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -128,7 +128,7 @@ where
         operation = "zk_proof_verify",
         proof_type = %proof_type,
         duration_ms = %duration.as_millis(),
-        "Verification de preuve ZK profiled"
+        "Verification de proof ZK profiled"
     );
     
     result

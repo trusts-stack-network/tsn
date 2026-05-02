@@ -5,9 +5,9 @@
 //! - Current: Plonky2 STARKs (FRI-based, post-quantique)
 //! 
 //! Contexte de security:
-//! - TSN utilise Plonky2 like system de preuve ZK principal
+//! - TSN utilise Plonky2 like system de proof ZK principal
 //! - Plonky2 offre a security post-quantique via FRI (Fast Reed-Solomon IOP)
-//! - Les preuves are transparentes (no trusted setup)
+//! - Les proofs are transparentes (no trusted setup)
 //! 
 //! References:
 //! - Plonky2: https://github.com/mir-protocol/plonky2
@@ -18,7 +18,7 @@ use crate::crypto::bench::halo2_commitment_bench::{
     BenchmarkResult, BenchmarkRunner, run_all_benchmarks
 };
 
-/// Structure de comparaison entre systems de preuve
+/// Structure de comparaison entre systems de proof
 #[derive(Debug, Clone)]
 pub struct ComparisonResult {
     pub system_a: String,

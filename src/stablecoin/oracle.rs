@@ -6,7 +6,7 @@ use crate::stablecoin::errors::StablecoinError;
 use crate::stablecoin::types::*;
 use std::collections::VecDeque;
 
-/// Gestionnaire of prix oracle
+/// Manager of prix oracle
 pub struct OracleManager {
     config: StablecoinConfig,
     /// Prix soumis par the oracles (window glissante)

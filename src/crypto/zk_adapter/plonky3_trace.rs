@@ -2,7 +2,7 @@
 //!
 //! This module prend a `ZkTransactionWitness` (spends, outputs, fee)
 //! and generates a matrice de trace (`RowMajorMatrix<Goldilocks>`) compatible
-//! with the system de preuve AIR de Plonky3.
+//! with the system de proof AIR de Plonky3.
 //!
 //! ## Trace Layout
 //!

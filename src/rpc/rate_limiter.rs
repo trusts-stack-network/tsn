@@ -244,7 +244,7 @@ impl EndpointRateLimiter {
     }
 }
 
-/// Statistiques de rate limiting
+/// Statistics de rate limiting
 #[derive(Debug, Clone, Serialize)]
 pub struct RateLimitStats {
     pub total_tracked_ips: usize,

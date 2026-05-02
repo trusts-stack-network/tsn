@@ -17,7 +17,7 @@ impl ReserveEngine {
 
     /// Calculationates the valeur de the reserve in micro-XAU
     /// reserve_value = reserve_tsn * price_tsn / price_xau
-    /// Ici on travaille in TSN atomiques, and tsn_per_xau is in micro-TSN par XAU
+    /// travaille in TSN atomiques, and tsn_per_xau is in micro-TSN par XAU
     /// Returns the valeur in units atomiques ZST (= grammes d'or * 10^8)
     pub fn reserve_value_in_xau(&self, state: &ReserveState) -> Result<u128, StablecoinError> {
         if state.last_price.tsn_per_xau == 0 {

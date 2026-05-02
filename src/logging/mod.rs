@@ -170,7 +170,7 @@ pub fn init_logging(config: LogConfig) -> Result<LoggingHandle> {
         std::fs::create_dir_all(&config.log_dir)?;
     }
 
-    // Construire the filtre d'environnement
+    // Build the environment filter
     let filter = build_env_filter(&config)?;
 
     // Initialize the subscriber with configured layers

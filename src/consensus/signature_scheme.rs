@@ -72,7 +72,7 @@ pub enum SignatureError {
 /// Signature scheme manager with integrated governance
 #[derive(Debug)]
 pub struct SignatureSchemeManager {
-    /// Gestionnaire de governance
+    /// Governance manager
     governance: Arc<RwLock<GovernanceManager>>,
 }
 

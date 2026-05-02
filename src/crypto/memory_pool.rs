@@ -1,7 +1,7 @@
 //! Pool de memory optimized for the validations cryptographiques
 //!
 //! Handles of buffers reusable for avoidr the allocations repeateds
-//! in the hot paths de validation de signatures and preuves ZK.
+//! in the hot paths de validation de signatures and proofs ZK.
 //!
 //! Based sur of techniques de memory pooling for reduce the pression
 //! sur l'allocateur and improve the performances of validations crypto.
@@ -263,7 +263,7 @@ impl MemoryPoolManager {
         Ok(buffer)
     }
 
-    /// Returns a buffer de preuve at the pool
+    /// Returns a proof buffer to the pool
     pub fn return_proof_buffer(&self, buffer: PooledBuffer) -> Result<(), String> {
         let mut pool = self.proof_pool.lock().map_err(|_| "Pool lock failed")?;
         pool.return_buffer(buffer);

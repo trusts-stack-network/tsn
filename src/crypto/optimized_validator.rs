@@ -1,6 +1,6 @@
 //! Validateur cryptographique optimized for the performances
 //!
-//! Implements of validations de signatures and preuves ZK optimized
+//! Implements of validations de signatures and proofs ZK optimized
 //! with reuse de memory and reduction of allocations.
 //!
 //! Utilise the memory pool for avoidr the allocations repeateds
@@ -149,7 +149,7 @@ impl OptimizedCryptoValidator {
         Ok(result)
     }
 
-    /// Validates a preuve Halo2 with optimisations memory
+    /// Validates a Halo2 proof with memory optimizations
     pub fn validate_proof_optimized(
         &mut self,
         proof: &[u8],
@@ -159,7 +159,7 @@ impl OptimizedCryptoValidator {
         let start_time = Instant::now();
         self.stats.total_proof_validations += 1;
 
-        // Utilise a buffer pooled plus grand for the preuves ZK
+        // Utilise a buffer pooled plus grand for the proofs ZK
         let mut buffer = global_pool_manager()
             .get_proof_buffer()
             .map_err(|e| format!("Failed to get proof buffer: {}", e))?;
@@ -246,7 +246,7 @@ impl OptimizedCryptoValidator {
         }
     }
 
-    /// Verification de preuve with buffer pooled
+    /// Proof verification with pooled buffers
     fn verify_proof_with_pooled_buffer(
         &self,
         proof: &[u8],
@@ -319,7 +319,7 @@ impl OptimizedCryptoValidator {
         }
     }
 
-    /// Updates the statistics de timing for the preuves
+    /// Updates the statistics de timing for the proofs
     fn update_proof_timing(&mut self, start_time: Instant) {
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
         self.stats.total_validation_time_ms += elapsed_ms;

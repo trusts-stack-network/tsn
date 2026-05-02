@@ -173,7 +173,7 @@ impl KademliaNode {
     pub fn quality_score(&self) -> u64 {
         let base_score = 1000u64;
         let failure_penalty = self.failures as u64 * 100;
-        let age_penalty = self.last_seen.elapsed().as_secs() / 60; // 1 point par minute
+        let age_penalty = self.last_seen.elapsed().as_secs() / 60; // 1 point per minute
         
         base_score.saturating_sub(failure_penalty + age_penalty)
     }
@@ -448,7 +448,7 @@ impl RoutingTable {
     }
 }
 
-/// Statistiques de the table de routage
+/// Routing table statistics
 #[derive(Debug, Clone)]
 pub struct RoutingTableStats {
     pub total_nodes: usize,

@@ -362,7 +362,7 @@ pub const AUTO_FORCE_RESYNC_COOLDOWN_SECS: u64 = 180;
 
 /// Interval between automatic signed snapshot exports (in blocks).
 /// A snapshot is triggered when a new multiple of this interval becomes finalized
-/// (i.e. tip >= multiple + MAX_REORG_DEPTH). With 10s blocks, 500 blocs ~ 1.4h,
+/// (i.e. tip >= multiple + MAX_REORG_DEPTH). With 10s blocks, 500 blocks ~ 1.4h,
 /// producing roughly 16-20 snapshots per day.
 ///
 /// v2.5.6: reduced from 1000 → 500 after the 2026-04-24 rollback incident. A user

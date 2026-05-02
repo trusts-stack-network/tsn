@@ -49,7 +49,7 @@ impl PenaltyReason {
     }
 }
 
-/// Statistiques d'un pair
+/// Per-peer statistics
 #[derive(Debug, Clone)]
 pub struct PeerStats {
     /// Score current (0-100)
@@ -90,7 +90,7 @@ pub struct ScoringConfig {
     pub min_score_before_permanent_ban: PeerScore,
     /// Duration de retention of penalties recents
     pub penalty_retention_duration: Duration,
-    /// Taux de retrieval of the score (points par minute)
+    /// Score recovery rate (points per minute)
     pub score_recovery_rate: u8,
     /// Maximum requests per second before penalty
     pub max_requests_per_second: u32,
@@ -145,7 +145,7 @@ impl PeerScoring {
 
         // Check rate limiting
         if !self.check_rate_limit(addr).await {
-            // Apply a penalty for overflow de rate limit
+            // Apply a penalty for rate limit overflow
             self.apply_penalty(addr, PenaltyReason::RateLimitExceeded).await;
             return false;
         }
@@ -296,7 +296,7 @@ impl PeerScoring {
             stats.recent_penalties.retain(|(timestamp, _)| *timestamp > cutoff);
         }
         
-        // Nettoyer the anciens compteurs de rate limiting
+        // Clean up stale rate limiting counters
         let mut counters = self.request_counters.write().await;
         let cutoff = now - self.config.rate_limit_window * 2; // Garder 2x la window
         counters.retain(|_, (_, timestamp)| *timestamp > cutoff);
@@ -339,7 +339,7 @@ impl PeerScoring {
     }
 }
 
-/// Statistiques globales of the system de scoring
+/// Global scoring system statistics
 #[derive(Debug, Clone)]
 pub struct GlobalScoringStats {
     pub total_peers: usize,

@@ -63,7 +63,7 @@ fn test_random_malicious_data() {
                 // (very improbable with data random)
             }
             Err(_) => {
-                // Acceptable error and attendue
+                // Expected and acceptable error
             }
         }
     }
@@ -118,7 +118,7 @@ fn test_malicious_timestamps() {
                     current_time - timestamp
                 };
                 
-                // Les timestamps trop distant devraient be rejecteds
+                // Timestamps too far out should be rejected
                 if time_diff > 3600_000_000_000 { // 1 heure
                     println!("Timestamp malveillant detected: {}", timestamp);
                 }
@@ -407,7 +407,7 @@ fn test_truncated_messages() {
         
         match result {
             Ok(None) => {
-                // Comportement attendu : pas enough of data
+                // Expected behavior: pas enough of data
             }
             Ok(Some(_)) => {
                 panic!("Ne should pas decode un message truncated to {} bytes", truncate_at);
@@ -460,7 +460,7 @@ fn test_malicious_padding() {
                 }
             }
             Ok(None) => {
-                panic!("Devrait decode le message valid same avec du padding");
+                panic!("Should decode valid message even with padding");
             }
             Err(_) => {
                 // Acceptable error if the format is corrompu

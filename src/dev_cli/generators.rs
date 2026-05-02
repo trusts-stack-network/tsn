@@ -8,7 +8,7 @@ use crate::crypto::keys::KeyPair;
 use crate::crypto::address::Address;
 use crate::wallet::Wallet;
 
-/// Generator of data de test for the development
+/// Test data generator for development
 pub struct TestDataGenerator {
     rng: rand::rngs::ThreadRng,
 }
@@ -20,7 +20,7 @@ impl TestDataGenerator {
         }
     }
 
-    /// Generates of transactions de test
+    /// Generates test transactions
     pub async fn generate_transactions(
         &mut self,
         count: u32,
@@ -29,7 +29,7 @@ impl TestDataGenerator {
         tx_type: String,
         amount_range: String,
     ) -> Result<()> {
-        println!("🏭 Generation de {} transactions de test...", count);
+        println!("🏭 Generating {} test transactions...", count);
 
         // Charger the wallet
         let wallet = self.load_or_create_wallet(&wallet_file).await?;
@@ -61,7 +61,7 @@ impl TestDataGenerator {
         Ok(())
     }
 
-    /// Generates of blocs de test
+    /// Generates test blocks
     pub async fn generate_blocks(
         &mut self,
         count: u32,
@@ -69,7 +69,7 @@ impl TestDataGenerator {
         transactions_per_block: u32,
         starting_difficulty: u64,
     ) -> Result<()> {
-        println!("🏭 Generation de {} blocs de test...", count);
+        println!("🏭 Generating {} test blocks...", count);
 
         // Create the directory de sortie
         fs::create_dir_all(&output_dir)
@@ -109,15 +109,15 @@ impl TestDataGenerator {
             }
 
             if (i + 1) % 5 == 0 {
-                println!("  ✅ {} blocs generateds", i + 1);
+                println!("  ✅ {} blocks generated", i + 1);
             }
         }
 
-        println!("💾 {} blocs saveds dans {:?}", count, output_dir);
+        println!("💾 {} blocks saved to {:?}", count, output_dir);
         Ok(())
     }
 
-    /// Generates of wallets de test
+    /// Generates test wallets
     pub async fn generate_wallets(
         &mut self,
         count: u32,
@@ -411,7 +411,7 @@ impl TestDataGenerator {
             "address": wallet.address().to_string(),
             "public_key": hex::encode(wallet.public_key().as_bytes()),
             // Note: On not backup jamais the key private in clair in a vrai contexte
-            // Ici c'est for the tests de development only
+            // For development tests only
             "private_key_encrypted": "ENCRYPTED_FOR_DEV_ONLY",
             "created_at": chrono::Utc::now().to_rfc3339(),
             "version": "1.0.0"

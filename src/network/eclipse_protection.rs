@@ -31,7 +31,7 @@ pub struct EclipseProtectionConfig {
     pub peer_rotation_interval: Duration,
     /// Pourcentage de peers to faire tourner to each cycle
     pub peer_rotation_percentage: f32,
-    /// Seuil de detection d'anomalie de consensus (% de peers in disagreement)
+    /// Threshold for detection d'anomalie de consensus (% de peers in disagreement)
     pub consensus_anomaly_threshold: f32,
     /// Duration de quarantaine for the peers suspects
     pub quarantine_duration: Duration,
@@ -68,7 +68,7 @@ pub struct PeerGeoInfo {
     pub last_updated: SystemTime,
 }
 
-/// State d'un peer in the contexte de protection eclipse
+/// Per-peer state in the eclipse protection context
 #[derive(Debug, Clone)]
 pub struct PeerEclipseState {
     pub addr: SocketAddr,
@@ -102,11 +102,11 @@ pub enum AnomalyType {
     PeerRotationStuck,
     /// Trop de connections from the same subnet
     SubnetFlooding,
-    /// Peers that presentnt toujours the same blocs
+    /// Peers that always present the same blocks
     SynchronizedBehavior,
 }
 
-/// Gestionnaire principal de protection contre the eclipse attacks
+/// Main manager for eclipse attack protection
 #[derive(Debug)]
 pub struct EclipseProtection {
     config: EclipseProtectionConfig,
@@ -191,7 +191,7 @@ impl EclipseProtection {
             peers.remove(addr);
         }
 
-        debug!("Peer {} removed de la protection eclipse", addr);
+        debug!("Peer {} removed from eclipse protection", addr);
     }
 
     /// Register a nouveau bloc received d'un peer
@@ -250,7 +250,7 @@ impl EclipseProtection {
                         .map(|p| p.addr)
                         .collect(),
                     severity: ratio,
-                    description: format!("{}% des peers sont du pays {}", 
+                    description: format!("{:.0}% of peers are from country {}", 
                                        (ratio * 100.0) as u32, country),
                 };
                 
@@ -453,7 +453,7 @@ impl EclipseProtection {
         geo_info
     }
 
-    /// Simulation d'une lookup geographic (to remplacer par a vraie API)
+    /// Simulated geographic lookup (replace with a real API in production)
     async fn simulate_geo_lookup(&self, ip: &IpAddr) -> Option<PeerGeoInfo> {
         // Simulation basique based on the ranges d'IP
         let (country_code, region, asn, is_datacenter) = match ip {
@@ -521,7 +521,7 @@ impl EclipseProtection {
         });
     }
 
-    /// Obtenir the statistics de protection
+    /// Get protection statistics
     pub async fn get_stats(&self) -> EclipseProtectionStats {
         let peers = self.peers.read().await;
         let anomalies = self.detected_anomalies.read().await;
@@ -569,7 +569,7 @@ impl EclipseProtection {
     }
 }
 
-/// Statistiques de the protection eclipse
+/// Eclipse protection statistics
 #[derive(Debug, Clone)]
 pub struct EclipseProtectionStats {
     pub total_peers: usize,
@@ -608,7 +608,7 @@ mod tests {
         let addr2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)), 8080);
         let addr3 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 3)), 8080);
 
-        // Firsts deux peers of the same subnet devraient passer
+        // First two peers from the same subnet should pass
         assert!(protection.add_peer(addr1).await.is_ok());
         assert!(protection.add_peer(addr2).await.is_ok());
         

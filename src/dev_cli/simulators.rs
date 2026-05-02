@@ -41,17 +41,17 @@ impl NetworkLoadSimulator {
         tps: u32,
         duration: u64,
     ) -> Result<SimulationStats> {
-        println!("🚀 Starting de la simulation de charge network");
-        println!("   📊 {} nodes virtuels, {} TPS, {} secondes", nodes, tps, duration);
-        println!("   🎯 Cible: {}", self.target_url);
+        println!("🚀 Starting network load simulation");
+        println!("   📊 {} virtual nodes, {} TPS, {} seconds", nodes, tps, duration);
+        println!("   🎯 Target: {}", self.target_url);
 
         let start_time = Instant::now();
         let end_time = start_time + Duration::from_secs(duration);
         
-        // Create a semaphore for limiter the connections concurrent
+        // Create a semaphore to cap concurrent connections
         let semaphore = Arc::new(Semaphore::new(nodes as usize * 2));
-        
-        // Create of wallets for each node virtuel
+
+        // Create one wallet per virtual node
         let mut wallets = Vec::new();
         for _ in 0..nodes {
             wallets.push(Wallet::new());
@@ -60,7 +60,7 @@ impl NetworkLoadSimulator {
 
         let mut join_set = JoinSet::new();
 
-        // Start the generators de transactions
+        // Start transaction generators
         for node_id in 0..nodes {
             let client = self.client.clone();
             let target_url = self.target_url.clone();
@@ -73,7 +73,7 @@ impl NetworkLoadSimulator {
                     node_id,
                     client,
                     target_url,
-                    tps / nodes, // TPS par node
+                    tps / nodes, // TPS per node
                     end_time,
                     stats,
                     semaphore,
@@ -82,7 +82,7 @@ impl NetworkLoadSimulator {
             });
         }
 
-        // Start the moniteur de statistics
+        // Start the statistics monitor
         let stats_monitor = self.stats.clone();
         join_set.spawn(async move {
             Self::stats_monitor(stats_monitor, duration).await
@@ -91,7 +91,7 @@ impl NetworkLoadSimulator {
         // Wait for all tasks to complete
         while let Some(result) = join_set.join_next().await {
             if let Err(e) = result {
-                eprintln!("❌ Error in une task de simulation: {}", e);
+                eprintln!("❌ Error in simulation task: {}", e);
             }
         }
 
@@ -120,23 +120,23 @@ impl NetworkLoadSimulator {
             let _permit = match semaphore.try_acquire() {
                 Ok(permit) => permit,
                 Err(_) => {
-                    // Trop de connections, on skip this transaction
+                    // Too many concurrent connections — skip this transaction
                     continue;
                 }
             };
 
-            // Select a wallet random
+            // Select a random wallet
             let wallet_index = rng.gen_range(0..wallets.len());
             let wallet = &wallets[wallet_index];
 
-            // Generate a transaction de test
+            // Generate a test transaction
             let transaction = Self::generate_test_transaction(wallet, &mut rng).await;
             
             let client = client.clone();
             let target_url = target_url.clone();
             let stats = stats.clone();
 
-            // Send the transaction de manner asynchrone
+            // Send the transaction asynchronously
             tokio::spawn(async move {
                 let start = Instant::now();
                 
@@ -160,12 +160,11 @@ impl NetworkLoadSimulator {
     }
 
     async fn generate_test_transaction(wallet: &Wallet, rng: &mut impl Rng) -> Transaction {
-        // Generate a transaction de transfert simple for the tests
+        // Generate a simple transfer transaction for load testing
         let amount = rng.gen_range(1..=100);
-        let recipient_address = wallet.get_address(); // For simplicity, we send to ourselves
-        
-        // In a real case, we would use wallet.create_transfer_transaction()
-        // Ici on creates a transaction basique for the demo
+        let recipient_address = wallet.get_address(); // Send to self for simplicity
+
+        // In a real scenario use wallet.create_transfer_transaction()
         Transaction::new_transfer(
             wallet.get_address(),
             recipient_address,
@@ -188,11 +187,11 @@ impl NetworkLoadSimulator {
             .timeout(Duration::from_secs(10))
             .send()
             .await
-            .context("Error during l'envoi de la transaction")?;
+            .context("Error sending transaction")?;
 
         if response.status().is_success() {
             let result: Value = response.json().await
-                .context("Error lors du parsing de la response")?;
+                .context("Error parsing response")?;
             Ok(result)
         } else {
             Err(anyhow::anyhow!("HTTP error: {}", response.status()))
@@ -210,10 +209,10 @@ impl NetworkLoadSimulator {
             let stats_guard = stats.read().await;
             let current_tx_count = stats_guard.transactions_sent;
             let elapsed = start_time.elapsed().as_secs_f64();
-            let current_tps = (current_tx_count - last_tx_count) as f64 / 5.0; // TPS sur les 5 lasts secondes
-            
+            let current_tps = (current_tx_count - last_tx_count) as f64 / 5.0; // TPS over the last 5 seconds
+
             println!(
-                "📈 Stats: {} tx sentes, {} confirmed, {} faileds | TPS actuel: {:.1} | Temps moyen: {:.1}ms",
+                "📈 Stats: {} tx sent, {} confirmed, {} failed | Current TPS: {:.1} | Avg time: {:.1}ms",
                 current_tx_count,
                 stats_guard.transactions_confirmed,
                 stats_guard.transactions_failed,
@@ -226,22 +225,22 @@ impl NetworkLoadSimulator {
     }
 
     async fn print_final_stats(&self, stats: &SimulationStats, duration: u64) {
-        println!("\n🏁 === RESULTS DE LA SIMULATION ===");
-        println!("⏱️  Duration: {} secondes", duration);
-        println!("📤 Transactions sentes: {}", stats.transactions_sent);
+        println!("\n🏁 === SIMULATION RESULTS ===");
+        println!("⏱️  Duration: {} seconds", duration);
+        println!("📤 Transactions sent: {}", stats.transactions_sent);
         println!("✅ Transactions confirmed: {}", stats.transactions_confirmed);
-        println!("❌ Transactions faileds: {}", stats.transactions_failed);
-        println!("📊 TPS moyen: {:.2}", stats.transactions_sent as f64 / duration as f64);
-        println!("📊 TPS pic: {:.2}", stats.peak_tps);
-        println!("⏱️  Temps de response moyen: {:.1}ms", stats.average_response_time);
-        
+        println!("❌ Transactions failed: {}", stats.transactions_failed);
+        println!("📊 Avg TPS: {:.2}", stats.transactions_sent as f64 / duration as f64);
+        println!("📊 Peak TPS: {:.2}", stats.peak_tps);
+        println!("⏱️  Avg response time: {:.1}ms", stats.average_response_time);
+
         if !stats.errors.is_empty() {
             println!("\n❌ Errors encountered:");
             for (i, error) in stats.errors.iter().take(10).enumerate() {
                 println!("   {}. {}", i + 1, error);
             }
             if stats.errors.len() > 10 {
-                println!("   ... et {} autres erreurs", stats.errors.len() - 10);
+                println!("   ... and {} more errors", stats.errors.len() - 10);
             }
         }
         println!("=====================================\n");
@@ -284,18 +283,18 @@ impl MiningSimulator {
         duration: u64,
         difficulty: u64,
     ) -> Result<()> {
-        println!("⛏️  Starting de la simulation de competition mining");
-        println!("   👥 {} mineurs, difficulty {}, {} secondes", miners_count, difficulty, duration);
+        println!("⛏️  Starting mining competition simulation");
+        println!("   👥 {} miners, difficulty {}, {} seconds", miners_count, difficulty, duration);
 
-        // Initialiser the mineurs with hash rates variables
+        // Initialize miners with varying hash rates
         let mut rng = thread_rng();
         for i in 0..miners_count {
-            let base_hash_rate = 1000; // 1000 H/s de base
-            let variation = rng.gen_range(50..=200); // Variation de 50% to 200%
+            let base_hash_rate = 1000; // 1000 H/s base
+            let variation = rng.gen_range(50..=200); // Variation 50% to 200%
             let hash_rate = base_hash_rate * variation / 100;
             
             self.miners.push(MinerNode::new(i, hash_rate));
-            println!("   ⚡ Mineur {} initialized: {} H/s", i, hash_rate);
+            println!("   ⚡ Miner {} initialized: {} H/s", i, hash_rate);
         }
 
         let start_time = Instant::now();
@@ -305,7 +304,7 @@ impl MiningSimulator {
         let target = Self::calculate_target(difficulty);
 
         while Instant::now() < end_time {
-            // Simuler a ronde de minage
+            // Simulate one mining round
             let winner = self.simulate_mining_round(target, &mut rng).await;
             
             if let Some(winner_id) = winner {
@@ -313,14 +312,14 @@ impl MiningSimulator {
                 self.miners[winner_id as usize].blocks_mined += 1;
                 
                 println!(
-                    "🎉 Bloc {} mined par le mineur {} ! (Total: {} blocs)",
+                    "🎉 Block {} mined by miner {} (total: {} blocks)",
                     current_block_height,
                     winner_id,
                     self.miners[winner_id as usize].blocks_mined
                 );
             }
 
-            // Wait a peu before the prochaine ronde
+            // Brief pause before the next round
             sleep(Duration::from_millis(100)).await;
         }
 
@@ -331,10 +330,10 @@ impl MiningSimulator {
     async fn simulate_mining_round(&mut self, target: u64, rng: &mut impl Rng) -> Option<u32> {
         // Each miner tries to mine during this round
         for miner in &mut self.miners {
-            let hashes_this_round = miner.hash_rate / 10; // 100ms de minage
+            let hashes_this_round = miner.hash_rate / 10; // 100ms mining window
             miner.total_hashes += hashes_this_round;
 
-            // Simuler the attempts de hash
+            // Simulate hash attempts
             for _ in 0..hashes_this_round {
                 let hash_value: u64 = rng.gen();
                 if hash_value < target {
@@ -346,23 +345,23 @@ impl MiningSimulator {
     }
 
     fn calculate_target(difficulty: u64) -> u64 {
-        // Calculation simplified of the target based on the difficulty
-        // Plus the difficulty is high, plus the target is bas
+        // Simplified target calculation based on difficulty
+        // Higher difficulty = lower target value
         u64::MAX / (1 << difficulty)
     }
 
     async fn print_mining_results(&self, duration: u64) {
-        println!("\n⛏️  === RESULTS DE LA COMPETITION MINING ===");
-        println!("⏱️  Duration: {} secondes", duration);
-        
+        println!("\n⛏️  === MINING COMPETITION RESULTS ===");
+        println!("⏱️  Duration: {} seconds", duration);
+
         let total_blocks: u64 = self.miners.iter().map(|m| m.blocks_mined).sum();
         let total_hashes: u64 = self.miners.iter().map(|m| m.total_hashes).sum();
-        
-        println!("🏗️  Blocs totaux mined: {}", total_blocks);
-        println!("🔢 Hashes totaux: {}", total_hashes);
-        println!("📊 Hash rate network: {:.2} H/s", total_hashes as f64 / duration as f64);
-        
-        println!("\n👥 Results par mineur:");
+
+        println!("🏗️  Total blocks mined: {}", total_blocks);
+        println!("🔢 Total hashes: {}", total_hashes);
+        println!("📊 Network hash rate: {:.2} H/s", total_hashes as f64 / duration as f64);
+
+        println!("\n👥 Results per miner:");
         let mut sorted_miners = self.miners.clone();
         sorted_miners.sort_by(|a, b| b.blocks_mined.cmp(&a.blocks_mined));
         
@@ -374,7 +373,7 @@ impl MiningSimulator {
             };
             
             println!(
-                "   {}. Mineur {} : {} blocs ({:.1}%) - {} H/s - {} hashes totaux",
+                "   {}. Miner {} : {} blocks ({:.1}%) - {} H/s - {} total hashes",
                 rank + 1,
                 miner.id,
                 miner.blocks_mined,
@@ -396,8 +395,8 @@ impl HighFrequencyTradingSimulator {
         duration: u64,
         target_url: &str,
     ) -> Result<()> {
-        println!("🤖 Starting de la simulation de trading haute frequency");
-        println!("   🤖 {} bots, {} trades/min chacun, {} minutes", bots, trades_per_minute, duration);
+        println!("🤖 Starting high-frequency trading simulation");
+        println!("   🤖 {} bots, {} trades/min each, {} minutes", bots, trades_per_minute, duration);
 
         let client = Client::new();
         let mut join_set = JoinSet::new();
@@ -420,7 +419,7 @@ impl HighFrequencyTradingSimulator {
             });
         }
 
-        // Moniteur de stats
+        // Stats monitor
         let stats_monitor = stats.clone();
         join_set.spawn(async move {
             Self::hft_stats_monitor(stats_monitor, duration * 60).await
@@ -429,7 +428,7 @@ impl HighFrequencyTradingSimulator {
         // Wait all tasks
         while let Some(result) = join_set.join_next().await {
             if let Err(e) = result {
-                eprintln!("❌ Error in un bot de trading: {}", e);
+                eprintln!("❌ Error in trading bot: {}", e);
             }
         }
 
@@ -460,7 +459,7 @@ impl HighFrequencyTradingSimulator {
             // Generate a trade random
             let trade_type = if rng.gen_bool(0.5) { "buy" } else { "sell" };
             let amount = rng.gen_range(1..=50);
-            let price = rng.gen_range(90..=110); // Prix autour de 100
+            let price = rng.gen_range(90..=110); // Price around 100
 
             let start = Instant::now();
             
@@ -490,7 +489,7 @@ impl HighFrequencyTradingSimulator {
         amount: u64,
         price: u64,
     ) -> Result<Value> {
-        // Simuler a ordre de trading
+        // Simulate a trading order
         let order = json!({
             "type": trade_type,
             "amount": amount,
@@ -507,11 +506,11 @@ impl HighFrequencyTradingSimulator {
             .timeout(Duration::from_secs(5))
             .send()
             .await
-            .context("Error during l'envoi de l'ordre")?;
+            .context("Error sending order")?;
 
         if response.status().is_success() {
             let result: Value = response.json().await
-                .context("Error lors du parsing de la response")?;
+                .context("Error parsing response")?;
             Ok(result)
         } else {
             Err(anyhow::anyhow!("HTTP error: {}", response.status()))
@@ -528,9 +527,9 @@ impl HighFrequencyTradingSimulator {
             let stats_guard = stats.read().await;
             let elapsed_minutes = start_time.elapsed().as_secs_f64() / 60.0;
             let tpm = stats_guard.transactions_sent as f64 / elapsed_minutes; // Trades per minute
-            
+
             println!(
-                "📈 HFT Stats: {} trades, {} faileds | TPM: {:.1} | Latency moy: {:.1}ms",
+                "📈 HFT Stats: {} trades, {} failed | TPM: {:.1} | Avg latency: {:.1}ms",
                 stats_guard.transactions_sent,
                 stats_guard.transactions_failed,
                 tpm,
@@ -540,19 +539,19 @@ impl HighFrequencyTradingSimulator {
     }
 
     async fn print_hft_results(stats: &SimulationStats, duration_minutes: u64) {
-        println!("\n🤖 === RESULTS HFT SIMULATION ===");
+        println!("\n🤖 === HFT SIMULATION RESULTS ===");
         println!("⏱️  Duration: {} minutes", duration_minutes);
-        println!("📤 Trades executeds: {}", stats.transactions_sent);
-        println!("❌ Trades faileds: {}", stats.transactions_failed);
-        println!("📊 TPM moyen: {:.2}", stats.transactions_sent as f64 / duration_minutes as f64);
-        println!("⏱️  Latency moyenne: {:.1}ms", stats.average_response_time);
+        println!("📤 Trades executed: {}", stats.transactions_sent);
+        println!("❌ Trades failed: {}", stats.transactions_failed);
+        println!("📊 Avg TPM: {:.2}", stats.transactions_sent as f64 / duration_minutes as f64);
+        println!("⏱️  Avg latency: {:.1}ms", stats.average_response_time);
         
         let success_rate = if stats.transactions_sent + stats.transactions_failed > 0 {
             (stats.transactions_sent as f64 / (stats.transactions_sent + stats.transactions_failed) as f64) * 100.0
         } else {
             0.0
         };
-        println!("✅ Taux de success: {:.1}%", success_rate);
+        println!("✅ Success rate: {:.1}%", success_rate);
         println!("==================================\n");
     }
 }
@@ -566,7 +565,7 @@ mod tests {
         let target_16 = MiningSimulator::calculate_target(16);
         let target_20 = MiningSimulator::calculate_target(20);
         
-        // Plus the difficulty is high, plus the target is bas
+        // Higher difficulty = lower target
         assert!(target_20 < target_16);
     }
 
@@ -574,11 +573,11 @@ mod tests {
     async fn test_mining_simulation() {
         let mut simulator = MiningSimulator::new();
         
-        // Test with a duration very courte
+        // Test with a very short duration
         let result = simulator.simulate_mining_competition(2, 1, 10).await;
         assert!(result.is_ok());
         
-        // Verify que the mineurs ont been createds
+        // Verify that miners were created
         assert_eq!(simulator.miners.len(), 2);
     }
 }

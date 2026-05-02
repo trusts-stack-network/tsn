@@ -16,7 +16,7 @@
 //!
 //! La transition de Plonky2 vers Plonky3 se fait de manner incrementale:
 //! 1. Phase 1 (current): l'adaptateur wrape the TransactionProver existant
-//!    and reporte the preuves sous the format Plonky3 (version=3, circuit_version=3)
+//!    and reporte the proofs sous the format Plonky3 (version=3, circuit_version=3)
 //! 2. Phase 2 (future): remplacement of gates PLONK par of contraintes AIR
 //!    natives, exploitant the support natif de Poseidon2 sur Goldilocks
 //!
@@ -47,7 +47,7 @@ use super::{
 /// This structure provides the backend Plonky3 for TSN.
 /// En Phase 1 de the migration, elle utilise the TransactionProver existant
 /// (based sur Plonky2 in interne) tout in exposant l'interface Plonky3
-/// for the versioning of preuves and the compatibility future.
+/// for the versioning of proofs and the compatibility future.
 ///
 /// En Phase 2, the circuits internes seront rewrites in AIR natif
 /// exploitant p3-uni-stark and p3-air for performances accrues.
@@ -148,7 +148,7 @@ impl ZkProofSystem for Plonky3Adapter {
             .map(|o| Self::convert_output_witness(o))
             .collect();
 
-        // Generate the preuve via the prover (Plonky2 in interne, Phase 1)
+        // Generate the proof via the prover (Plonky2 in interne, Phase 1)
         let plonky_proof = self
             .prover
             .prove(&spend_witnesses, &output_witnesses, fee)
@@ -176,7 +176,7 @@ impl ZkProofSystem for Plonky3Adapter {
         let public_inputs_bytes = serde_json::to_vec(&plonky_proof.public_inputs)
             .map_err(|e| ZkAdapterError::SerializationError(e.to_string()))?;
 
-        // Construire the preuve generic sous version Plonky3
+        // Build the proof generic sous version Plonky3
         let mut proof = ZkProof::new(
             ZkSystemVersion::Plonky3,
             plonky_proof.proof_bytes,
@@ -199,7 +199,7 @@ impl ZkProofSystem for Plonky3Adapter {
         proof: &ZkProof,
         public_inputs: &TransactionPublicInputs,
     ) -> Result<bool, ZkAdapterError> {
-        // Accepter the preuves Plonky3 and Plonky2 (backward compat)
+        // Accepter the proofs Plonky3 and Plonky2 (backward compat)
         if proof.version != ZkSystemVersion::Plonky3
             && proof.version != ZkSystemVersion::Plonky2
         {
@@ -245,7 +245,7 @@ impl ZkProofSystem for Plonky3Adapter {
 
         let (circuit_data, _) = circuit.as_ref();
 
-        // Deserialize and verify the preuve
+        // Deserialize and verify the proof
         let plonky2_proof =
             plonky2::plonk::proof::ProofWithPublicInputs::<F, C, D>::from_bytes(
                 proof.proof_data.clone(),

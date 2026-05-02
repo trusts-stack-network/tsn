@@ -254,7 +254,7 @@ pub fn verify_batch_simple(entries: &[BatchVerificationEntry]) -> bool {
     verify_batch(entries, &BatchVerificationConfig::default()).all_valid
 }
 
-/// Statistiques de performance for benchmarking
+/// Statistics de performance for benchmarking
 #[derive(Debug, Clone)]
 pub struct BatchVerificationStats {
     /// Number de signatures par seconde

@@ -441,13 +441,13 @@ mod crypto_regression {
                   "Different position must produce different nullifier");
     }
 
-    /// Test de regression : the preuves ZK doivent be verifiable
+    /// Test de regression : the proofs ZK doivent be verifiable
     #[test]
     fn test_zk_proof_verification() {
-        // Note: this test requires a implementation completee of preuves ZK
+        // Note: this test requires a implementation completee of proofs ZK
         // Pour l'instant, on teste juste the structure
         
-        let proof_data = vec![0u8; 192]; // Typical size d'une preuve Groth16
+        let proof_data = vec![0u8; 192]; // Typical size d'une proof Groth16
         let proof = ZKProof::from_bytes(&proof_data);
         
         assert_eq!(proof.to_bytes().len(), 192, "Proof must maintain size");

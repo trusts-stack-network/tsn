@@ -93,7 +93,7 @@ impl SignatureVerifier {
         Ok(())
     }
 
-    /// Verifie qu'une key publique is valid for the consensus actuel
+    /// Verifies that a public key is valid for the consensus actuel
     pub fn validate_public_key(&self, key: &PublicKey) -> Result<(), ConsensusError> {
         match key {
             PublicKey::SlhDsa(_) => Ok(()),

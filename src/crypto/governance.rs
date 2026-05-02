@@ -34,7 +34,7 @@ pub struct ProposalId(pub [u8; 32]);
 pub enum ConfigParameter {
     /// Period de transition ML-DSA → SLH-DSA (en blocs)
     SignatureTransitionPeriod(u64),
-    /// Seuil de consensus for the votes (en pourcentage, 0-100)
+    /// Threshold for consensus for the votes (en pourcentage, 0-100)
     ConsensusThreshold(u8),
     /// Duration de validity d'une proposition (en blocs)
     ProposalValidityPeriod(u64),
@@ -94,7 +94,7 @@ pub enum ProposalStatus {
 pub struct GovernanceConfig {
     /// Period de transition signature (blocs)
     pub signature_transition_period: u64,
-    /// Seuil de consensus (pourcentage)
+    /// Threshold for consensus (pourcentage)
     pub consensus_threshold: u8,
     /// Duration de validity of proposals (blocs)
     pub proposal_validity_period: u64,
@@ -116,7 +116,7 @@ impl Default for GovernanceConfig {
     }
 }
 
-/// Gestionnaire of the system de governance
+/// Governance system manager
 #[derive(Debug)]
 pub struct GovernanceManager {
     /// Current configuration

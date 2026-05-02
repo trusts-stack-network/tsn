@@ -71,9 +71,9 @@ pub enum ConsensusError {
 pub struct PqConsensusConfig {
     /// Block height from which SLH-DSA becomes mandatory
     pub slh_dsa_activation_height: u64,
-    /// Algorithme by default for the nouveaux blocs
+    /// Default algorithm for new blocks
     pub default_algorithm: SignatureAlgorithm,
-    /// Period de thanks to for the transition (en blocs)
+    /// Transition period in blocks
     pub transition_period: u64,
 }
 
@@ -82,7 +82,7 @@ impl Default for PqConsensusConfig {
         Self {
             slh_dsa_activation_height: u64::MAX, // Pas encore enabled by default
             default_algorithm: SignatureAlgorithm::MlDsa65,
-            transition_period: 10080, // ~1 semaine de blocs
+            transition_period: 10080, // ~1 week of blocks
         }
     }
 }
@@ -129,7 +129,7 @@ impl PqConsensusValidator {
         }
     }
 
-    /// Determines l'algorithme de signature attendu for a bloc given
+    /// Determines the expected signature algorithm for a given block
     pub fn expected_algorithm(&self, block_height: u64) -> SignatureAlgorithm {
         if block_height >= self.config.slh_dsa_activation_height {
             // After l'activation, SLH-DSA devient obligatoire

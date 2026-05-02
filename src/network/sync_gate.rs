@@ -35,15 +35,15 @@ impl MiningStatus {
     /// Returns a message lisible describing the statut de minage.
     pub fn mining_status_message(&self) -> String {
         match self {
-            MiningStatus::CanMine => "Minage authorized: node synchronized avec le network".to_string(),
+            MiningStatus::CanMine => "Mining authorized: node synchronized avec le network".to_string(),
             MiningStatus::BehindNetwork { local_height, network_tip, gap } => {
                 format!(
-                    "Minage suspendu: node en retard de {} blocs (local: {}, network: {})",
+                    "Mining suspended: node is {} blocks behind (local: {}, network: {})",
                     gap, local_height, network_tip
                 )
             }
             MiningStatus::NoNetworkTips => {
-                "Minage authorized: no peer connu, fonctionnement en mode solo".to_string()
+                "Mining authorized: no known peers, operating in solo mode".to_string()
             }
         }
     }
@@ -105,7 +105,7 @@ impl SyncGate {
         } else {
             let gap = net_tip - local_height;
             warn!(
-                "Minage suspendu: node en retard de {} blocs (local: {}, network: {})",
+                "Mining suspended: node is {} blocks behind (local: {}, network: {})",
                 gap, local_height, net_tip
             );
             MiningStatus::BehindNetwork {

@@ -1,6 +1,6 @@
-//! Wallet support for the preuves ZK Halo2
-//! 
-//! Generates and handles the preuves ZK for the transactions privates
+//! Wallet ZK proof support (Halo2)
+//!
+//! Generates and handles ZK proofs for private transactions
 
 use crate::crypto::proof::ZkProof;
 use crate::crypto::commitment::NoteCommitment;
@@ -35,37 +35,37 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 // use zeroize::Zeroize;
 
-/// Configuration for the generation de preuves ZK
+/// Configuration for ZK proof generation
 #[derive(Clone, Debug)]
 pub struct ProofConfig {
-    /// Degree of the polynomial for the parameters KZG
+    /// Polynomial degree for KZG parameters
     pub k: u32,
-    /// Timeout for the generation de preuve
+    /// Timeout for proof generation
     pub timeout: Duration,
-    /// Size maximale of the cache
+    /// Maximum cache size
     pub cache_size: usize,
 }
 
 impl Default for ProofConfig {
     fn default() -> Self {
         Self {
-            k: 17, // 2^17 = 131072 contraintes
+            k: 17, // 2^17 = 131072 constraints
             timeout: Duration::from_secs(30),
             cache_size: 100,
         }
     }
 }
 
-/// Circuit Halo2 for the preuves de note
+/// Halo2 circuit for note proofs
 #[derive(Clone, Debug)]
 pub struct NoteCircuit {
-    /// Valeur de the note (private)
+    /// Note value (private witness)
     pub value: Value<Fr>,
-    /// Randomness de the note (private)
+    /// Note randomness (private witness)
     pub randomness: Value<Fr>,
-    /// Hash de the key public of the destinataire (private)
+    /// Recipient public key hash (private witness)
     pub recipient_pk_hash: Value<Fr>,
-    /// Commitment de the note (public)
+    /// Note commitment (public input)
     pub commitment: Value<Fr>,
 }
 
@@ -109,7 +109,7 @@ impl Circuit<Fr> for NoteCircuit {
         layouter.assign_region(
             || "note commitment",
             |mut region| {
-                // Assigne the valeurs privates
+                // Assign the private witnesses
                 let value_cell = region.assign_advice(
                     || "value",
                     config.advice[0],
@@ -139,7 +139,7 @@ impl Circuit<Fr> for NoteCircuit {
                     || self.commitment,
                 )?;
 
-                // Expose the commitment like instance publique
+                // Expose the commitment as a public instance
                 region.constrain_instance(commitment_cell.cell(), config.instance, 0)?;
 
                 Ok(())
@@ -148,7 +148,7 @@ impl Circuit<Fr> for NoteCircuit {
     }
 }
 
-/// Configuration of the circuit de note
+/// Note circuit column configuration
 #[derive(Clone, Debug)]
 pub struct NoteConfig {
     advice: [Column<Advice>; 3],
@@ -156,20 +156,20 @@ pub struct NoteConfig {
     constant: Column<Fixed>,
 }
 
-/// Statistiques de performance for the preuves ZK
+/// ZK proof performance statistics
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProofStats {
     /// Total number of generated proofs
     pub total_proofs: u64,
-    /// Temps moyen de generation (en ms)
+    /// Average generation time (ms)
     pub avg_generation_time_ms: f64,
-    /// Temps minimum de generation (en ms)
+    /// Minimum generation time (ms)
     pub min_generation_time_ms: u64,
-    /// Temps maximum de generation (en ms)
+    /// Maximum generation time (ms)
     pub max_generation_time_ms: u64,
     /// Number of cached proofs
     pub cached_proofs: usize,
-    /// Taux de success of the cache (0.0 to 1.0)
+    /// Cache hit rate (0.0 to 1.0)
     pub cache_hit_rate: f64,
 }
 
@@ -186,38 +186,38 @@ impl Default for ProofStats {
     }
 }
 
-/// Gestionnaire de preuves ZK for the wallet
+/// ZK proof manager for the wallet
 pub struct ZkWallet {
-    /// Cache of preuves generatedes (indexed par commitment)
+    /// Cache of generated proofs (keyed by commitment)
     proof_cache: LruCache<[u8; 32], ZkProof>,
-    /// Parameters KZG for Halo2
+    /// KZG parameters for Halo2
     params: Arc<ParamsKZG<ark_bn254::Bn254>>,
-    /// Key de verification
+    /// Verifying key
     verifying_key: Arc<VerifyingKey<ark_bn254::G1Affine>>,
-    /// Key de preuve
+    /// Proving key
     proving_key: Arc<ProvingKey<ark_bn254::G1Affine>>,
     /// Configuration
     config: ProofConfig,
-    /// Statistiques de performance
+    /// Performance statistics
     stats: Arc<Mutex<ProofStats>>,
-    /// Counter de hits/miss of the cache
+    /// Cache hit/miss counters
     cache_hits: u64,
     cache_misses: u64,
 }
 
 impl ZkWallet {
-    /// Creates a new wallet ZK with the configuration by default
+    /// Creates a new ZK wallet with the default configuration
     pub fn new() -> Result<Self, WalletError> {
         Self::with_config(ProofConfig::default())
     }
 
-    /// Creates a new wallet ZK with a configuration custom
+    /// Creates a new ZK wallet with a custom configuration
     pub fn with_config(config: ProofConfig) -> Result<Self, WalletError> {
         // Generates the parameters KZG
         let params = ParamsKZG::<ark_bn254::Bn254>::setup(config.k, OsRng);
         let params = Arc::new(params);
 
-        // Creates the circuit vide for the generation of keys
+        // Create an empty circuit for key generation
         let empty_circuit = NoteCircuit {
             value: Value::unknown(),
             randomness: Value::unknown(),
@@ -225,7 +225,7 @@ impl ZkWallet {
             commitment: Value::unknown(),
         };
 
-        // Generates the keys de verification and de preuve
+        // Generate the verifying and proving keys
         let vk = keygen_vk(&params, &empty_circuit)
             .map_err(|e| WalletError::SetupError(format!("Error generation VK: {:?}", e)))?;
         let pk = keygen_pk(&params, vk.clone(), &empty_circuit)
@@ -246,7 +246,7 @@ impl ZkWallet {
         })
     }
 
-    /// Generates a preuve ZK for a note
+    /// Generates a ZK proof for a note
     pub fn prove_note(&mut self, note: &Note) -> Result<ZkProof, WalletError> {
         let start_time = Instant::now();
         let commitment = note.commitment();
@@ -261,12 +261,12 @@ impl ZkWallet {
         
         self.cache_misses += 1;
 
-        // Convertedt the valeurs in elements de champ
+        // Convert the values to field elements
         let value_fr = Fr::from(note.value);
         let recipient_fr = Fr::from_le_bytes_mod_order(&note.recipient_pk_hash);
         let commitment_fr = Fr::from_le_bytes_mod_order(&commitment_bytes);
 
-        // Creates the circuit with the valeurs reals
+        // Create the circuit with real witness values
         let circuit = NoteCircuit {
             value: Value::known(value_fr),
             randomness: Value::known(note.randomness),
@@ -274,7 +274,7 @@ impl ZkWallet {
             commitment: Value::known(commitment_fr),
         };
 
-        // Generates the preuve
+        // Generate the proof
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
         let instances = &[&[commitment_fr]];
         
@@ -293,12 +293,12 @@ impl ZkWallet {
             OsRng,
             &mut transcript,
         )
-        .map_err(|e| WalletError::ProofError(format!("Error generation preuve: {:?}", e)))?;
+        .map_err(|e| WalletError::ProofError(format!("Proof generation error: {:?}", e)))?;
 
         let proof_bytes = transcript.finalize();
         let proof = ZkProof::from_bytes(&proof_bytes)?;
         
-        // Cache the preuve
+        // Cache the proof
         self.proof_cache.put(commitment_bytes, proof.clone());
         
         // Update the statistics
@@ -309,7 +309,7 @@ impl ZkWallet {
         Ok(proof)
     }
     
-    /// Verifies a preuve ZK
+    /// Verifies a ZK proof
     pub fn verify_proof(&self, proof: &ZkProof, commitment: &NoteCommitment) -> Result<bool, WalletError> {
         let commitment_bytes = commitment.to_bytes();
         let commitment_fr = Fr::from_le_bytes_mod_order(&commitment_bytes);
@@ -338,14 +338,14 @@ impl ZkWallet {
         }
     }
 
-    /// Generates a preuve de nullifier
+    /// Generates a nullifier proof
 //     pub fn prove_nullifier(&mut self, note: &Note, nullifier: &Nullifier) -> Result<ZkProof, WalletError> {
-        // Pour l'instant, utilise the same logique que prove_note
-        // Dans a implementation completee, il faudrait a circuit separated
+        // For now, reuses the note proof circuit
+        // A full implementation would use a dedicated nullifier circuit
         self.prove_note(note)
     }
 
-    /// Vide the cache of preuves
+    /// Clears the proof cache
     pub fn clear_cache(&mut self) {
         self.proof_cache.clear();
         self.cache_hits = 0;
@@ -353,7 +353,7 @@ impl ZkWallet {
         self.update_cache_stats();
     }
 
-    /// Returns the statistics de performance
+    /// Returns performance statistics
     pub fn get_stats(&self) -> ProofStats {
         self.stats.lock()
             .unwrap_or_else(|e| e.into_inner()) // recover from poisoned mutex
@@ -370,7 +370,7 @@ impl ZkWallet {
         &self.config
     }
 
-    /// Updates the statistics after generation d'une preuve
+    /// Updates statistics after a proof is generated
     fn update_stats(&self, generation_time: Duration) {
         let mut stats = self.stats.lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -378,7 +378,7 @@ impl ZkWallet {
         
         stats.total_proofs += 1;
         
-        // Update the temps min/max
+        // Update min/max times
         if time_ms < stats.min_generation_time_ms {
             stats.min_generation_time_ms = time_ms;
         }
@@ -386,7 +386,7 @@ impl ZkWallet {
             stats.max_generation_time_ms = time_ms;
         }
         
-        // Calculate the moyenne mobile
+        // Update rolling average
         let total = stats.total_proofs as f64;
         stats.avg_generation_time_ms = 
             (stats.avg_generation_time_ms * (total - 1.0) + time_ms as f64) / total;
@@ -433,10 +433,10 @@ pub enum WalletError {
     #[error("Serialization error: {0}")]
     SerializationError(String),
     
-    #[error("Timeout lors de la generation de preuve")]
+    #[error("Proof generation timed out")]
     TimeoutError,
-    
-    #[error("Parameters invalids: {0}")]
+
+    #[error("Invalid parameters: {0}")]
     InvalidParams(String),
 }
 
@@ -457,18 +457,18 @@ mod tests {
         let mut wallet = ZkWallet::new().unwrap();
         let mut rng = OsRng;
         
-        // Creates a note de test
+        // Create a test note
         let recipient_pk_hash = [1u8; 32];
         let note = Note::new(1000, recipient_pk_hash, &mut rng);
         let commitment = note.commitment();
         
-        // Generates a preuve
+        // Generate a proof
         let proof_result = wallet.prove_note(&note);
         assert!(proof_result.is_ok());
         
         let proof = proof_result.unwrap();
         
-        // Verify the preuve
+        // Verify the proof
         let verification_result = wallet.verify_proof(&proof, &commitment);
         assert!(verification_result.is_ok());
         assert!(verification_result.unwrap());
@@ -482,15 +482,15 @@ mod tests {
         let recipient_pk_hash = [1u8; 32];
         let note = Note::new(1000, recipient_pk_hash, &mut rng);
         
-        // First generation (miss of the cache)
+        // First generation (cache miss)
         let proof1 = wallet.prove_note(&note).unwrap();
         assert_eq!(wallet.cache_size(), 1);
         
-        // Second generation (hit of the cache)
+        // Second generation (cache hit)
         let proof2 = wallet.prove_note(&note).unwrap();
         assert_eq!(wallet.cache_size(), 1);
         
-        // Les preuves doivent be identiques
+        // Proofs must be identical
         assert_eq!(proof1.to_bytes(), proof2.to_bytes());
     }
 
@@ -502,11 +502,11 @@ mod tests {
         let recipient_pk_hash = [1u8; 32];
         let note = Note::new(1000, recipient_pk_hash, &mut rng);
         
-        // Generates a preuve for remplir the cache
+        // Generate a proof to populate the cache
         wallet.prove_note(&note).unwrap();
         assert_eq!(wallet.cache_size(), 1);
         
-        // Vide the cache
+        // Clear the cache
         wallet.clear_cache();
         assert_eq!(wallet.cache_size(), 0);
     }
@@ -522,7 +522,7 @@ mod tests {
         let initial_stats = wallet.get_stats();
         assert_eq!(initial_stats.total_proofs, 0);
         
-        // Generates a preuve
+        // Generate a proof
         wallet.prove_note(&note).unwrap();
         
         let updated_stats = wallet.get_stats();

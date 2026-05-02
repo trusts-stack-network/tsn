@@ -1,8 +1,8 @@
 //! Benchmarks for Plonky2 (STARKs post-quantiques)
 //! 
 //! Compare the performances de:
-//! - Generation de preuve Plonky2 (FRI-based, post-quantique)
-//! - Verification de preuve Plonky2
+//! - Plonky2 proof generation (FRI-based, post-quantum)
+//! - Plonky2 proof verification
 //! 
 //! Contexte de security:
 //! - Plonky2: 128-bit post-quantum security via FRI + Poseidon2
@@ -86,7 +86,7 @@ fn build_transaction_circuit(num_inputs: usize, num_outputs: usize) -> (CircuitD
     (circuit_data, verifier_data)
 }
 
-/// Generates a preuve for the circuit de commitment
+/// Generates a proof for the commitment circuit
 fn prove_commitment(
     circuit_data: &CircuitData<F, C, D>,
     value: u64,
@@ -112,7 +112,7 @@ fn prove_commitment(
     (proof, elapsed)
 }
 
-/// Generates a preuve for the circuit de transaction
+/// Generates a proof for the circuit de transaction
 fn prove_transaction(
     circuit_data: &CircuitData<F, C, D>,
     inputs: Vec<u64>,
@@ -131,7 +131,7 @@ fn prove_transaction(
     (proof, elapsed)
 }
 
-/// Verifies a preuve
+/// Verifies a proof
 fn verify_proof(
     verifier_data: &VerifierCircuitData<F, C, D>,
     proof: &ProofWithPublicInputs<F, C, D>,
@@ -143,7 +143,7 @@ fn verify_proof(
     (result, elapsed)
 }
 
-/// Benchmark: Generation de preuve de commitment
+/// Benchmark: Generation de proof de commitment
 pub fn bench_commitment_generation() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -159,7 +159,7 @@ pub fn bench_commitment_generation() -> crate::crypto::bench::halo2_commitment_b
     })
 }
 
-/// Benchmark: Verification de preuve de commitment
+/// Benchmark: Verification de proof de commitment
 pub fn bench_commitment_verification() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -176,7 +176,7 @@ pub fn bench_commitment_verification() -> crate::crypto::bench::halo2_commitment
     })
 }
 
-/// Benchmark: Generation de preuve de transaction (1 input, 1 output)
+/// Benchmark: Generation de proof de transaction (1 input, 1 output)
 pub fn bench_transaction_generation_1_1() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -194,7 +194,7 @@ pub fn bench_transaction_generation_1_1() -> crate::crypto::bench::halo2_commitm
     })
 }
 
-/// Benchmark: Generation de preuve de transaction (2 inputs, 2 outputs)
+/// Benchmark: Generation de proof de transaction (2 inputs, 2 outputs)
 pub fn bench_transaction_generation_2_2() -> crate::crypto::bench::halo2_commitment_bench::BenchmarkResult {
     use crate::crypto::bench::halo2_commitment_bench::{BenchmarkResult, BenchmarkRunner};
     
@@ -290,7 +290,7 @@ mod tests {
     fn test_commitment_circuit() {
         let (circuit_data, verifier_data) = build_commitment_circuit();
         
-        // Generates a preuve
+        // Generates a proof
         let mut pw = PartialWitness::new();
         let proof = circuit_data.prove(pw).expect("proof failed");
         

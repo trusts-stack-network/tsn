@@ -144,7 +144,7 @@ fn build_plonky2_commitment_circuit() -> (CircuitData<F, C, D>, VerifierCircuitD
     (circuit_data, verifier_data)
 }
 
-/// Generates a preuve Plonky2
+/// Generates a proof Plonky2
 fn prove_plonky2_commitment(
     circuit_data: &CircuitData<F, C, D>,
     value: F,
@@ -168,7 +168,7 @@ fn prove_plonky2_commitment(
     (proof, elapsed)
 }
 
-/// Verifies a preuve Plonky2
+/// Verifies a proof Plonky2
 fn verify_plonky2_commitment(
     verifier_data: &VerifierCircuitData<F, C, D>,
     proof: &ProofWithPublicInputs<F, C, D>,

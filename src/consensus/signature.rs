@@ -75,7 +75,7 @@ impl SlhDsaVerifier {
         
         // Verification de the signature SLH-DSA
         // Note: In a real implementation, use pqcrypto-sphincsplus or similar
-        // Ici on simule the logique de verification
+        // simule the logique de verification
         self.verify_slh_dsa_sha2_128s(&message_hash, signature, public_key)
     }
 

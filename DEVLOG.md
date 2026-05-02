@@ -3,8 +3,158 @@
 Every TSN release, chronological (newest first). Mirrors the site version at
 https://www.tsnchain.com/devlog.html.
 
-Network: **tsn-testnet-v5** (genesis reset with v2.3.5 on April 19, 2026).
-Minimum protocol version required to peer: **2.3.7**.
+Network: **tsn-testnet-v9** (genesis reset with v2.5.0 on April 14, 2026).
+Minimum protocol version required to peer: **2.9.15**.
+
+---
+
+## v2.9.15 — English-only codebase, minimum version gate
+*May 2, 2026 — network-private*
+
+- **MINIMUM_VERSION** bumped to `2.9.15` — nodes below this version are rejected at handshake with an escalating IP ban on repeat offenders.
+- **Stray file removed.** A file with an invalid name (`pow.rs et block.rs`) containing only placeholder comments was deleted.
+
+---
+
+## v2.9.14 — Stability backports, auto-recovery timeout
+*May 1, 2026 — network-private*
+
+- Backport W1 + W1B + H-G + FIX-D patches from the internal stability branch.
+- Auto-recovery timeout extended to 180s to handle slow-sync seeds without false-positive wipes.
+
+---
+
+## v2.9.13 — Default relay role, full auto-recovery
+*May 1, 2026 — network-private*
+
+- `--role` defaults to `relay` when the role cannot be detected from the binary name.
+- Full auto-recovery cycle triggered on lost consensus (wipe + fast-sync + restart).
+
+---
+
+## v2.9.9–v2.9.11 — Background backfill
+*April 30, 2026 — network-private*
+
+- New background goroutine backfills historical blocks that are missing after a fast-sync. The node continues mining immediately while the backfill walks the chain descending from the tip, so seeds that joined via snapshot still serve historical data within minutes.
+- `[0u8;32]` placeholder entries in the block DB are now treated as missing and trigger a re-fetch.
+
+---
+
+## v2.9.8 — Dynamic checkpoint quorum, RAM fix
+*April 29, 2026 — network-private*
+
+- `CHECKPOINT_QUORUM` is now dynamically set to 80% of connected seeds (minimum 4) to handle partial outages gracefully.
+- Plonky3 circuit warm-up limited to the 5 most-common transaction shapes, preventing the OOM crash on 4 GB seeds.
+
+---
+
+## v2.9.7 — Persistent identity, checkpoint history
+*April 28, 2026 — network-private*
+
+- The libp2p identity key is now persisted to disk so a node keeps the same PeerID across restarts. This improves relay scoring stability and reduces "new peer" churn in the explorer.
+- `network_name` added to `/version.json` — lets the explorer verify it is talking to the correct testnet.
+- `/chain/checkpoint_history` endpoint exposes the last 10 signed checkpoints.
+- Phase C HTTP fallback: if GossipSub delivery fails, the node falls back to direct HTTP push to known peers.
+
+---
+
+## v2.9.2–v2.9.6 — Checkpoint voting stabilization
+*April 26–27, 2026 — network-private*
+
+- `checkpoint_vote` anchor candidate scan now starts at `fast_sync_base` — prevents false finality on placeholder heights.
+- Shallow fallback window added for the post-fast-sync transition (the first LWMA_WINDOW blocks after import).
+- Checkpoint snapshot always published on tick, even if quorum was already reached, so late-joining nodes can catch up.
+- `CHECKPOINT_QUORUM` raised to 4 (was 3). Added `/chain/quorum_status` endpoint and explorer quorum halo badge.
+
+---
+
+## v2.9.0–v2.9.1 — BIP-152 RAM fix, memory diet
+*April 24–25, 2026 — network-private*
+
+- **RAM diet.** Sled cache capped at 256 MB (was 1 GB). Block LRU reduced to 200 entries. Fast-sync anchor recomputed from DB on load rather than held in memory.
+- **BIP-152 RAM fix.** The compact block relay was cloning the entire mempool before filtering by short_id. Now filters first, clones only matching entries — peak RAM during block relay drops from ~800 MB to ~30 MB on a full mempool.
+
+---
+
+## v2.8.9 — Trusted-quorum checkpoints, BIP-152 hardening
+*April 23, 2026 — network-private*
+
+- **Trusted-quorum checkpoint vote.** Every 100 blocks, the 4+ seed nodes sign a checkpoint. A node that receives a checkpoint signed by quorum finalizes that height — no reorg can go below it. This provides Byzantine-fault-tolerant finality without a separate consensus round.
+- **BIP-152 DoS protections.** Added per-peer max announces, dedup window (60s), and rate limit (10 `cmpctblock` per minute). Prevents a rogue peer from flooding the relay pool.
+
+---
+
+## v2.8.7 — Compact Block Relay (BIP-152)
+*April 21, 2026 — network-private*
+
+- **Full Compact Block Relay** inspired by Bitcoin's BIP-152.
+  - When a miner finds a block, it sends a `cmpctblock` message containing only short IDs (8-byte SipHash-2-4 keyed on a nonce + block hash) instead of full transactions.
+  - Receiving nodes reconstruct the block from their mempool. Only missing transactions trigger a `getblocktxn` / `blocktxn` round-trip.
+  - Bandwidth savings: **up to 98%** on peers with a well-filled mempool (typical case: 0 missing transactions).
+
+---
+
+## v2.8.5 — Iron Fish wallet, anchored mempool, cumulative work drift fix
+*April 19, 2026 — network-private*
+
+- **Iron Fish wallet integration.** HD key derivation via BIP44 path `m/44'/990'/0'/0/i`. Compatible with external signers that implement the same derivation standard.
+- **Anchored mempool.** Transactions now include an anchor block hash. After a reorg deeper than the anchor, the transaction is evicted from the mempool and must be resubmitted. Prevents replay attacks after chain reorganizations.
+- **Cumulative work drift fix.** `cumulative_work` is now recalculated from actual block difficulties on snapshot import, eliminating the drift that built up over long-running nodes and caused incorrect fork-choice decisions.
+
+---
+
+## v2.8.0–v2.8.1 — Pipeline fixes, signed snapshots
+*April 17–18, 2026 — network-private*
+
+- Block relay pipeline ordering fixed (Phase A).
+- `MAX_SPENDS` raised from 25 to 50 per transaction.
+- Fast-sync snapshots are now signed with the node's Ed25519 identity key and verified by the importing node.
+- Auto-consolidate wallet notes is ON by default.
+
+---
+
+## v2.7.4 — Anti-freeze HTTP, lock-free chain reads
+*April 16, 2026 — network-private*
+
+- Added timeouts on all outbound HTTP calls (block fetch, peer probe, snapshot download) to prevent the node from hanging when a peer is unresponsive.
+- Chain reads in the HTTP API layer are now lock-free (replaced `RwLock<Chain>` with an `Arc<ArcSwap<Chain>>`), eliminating the latency spike that occurred when a miner was writing a new block.
+
+---
+
+## v2.5.0 — Cortex node, fork-choice fixes, testnet-v9
+*April 14, 2026 — network-private*
+
+- **Cortex node Phase 1.** New node role (`./tsn cortex`) that runs a WASM runtime for dApp service modules. Cortex nodes earn fees from dApps (NetherSwap, Whispr, ZST) — not from coinbase. This separates the service layer from the mining layer, keeping mining rewards fully decentralized.
+- 4 fork-choice fixes improving convergence when two miners find blocks within the same second.
+- Testnet-v9 reset with a fresh genesis (`tsn-testnet-v9`).
+
+---
+
+## v2.4.3 — Wallet cleanup, bulk leaf fetch, testnet-v8
+*April 13, 2026 — network-private*
+
+- `wallet-cleanup` command: removes spent and orphaned notes from the local wallet DB.
+- `balance` now shows spendable notes only (excludes locked and unconfirmed outputs).
+- `/leaves/bulk` endpoint: fetches multiple Merkle leaves in one HTTP call. The wallet uses it before a send to pre-validate witness availability, reducing "missing witness" errors.
+- Testnet-v8 reset. `cumulative_work` persisted to DB on snapshot import.
+
+---
+
+## v2.4.1 — DNS bootstrap, MINIMUM_VERSION bump
+*April 11, 2026 — network-private*
+
+- P2P bootstrap now resolves `seed1-4.tsnchain.com` via DNS at startup. Rotating a seed's IP no longer requires a binary update.
+- `MINIMUM_VERSION` bumped to 2.4.1.
+
+---
+
+## v2.4.0 — Relay pool payouts, V2 TX inclusion, testnet-v6
+*April 10, 2026 — network-private*
+
+- **Relay pool payouts.** 3% of each block reward is distributed to relay nodes. Score is based on per-block participation — a relay earns credit for every block it is present for (signed or unsigned), not on a sliding window threshold. Snapshot confirmation: the relay must be present at the payout block height.
+- V2 shielded transactions now enforced at consensus level (V1 format rejected by default).
+- Miner attribution in the explorer correctly labels which node mined a given block.
+- Testnet-v6 reset.
 
 ---
 
