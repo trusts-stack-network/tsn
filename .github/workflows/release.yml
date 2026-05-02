@@ -1,10 +1,13 @@
 name: Build Release Binaries
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v2.0.2)'
+        description: 'Release tag (e.g. v2.9.15)'
         required: true
 
 jobs:
@@ -16,31 +19,16 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact: tsn-linux-x86_64
             archive: tar.gz
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact: tsn-macos-x86_64
-            archive: tar.gz
-          - os: macos-14
-            target: aarch64-apple-darwin
-            artifact: tsn-macos-aarch64
-            archive: tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: tsn-windows-x86_64.exe
-            archive: zip
 
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Git config (Windows path fix)
-        if: runner.os == 'Windows'
-        run: git config --global core.protectNTFS false
-
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (nightly from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
@@ -51,30 +39,35 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.target }}-cargo-
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Strip binary
         run: strip target/${{ matrix.target }}/release/tsn
 
-      - name: Prepare artifact (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Determine tag
+        id: tag
         run: |
-          cp target/${{ matrix.target }}/release/tsn ${{ matrix.artifact }}
-          tar czf tsn-${{ github.event.inputs.tag }}-${{ matrix.target }}.tar.gz ${{ matrix.artifact }}
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Prepare artifact (Windows)
-        if: runner.os == 'Windows'
+      - name: Package
         run: |
-          copy target\${{ matrix.target }}\release\tsn.exe ${{ matrix.artifact }}
-          Compress-Archive -Path ${{ matrix.artifact }} -DestinationPath tsn-${{ github.event.inputs.tag }}-${{ matrix.target }}.zip
+          TAG=${{ steps.tag.outputs.tag }}
+          cp target/${{ matrix.target }}/release/tsn tsn
+          tar czf tsn-${TAG}-linux-x86_64.tar.gz tsn
+          echo "ASSET=tsn-${TAG}-linux-x86_64.tar.gz" >> $GITHUB_ENV
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag }}
-          files: tsn-${{ github.event.inputs.tag }}-${{ matrix.target }}.*
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: ${{ env.ASSET }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
