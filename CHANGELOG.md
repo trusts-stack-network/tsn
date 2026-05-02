@@ -4,6 +4,14 @@ All notable changes to Trust Stack Network are documented here.
 
 ---
 
+## [2.9.19] — 2026-05-02
+
+### Fixed
+- **Pinned EXPECTED_GENESIS_HASH for testnet-v12**: had been left empty for 8 days since the v12 reset, allowing nodes to silently fast-sync from a non-canonical chain — the source of community-side "forks". Now pinned to `007870623724127ccf467b74041c3fed0e3569f02c66414a3018d7c04856e38d`. Mismatched nodes are rejected at startup AND in the version-gate middleware.
+- **Auto-update reuses existing snapshot GitHub token**: `check_github()` now reads `TSN_SNAPSHOT_GH_TOKEN` (already provisioned on seeds via `EnvironmentFile=/root/.tsn-snapshot-gh-token`) before falling back to `TSN_GITHUB_TOKEN`. No new env var to add on seeds.
+
+---
+
 ## [2.9.18] — 2026-05-02
 
 ### Fixed

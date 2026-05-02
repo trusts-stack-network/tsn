@@ -414,8 +414,11 @@ pub const HARDCODED_CHECKPOINTS: &[(u64, &str)] = &[];
 /// v2.6.0: New genesis for testnet-v12 reset (April 24, 2026 — clean restart after
 /// a day of cascading forks from stuck rollback-guard nodes).
 /// Previous value (testnet-v11): "d387692f5be4c655b79cd8c14e9cd6d83957805c056166de4e68e12db41e3aaf"
-/// Empty string disables the genesis-hash check at startup, so existing v11 nodes
-/// auto-wipe on first v2.6.0 boot via the NETWORK_NAME mismatch path in
-/// main.rs::v2.3.5 auto-wipe. Will be pinned once the v12 genesis is produced by
-/// a majority of seeds (see `print_genesis_hash` test in src/main.rs).
-pub const EXPECTED_GENESIS_HASH: &str = "";
+/// v2.9.19: Pinned testnet-v12 genesis after 8 days of network operation.
+/// Confirmed identical on seed-1, seed-2, node-1 at block height 0.
+/// Without this pin, nodes booting fresh would have NO check that they
+/// joined the canonical chain — community nodes could fast-sync from a
+/// fork and never realize it. The mismatch is now caught at startup
+/// AND in the version_gate_middleware (X-TSN-Genesis header check).
+pub const EXPECTED_GENESIS_HASH: &str =
+    "007870623724127ccf467b74041c3fed0e3569f02c66414a3018d7c04856e38d";

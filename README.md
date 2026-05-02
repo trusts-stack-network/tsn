@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-2.9.18-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-2.9.19-blue">
   <img alt="Rust" src="https://img.shields.io/badge/rust-97k+_lines-orange">
   <img alt="Tests" src="https://img.shields.io/badge/tests-370+_passing-brightgreen">
   <img alt="Testnet" src="https://img.shields.io/badge/testnet--v9-live-success">
@@ -450,6 +450,7 @@ A cross-chain anonymous DEX built on TSN with AMM pools, escrow P2P, yield farmi
 
 ### v2.9.x — Checkpoint Voting & Backfill (2026-Q2)
 
+- **v2.9.19** — Fix: pinned `EXPECTED_GENESIS_HASH` for testnet-v12 (was empty for 8 days, source of silent forks); auto-update reuses existing `TSN_SNAPSHOT_GH_TOKEN` on seeds.
 - **v2.9.18** — Fix: auto-update blocked by GitHub API rate limit; `TSN_GITHUB_TOKEN` env var support added; fallback manifest deployed at `https://tsnchain.com/releases/latest.json`.
 - **v2.9.17** — Fix: version-ban fast-path blocked upgraded peers for up to 24h; nodes banned for using an old version remained blocked even after upgrading.
 - **v2.9.16** — Critical fix: `reorg_lock` held too long after PoW — sync write-lock timed out (15s), orphaning every community-mined block. Lock now released immediately after `add_block()`.

@@ -223,8 +223,12 @@ async fn check_github(client: &reqwest::Client) -> Option<ResolvedUpdate> {
         .header("Accept", "application/vnd.github+json")
         .timeout(Duration::from_secs(15));
     // Optional token to raise rate limit from 60 req/h to 5000 req/h.
-    // Set TSN_GITHUB_TOKEN in the node's systemd environment or shell.
-    if let Ok(token) = std::env::var("TSN_GITHUB_TOKEN") {
+    // Reuses TSN_SNAPSHOT_GH_TOKEN already provisioned on seeds via
+    // /root/.tsn-snapshot-gh-token (read by systemd EnvironmentFile=).
+    // Falls back to TSN_GITHUB_TOKEN for nodes that don't publish snapshots.
+    if let Ok(token) = std::env::var("TSN_SNAPSHOT_GH_TOKEN")
+        .or_else(|_| std::env::var("TSN_GITHUB_TOKEN"))
+    {
         req = req.header("Authorization", format!("Bearer {}", token));
     }
     let resp = req.send().await.ok()?;
