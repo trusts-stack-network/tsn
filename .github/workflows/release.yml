@@ -83,7 +83,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update release manifest on tsnchain.com
+        env:
+          MANIFEST_TOKEN: ${{ secrets.MANIFEST_DEPLOY_TOKEN }}
+          MANIFEST_URL: ${{ secrets.MANIFEST_DEPLOY_URL }}
         run: |
+          if [ -z "$MANIFEST_TOKEN" ] || [ -z "$MANIFEST_URL" ]; then
+            echo "Skipping manifest update (MANIFEST_DEPLOY_TOKEN or MANIFEST_DEPLOY_URL not set)"
+            exit 0
+          fi
           TAG=${{ steps.tag.outputs.tag }}
           ASSET=${{ env.ASSET }}
           SHA256=${{ env.SHA256 }}
@@ -91,8 +98,7 @@ jobs:
           printf '{"version":"%s","assets":{"%s":{"url":"%s","sha256":"%s"}}}\n' \
             "${TAG#v}" "$ASSET" "$DL_URL" "$SHA256" > latest.json
           curl -fsSL -X POST \
-            -H "Authorization: Bearer ${{ secrets.MANIFEST_DEPLOY_TOKEN }}" \
+            -H "Authorization: Bearer $MANIFEST_TOKEN" \
             -H "Content-Type: application/json" \
             --data-binary @latest.json \
-            "${{ secrets.MANIFEST_DEPLOY_URL }}"
-        if: ${{ secrets.MANIFEST_DEPLOY_TOKEN != '' }}
+            "$MANIFEST_URL"
