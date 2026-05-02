@@ -7381,6 +7381,13 @@ async fn cmd_node(
                     }
                 } // blockchain.write() dropped here.
 
+                // Release reorg lock immediately — wallet I/O, mempool, and
+                // broadcast don't need protection against concurrent reorgs.
+                // Holding it through HTTP broadcasts (endorsements + compact relay)
+                // was blocking sync.rs write-lock acquisition for 15-28s, causing
+                // every community-mined block to be orphaned (STEP8_REORG_LOCK_TIMEOUT).
+                drop(_reorg_read_post);
+
                 println!(
                     "\x1b[1;33m🧱 Potential mined block #{} (hash: {})\x1b[0m",
                     new_height,

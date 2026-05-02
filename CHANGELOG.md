@@ -4,6 +4,13 @@ All notable changes to Trust Stack Network are documented here.
 
 ---
 
+## [2.9.16] — 2026-05-02
+
+### Fixed
+- **Critical mining bug**: `reorg_lock` read-lock was held for up to 28 seconds after finding a PoW solution (spanning wallet I/O, mempool cleanup, and HTTP block broadcasts). The sync thread's write-lock acquisition timed out at 15s (`STEP8_REORG_LOCK_TIMEOUT`), preventing tip updates — causing every community-mined block to be orphaned. Lock is now released immediately after `add_block()` returns.
+
+---
+
 ## [2.9.15] — 2026-05-02
 
 ### Changed
