@@ -1388,6 +1388,91 @@ async fn attempt_snapshot_sync(
     // falls back to the previous behaviour.
     let lwma_seed = fetch_pre_snapshot_lwma_headers(&client, peer_url, snap_height).await;
 
+    // KF-007 + KF-008 (incident 2026-05-02): cross-validate the snapshot's
+    // claimed cumulative_work against a quorum of peers BEFORE importing.
+    // The hash + height cross-verify above (line ~1248) catches a peer
+    // serving a different chain, but it doesn't catch a peer that is on
+    // the right chain yet has propagated a drifted cum_work seed (which
+    // is exactly how KF-008 spreads). Without this gate, the importer
+    // inherits the peer's drifted seed and the drift becomes permanent.
+    //
+    // Strategy: build a peer list from operator-trusted peers + seeds,
+    // poll /chain/info on each, find the (height, hash) cluster the
+    // snapshot belongs to, and compare snap_work to the median cum_work
+    // among agreeing peers. If snap_work is more than CUM_WORK_DRIFT_TOLERANCE_PCT
+    // off the median, refuse the snapshot. The node will retry with a
+    // different peer at the next sync tick.
+    {
+        use super::cum_work_consensus::{
+            observe_peers, CUM_WORK_DRIFT_TOLERANCE_PCT, MIN_AGREEMENT_COUNT,
+        };
+        let peer_list: Vec<String> = state.peers.read()
+            .map(|p| p.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| super::is_contactable_peer(p))
+            .collect();
+        // Only run the cross-cum_work check if we have enough peers to
+        // form a quorum. With <3 peers we'd be back to single-source trust.
+        if peer_list.len() >= MIN_AGREEMENT_COUNT {
+            match observe_peers(&client, &peer_list, Duration::from_secs(5)).await {
+                Some(consensus) => {
+                    // Only enforce if the consensus is on the snapshot's tip.
+                    // (If consensus is on a different tip, the cross-verify
+                    // earlier should already have rejected — defensive check.)
+                    if consensus.height == snap_height && consensus.hash == block_hash {
+                        let median = consensus.median_cumulative_work;
+                        let tolerance = median.saturating_mul(CUM_WORK_DRIFT_TOLERANCE_PCT) / 100;
+                        let diff = if snap_work > median { snap_work - median } else { median - snap_work };
+                        if diff > tolerance && median > 0 {
+                            warn!(
+                                "Snapshot REJECTED (KF-008 cum_work drift): peer reports cw={} at height={} hash={}, but median of {} peers is cw={} (delta={}, tolerance={})",
+                                snap_work, snap_height, hex::encode(&block_hash[..8]),
+                                consensus.agreement_count, median, diff, tolerance
+                            );
+                            return Err(SyncError::InvalidResponse(format!(
+                                "snapshot cum_work {} disagrees with peer median {} by {} (>{}% of median)",
+                                snap_work, median, diff, CUM_WORK_DRIFT_TOLERANCE_PCT
+                            )));
+                        }
+                        info!(
+                            "Snapshot cum_work cross-check OK: snap_work={} within {}% of {} peers' median {} (delta={})",
+                            snap_work, CUM_WORK_DRIFT_TOLERANCE_PCT,
+                            consensus.agreement_count, median, diff
+                        );
+                    } else {
+                        // Defense in depth: hash+height cross-verify earlier
+                        // should already have caught this. Refuse anyway.
+                        warn!(
+                            "Snapshot REJECTED: peer consensus on (h={}, hash={}) does not match snapshot (h={}, hash={})",
+                            consensus.height, hex::encode(&consensus.hash[..8]),
+                            snap_height, hex::encode(&block_hash[..8])
+                        );
+                        return Err(SyncError::InvalidResponse(
+                            "snapshot tip disagrees with peer consensus".into()
+                        ));
+                    }
+                }
+                None => {
+                    // Not enough peers responded; downgrade to a soft warning
+                    // and proceed (the hash + height cross-verify is still in
+                    // effect from earlier). Fully refusing here would block
+                    // recovery in low-peer scenarios such as a coordinated
+                    // network reset (see comment at line 1283 about v2.5.4).
+                    warn!(
+                        "Snapshot cum_work cross-check SKIPPED: insufficient peer quorum (have {} contactable peers, need {})",
+                        peer_list.len(), MIN_AGREEMENT_COUNT
+                    );
+                }
+            }
+        } else {
+            info!(
+                "Snapshot cum_work cross-check SKIPPED: only {} contactable peers (need ≥{}); relying on hash+height cross-verify only",
+                peer_list.len(), MIN_AGREEMENT_COUNT
+            );
+        }
+    }
+
     // Import the snapshot
     let mut chain = state.blockchain.write().await;
     chain.import_snapshot_at_height(snapshot, snap_height, block_hash, diff, next_diff, snap_work);

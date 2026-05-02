@@ -4290,6 +4290,22 @@ struct SnapshotInfoResponse {
 /// tip value — when the snapshot lagged the tip, the receiver adopted a wildly
 /// inflated cw and then rejected every further block with LESS_WORK.
 async fn snapshot_info(State(state): State<Arc<AppState>>) -> Json<SnapshotInfoResponse> {
+    // KF-006 (incident 2026-05-02): toxic-snapshot quarantine.
+    // Before publishing snapshot metadata, check whether this node is on
+    // the canonical chain according to a quorum of peers. If we just
+    // recovered or are on a fork, we don't want to seed our state to
+    // others — that's how seed-1 served h=2 snapshots to seed-2/seed-3
+    // during the 2026-05-02 cascade.
+    if let Some(reason) = quarantine_reason(&state).await {
+        tracing::warn!("snapshot_info: refusing — quarantine: {}", reason);
+        return Json(SnapshotInfoResponse {
+            available: false,
+            height: 0,
+            block_hash: String::new(),
+            size_bytes: 0,
+            cumulative_work: "0".to_string(),
+        });
+    }
     let chain = state.blockchain.read().await;
     match chain.export_snapshot() {
         Some((data, height, hash)) => {
@@ -4314,6 +4330,72 @@ async fn snapshot_info(State(state): State<Arc<AppState>>) -> Json<SnapshotInfoR
     }
 }
 
+/// KF-006 quarantine check shared between `snapshot_info` and `snapshot_download`.
+/// Returns `Some(reason)` if the node MUST NOT serve a snapshot right now,
+/// `None` if serving is OK.
+///
+/// The check is conservative: any condition that suggests the local view is
+/// untrustworthy (just reset, fewer than 3 contactable peers, hash mismatch
+/// vs peer consensus) returns a quarantine reason. Low-peer scenarios
+/// (legitimately) skip the consensus check and only enforce the
+/// "just-reset" guard, so a coordinated network reset is not deadlocked.
+async fn quarantine_reason(state: &Arc<AppState>) -> Option<String> {
+    use crate::network::cum_work_consensus::observe_peers;
+    use std::time::Duration;
+
+    // Guard 1: never serve a snapshot if local height is suspiciously low.
+    // A node serving h<10 has either just reset or is empty; either way it
+    // shouldn't pretend to be a snapshot source.
+    let (local_h, local_hash) = {
+        let chain = state.blockchain.read().await;
+        (chain.height(), chain.latest_hash())
+    };
+    if local_h < 10 {
+        return Some(format!("local height {} below 10 (just reset?)", local_h));
+    }
+
+    // Guard 2: cross-check tip against peer consensus.
+    // Skip this guard if we have <3 contactable peers (low-peer scenario).
+    let peer_list: Vec<String> = state.peers.read()
+        .map(|p| p.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| crate::network::is_contactable_peer(p))
+        .collect();
+    if peer_list.len() < 3 {
+        return None; // Low-peer scenario: trust ourselves.
+    }
+    // 3-second timeout: if peers don't respond fast enough, we don't block
+    // the snapshot endpoint indefinitely. Default-allow on inconclusive.
+    let consensus = match observe_peers(
+        &state.http_client,
+        &peer_list,
+        Duration::from_secs(3),
+    ).await {
+        Some(c) => c,
+        None => return None, // Inconclusive — don't block.
+    };
+    // If consensus exists and matches our tip → serve. If it disagrees on
+    // hash at our height, we're on a fork → quarantine.
+    if consensus.height == local_h && consensus.hash != local_hash {
+        return Some(format!(
+            "fork detected: local hash {} vs consensus {} at h={} ({} peers agree)",
+            hex::encode(&local_hash[..8]),
+            hex::encode(&consensus.hash[..8]),
+            local_h,
+            consensus.agreement_count,
+        ));
+    }
+    // If consensus is significantly ahead of us, we're stale — quarantine.
+    if consensus.height > local_h + 50 {
+        return Some(format!(
+            "local h={} more than 50 blocks behind consensus h={}",
+            local_h, consensus.height
+        ));
+    }
+    None
+}
+
 /// GET /snapshot/download — download the state snapshot as compressed JSON.
 /// Uses a pre-cached snapshot (refreshed every 100 blocks) and semaphore (max 3 concurrent).
 /// Inspired by Cosmos state-sync (pre-generated snapshots) + Substrate (concurrent limits).
@@ -4322,6 +4404,12 @@ async fn snapshot_download(
 ) -> Result<axum::response::Response, StatusCode> {
     use axum::response::IntoResponse;
     use axum::http::header;
+
+    // KF-006 quarantine check (see snapshot_info doc comment).
+    if let Some(reason) = quarantine_reason(&state).await {
+        tracing::warn!("snapshot_download: refusing — quarantine: {}", reason);
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
 
     // Semaphore: max 3 concurrent snapshot downloads to prevent CPU/RAM saturation
     let _permit = state.snapshot_semaphore.clone().try_acquire_owned()

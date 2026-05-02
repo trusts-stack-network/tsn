@@ -197,7 +197,7 @@ pre-start check exits 1.
 
 ---
 
-## KF-006 — Toxic snapshot served by a stuck or freshly-reset node
+## KF-006 — Toxic snapshot served by a stuck or freshly-reset node — **MITIGATED → BLOCKED at first level**
 
 **Detected when:** a node that just appears to recover
 (`/admin/force-resync` or wipe + restart) ends up at h=2 or h=4 with
@@ -225,17 +225,29 @@ these states:
 - `cumulative_work` is more than 5% below the consensus seen from
   other peers.
 
-**Guardrail (NOT YET BLOCKED — tracked as Spec 4):** the rule is
-documented in `incident-2026-05-02/specs/P4-self-repair-specs.md`
-as Spec 4 (snapshot-publication quarantine). Not yet enforced in
-code. Until enforced, the manual rule is: do not run
-`/admin/force-resync` and serve other peers in the same window.
-This is one of the launch blockers for mainnet
-(`docs/network-profiles/mainnet-v1.md`).
+**Guardrail (BLOCKED — runtime check, 2026-05-03):**
+`src/network/api.rs::quarantine_reason()` is called by both
+`snapshot_info()` and `snapshot_download()` HTTP handlers. The
+function refuses to publish a snapshot if:
+1. Local height < 10 (just reset / not yet synced).
+2. Local hash at our height disagrees with peer consensus
+   (we're on a fork). Verified live: a node that just executed
+   `/admin/force-resync` returns
+   `{"available": false}` from `/snapshot/info` with log
+   `snapshot_info: refusing — quarantine: local height 0 below 10 (just reset?)`.
+
+Low-peer fallback: if fewer than 3 peers respond, the consensus
+check is skipped (avoids deadlock during a coordinated network
+reset, see commentary in `sync.rs:1283` v2.5.4). The "just-reset"
+guard remains in effect.
+
+Cross-link: the importer side (`KF-007`) refuses snapshots whose
+cum_work disagrees with peer median, so a contaminated source
+node cannot poison a recovering peer.
 
 ---
 
-## KF-007 — Fast-sync from a single source contaminates the new node
+## KF-007 — Fast-sync from a single source contaminates the new node — **BLOCKED**
 
 **Detected when:** a freshly-booted node reports a tip that no other
 seed can verify. Its `/block/height/N` for canonical N returns a
@@ -257,12 +269,32 @@ N=3 peers and only proceeds if the (height_band, tip_hash, cum_work)
 triple from X matches a cluster of ≥ ⌈N/2⌉+1 peers. If not, the
 client enters quarantine mode and retries.
 
-**Guardrail (NOT YET BLOCKED — tracked as Spec 1):** documented in
-the spec. Not yet in code. Mainnet launch blocker.
+**Guardrail (BLOCKED, 2026-05-03):**
+`src/network/cum_work_consensus.rs` provides `observe_peers()` and
+`detect_local_discrepancy()`. The snapshot import path
+(`src/network/sync.rs:~1390`) calls `observe_peers()` over the
+operator-trusted peer list, computes the median `cum_work` among
+peers that share the snapshot's `(height, hash)`, and refuses the
+snapshot if the peer-claimed `cum_work` is more than
+`CUM_WORK_DRIFT_TOLERANCE_PCT = 5%` off the median.
+
+Verified live: a fresh node booted with `--peer http://seed-1..4`
+fast-syncs and logs
+`Snapshot cum_work cross-check OK: snap_work=32011825153 within 5%
+of 3 peers' median 32011825153 (delta=0)`.
+
+If fewer than 3 peers are reachable, the cum_work cross-check is
+SKIPPED with a log line, and the existing hash+height cross-verify
+(at `sync.rs:1248`) remains the only barrier (still better than
+v2.9.20). This preserves recoverability under low-peer scenarios
+(coordinated reset, partition).
+
+Unit tests: 5/5 pass for the consensus module
+(`network::cum_work_consensus::tests`).
 
 ---
 
-## KF-008 — `cumulative_work` drift between same-chain peers
+## KF-008 — `cumulative_work` drift between same-chain peers — **MITIGATED + DETECTED**
 
 **Detected when:** two nodes with identical tip hash report different
 `cumulative_work` values via `/chain/info`. Sometimes after a recent
@@ -287,15 +319,57 @@ between nodes on the same on-disk chain). The remaining drift comes
 from snapshots themselves having internally-inconsistent
 `cumulative_work` values that propagate via fast-sync.
 
-**Guardrail (NOT YET BLOCKED):** open investigation. Tracked
-separately from `incident-2026-05-02`. Not currently a launch
-blocker for mainnet because mainnet snapshots will be
-seed-signed (KF-006 fix) and seeds will be authoritative on
-their own cum_work values.
+**Root cause confirmed (2026-05-03):** the `cumulative_work`
+seed value at `fast_sync_base` is taken from the peer's snapshot
+metadata (`import_snapshot_at_height` at `blockchain.rs:3294`)
+and stored in the local DB. Two nodes that fast-sync from
+different snapshots inherit different seeds; both walk forward
+with the same per-block deltas, so the inherited offset persists.
+The `v2.9.15` recompute walks only above `fast_sync_base` and
+cannot reconcile the seed.
+
+**Guardrail (MITIGATED + DETECTED, 2026-05-03):**
+
+1. **Propagation is now stopped at the source** — the KF-007
+   majority-vote at snapshot import refuses any snapshot whose
+   `cum_work` is more than 5% off the peer median. A drifted
+   snapshot can therefore no longer infect new nodes.
+
+2. **Existing drift is detected at runtime** — a background task
+   in `src/main.rs` (after `auto_update_loop`) runs every 120s,
+   polls peers, and when it finds the local node has the same
+   `(height, hash)` as the consensus but `cum_work` outside the
+   5% tolerance, it logs:
+   `KF-008 cum_work drift detected: kind=CumWorkDrift local=(...) consensus=(...)`
+   and increments `tsn_cumulative_work_drift_total`.
+
+3. **Optional auto-correction** — gated by env var
+   `TSN_AUTO_CORRECT_CUMWORK=1` (off by default), the runtime
+   monitor calls
+   `chain.set_cumulative_work_for_drift_correction(median)` to
+   bring the local value in line with the median. This is
+   non-consensus (chain selection is by hash, not by stored
+   cum_work) but operator-visible and operator-controllable.
+
+**Why MITIGATED, not BLOCKED:** the underlying determinism
+problem (cum_work that varies by import path even on the same
+chain) is **not fixed**. The current state is: drift is detected
+and reportable, drift can no longer spread via snapshot, but
+existing drifted nodes still need either auto-correction (opt-in)
+or a full chain replay from genesis (impractical).
+
+True BLOCKED status requires either:
+- Storing cum_work as part of a signed checkpoint that all peers
+  must agree on (Spec change — out of scope this session), or
+- Recomputing cum_work from full block headers from genesis at
+  every load (memory + I/O cost — needs evaluation).
+
+Both options are tracked as mainnet launch blockers in
+`docs/network-profiles/mainnet-v1.md`.
 
 ---
 
-## KF-009 — `epyc1-miner` solo fork from local hashpower asymmetry
+## KF-009 — `epyc1-miner` solo fork from local hashpower asymmetry — **MITIGATED → BLOCKED at watchdog level**
 
 **Detected when:** a single internal miner produces blocks faster
 than the rest of the network combined; its chain extends past
@@ -318,12 +392,50 @@ hashpower vs the rest of the network. Either run multiple miners
 across hosts, or limit `-t` to a value that doesn't dominate, or
 run the host as `--role relay` only.
 
-**Guardrail (MITIGATED, partially BLOCKED):**
-- `RELEASE_CHECKLIST.md` step "verify epyc1-miner is in relay role
-  or has -t ≤ network-balanced value" — manual.
-- A future automated guardrail would have the cluster monitor compute
-  cluster-total hashpower and alert when one host exceeds 30% of it.
-  Not currently implemented.
+**Guardrail (BLOCKED at watchdog level, 2026-05-03):**
+
+The watchdog in `src/main.rs:~6032` already detected SOLO FORK by
+height gap, but only LOGGED. It now AUTO-TRIGGERS recovery when
+**all** of the following hold:
+
+1. Local height > consensus height + `SOLO_FORK_THRESHOLD` (5
+   blocks).
+2. Condition has persisted for ≥
+   `SOLO_FORK_AUTO_RECOVERY_GRACE_SECS` (5 minutes), tracked via
+   `solo_fork_since` Instant.
+3. ≥ **4** verified peers agree on the canonical view (stricter
+   than the existing `MIN_PEERS_AGREE = 3`, to reduce false
+   positives).
+4. Live cum_work cross-check via
+   `cum_work_consensus::observe_peers()` shows our local
+   `cumulative_work` is below 95 % of the peer median (i.e. we
+   are losing on Nakamoto, not winning).
+5. `TSN_DISABLE_AUTO_FORK_RECOVERY=1` env var is **NOT** set
+   (kill switch for emergency operator override).
+
+When all five conditions hold, the watchdog calls
+`chain.reset_for_snapshot_resync()` directly — the same code path
+the existing `/admin/force-resync` HTTP endpoint uses, so the
+behaviour is identical and tested.
+
+When the cum_work check shows we are NOT losing (we have more
+work than the majority), the watchdog logs a structured WARN
+saying _"Not auto-recovering — local chain may genuinely have
+more work. Operator decision required."_ This protects a
+legitimate fast miner from getting wiped, in line with the user's
+explicit constraint: "L'objectif n'est pas de casser un mineur
+légitime, mais d'empêcher une dérive locale de contaminer
+l'ensemble."
+
+**Manual rule still applies** (defence in depth): a host running
+a single miner with `-t > 4` and the rest of the network mining
+at < 4 threads MUST be operationally constrained (e.g. `--role
+relay` or coordinated mining) — see `RELEASE_CHECKLIST.md`.
+
+**Operational note**: in the testnet-v12 ring, `epyc1-miner` was
+stopped during the 2026-05-02 incident and is not currently
+running. If/when restarted, the watchdog auto-trigger guards
+against contamination from any future asymmetry.
 
 ---
 

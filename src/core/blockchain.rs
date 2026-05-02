@@ -758,6 +758,36 @@ impl ShieldedBlockchain {
         tracing::info!("RESYNC: Chain reset to height 0, ready for snapshot sync");
     }
 
+    /// KF-008 (incident 2026-05-02): manual cum_work correction for drift recovery.
+    ///
+    /// This method exists ONLY to bring a node's `cumulative_work` value back
+    /// in line with the network consensus when a drift has been detected by
+    /// the runtime monitor in `main.rs`. It is NOT a normal mutation —
+    /// `cumulative_work` should be derived from chain state, not set by hand.
+    ///
+    /// The drift the method addresses is the value drift inherited from
+    /// different snapshots having different cum_work seeds at fast_sync_base.
+    /// Two nodes on the same chain (same hash at every height) end up with
+    /// different cum_work because their snapshots embedded different seeds.
+    /// This method overwrites the local value to match the median of peers
+    /// known to be on the same chain (verified by hash agreement).
+    ///
+    /// Gated by env var `TSN_AUTO_CORRECT_CUMWORK=1` at the call site so the
+    /// adjustment is opt-in. The chain hash is unchanged; only the metric
+    /// the operator sees is reconciled with peers.
+    pub fn set_cumulative_work_for_drift_correction(&mut self, new_value: u128) {
+        let old_value = self.cumulative_work;
+        self.cumulative_work = new_value;
+        if let Some(ref db) = self.db {
+            let _ = db.save_cumulative_work(self.canonical_height, new_value);
+            let _ = db.set_metadata("cumulative_work", &new_value.to_string());
+        }
+        tracing::warn!(
+            "KF-008 drift correction: cumulative_work {} -> {} at height {} (operator opt-in via TSN_AUTO_CORRECT_CUMWORK)",
+            old_value, new_value, self.canonical_height
+        );
+    }
+
     /// Get the current chain height (0-indexed).
     /// Uses canonical_height (persisted in DB metadata) — NOT height_index.len().
     pub fn height(&self) -> u64 {

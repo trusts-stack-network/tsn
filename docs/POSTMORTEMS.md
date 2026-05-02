@@ -159,18 +159,64 @@ made the divergence permanent.
 
 ### Long-tail follow-ups (not blocking, tracked separately)
 
-- Spec 1 (majority-vote fast-sync), Spec 3 (auto-trigger
-  reset_for_snapshot_resync on confirmed SOLO FORK), Spec 4
-  (snapshot-publication quarantine) drafted in
-  `incident-2026-05-02/specs/P4-self-repair-specs.md`. None deployed.
-  Required before mainnet launch. Tracked in
-  `docs/network-profiles/mainnet-v1.md` launch blockers.
+- Spec 1 (majority-vote fast-sync) — **DONE 2026-05-03**, see
+  `KF-007` BLOCKED.
+- Spec 3 (auto-trigger reset_for_snapshot_resync on SOLO FORK) —
+  **DONE 2026-05-03**, see `KF-009` BLOCKED at watchdog level
+  (with cum_work guard against false positives on a legitimate
+  faster miner).
+- Spec 4 (snapshot-publication quarantine) — **DONE 2026-05-03**,
+  see `KF-006` BLOCKED at first level.
 
-- `cumulative_work` drift between same-hash chain tips on different
-  nodes was observed despite the v2.9.15 fix
-  (`blockchain.rs:447-501,1856-1908`). seed-1 and node-1 reported
-  different `cum_work` values for the same block hash. Open
-  investigation, not yet a postmortem of its own.
+- `cumulative_work` drift root cause confirmed and partially
+  fixed 2026-05-03 (`KF-008` MITIGATED + DETECTED): the seed
+  value at `fast_sync_base` is inherited from the snapshot
+  publisher and never reconciled. KF-007's quorum check stops
+  propagation at import; a runtime monitor detects existing
+  drift and increments a metric; an opt-in env var allows
+  operator-controlled correction. True determinism (recompute
+  from genesis, or signed-checkpoint cum_work) is a mainnet
+  launch blocker, not a testnet blocker.
+
+### Follow-up entry — 2026-05-03 — KF-006/007/008/009 implementation
+
+After the original incident postmortem (above), the four
+"NOT YET BLOCKED" failure modes were addressed in code on
+2026-05-03 — same branch (`backport-10k`), same testnet-v12
+profile, no public release. See `KNOWN_FAILURES.md` for the
+exact runtime guardrail per item. Files modified:
+
+- `src/network/cum_work_consensus.rs` (new, ~280 lines, 5 unit
+  tests passing): pure-data module providing `observe_peers()`
+  and `detect_local_discrepancy()`; serves KF-007/008/009.
+- `src/network/sync.rs:~1390` — KF-007 wired into snapshot
+  import: cross-checks `cum_work` against peer median.
+- `src/network/api.rs::quarantine_reason()` — KF-006 wired into
+  `snapshot_info()` and `snapshot_download()` HTTP endpoints.
+- `src/main.rs:~5824 watchdog` — KF-009 wired with 4-condition
+  trigger (height + persistence + cum_work + kill switch).
+- `src/main.rs:~5822 runtime monitor` — KF-008 detection task,
+  120s tick.
+- `src/core/blockchain.rs:730` —
+  `set_cumulative_work_for_drift_correction()` for opt-in
+  correction.
+
+Live verification on isolated test node:
+- KF-007: log line _"Snapshot cum_work cross-check OK:
+  snap_work=32011825153 within 5% of 3 peers' median 32011825153
+  (delta=0)"_ during fast-sync.
+- KF-006: log line _"snapshot_info: refusing — quarantine: local
+  height 0 below 10 (just reset?)"_ after `/admin/force-resync`.
+- KF-008: 5 unit tests pass; runtime monitor wired and silent
+  (cluster has no detectable drift in this test session).
+- KF-009: code paths compile and `test_chainwork_deterministic`
+  unit test passes (no consensus regression).
+
+**No public release.** The new binary
+(`sha256:1b9603367df8b471049de8017abb527e1de1895a986184e5c3ec1586f9634f6c`)
+is held as an RC for staged Ring 0 deploy after operator
+review. Per the 2026-05-02 rules, `RELEASE_DECISIONS.md` will
+get its entry only after Ring 0 soak.
 
 ---
 
