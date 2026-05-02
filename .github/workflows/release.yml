@@ -82,6 +82,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Sign release with Ed25519
+        env:
+          RELEASE_SIGNING_KEY_PEM: ${{ secrets.RELEASE_SIGNING_KEY_PEM }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY_PEM" ]; then
+            echo "Skipping signature (RELEASE_SIGNING_KEY_PEM not set)"
+            echo "SIGNATURE=" >> $GITHUB_ENV
+            exit 0
+          fi
+          pip install --quiet cryptography
+          echo "$RELEASE_SIGNING_KEY_PEM" > /tmp/signing.key
+          chmod 600 /tmp/signing.key
+          SIG=$(python3 -c "
+          from cryptography.hazmat.primitives.serialization import load_pem_private_key
+          with open('/tmp/signing.key', 'rb') as f:
+              pk = load_pem_private_key(f.read(), password=None)
+          sha = bytes.fromhex('${{ env.SHA256 }}')
+          print(pk.sign(sha).hex())")
+          rm -f /tmp/signing.key
+          echo "SIGNATURE=$SIG" >> $GITHUB_ENV
+          echo "Signed release with Ed25519 (sig length=${#SIG})"
+
       - name: Update release manifest on tsnchain.com
         env:
           MANIFEST_TOKEN: ${{ secrets.MANIFEST_DEPLOY_TOKEN }}
@@ -94,9 +116,13 @@ jobs:
           TAG=${{ steps.tag.outputs.tag }}
           ASSET=${{ env.ASSET }}
           SHA256=${{ env.SHA256 }}
+          SIG=${{ env.SIGNATURE }}
+          VERSION="${TAG#v}"
+          ASSET_KEY="tsn-${VERSION}-linux-x86_64.tar.gz"
           DL_URL="https://github.com/trusts-stack-network/tsn/releases/download/${TAG}/${ASSET}"
-          printf '{"version":"%s","assets":{"%s":{"url":"%s","sha256":"%s"}}}\n' \
-            "${TAG#v}" "$ASSET" "$DL_URL" "$SHA256" > latest.json
+          printf '{"version":"%s","assets":{"%s":{"url":"%s","sha256":"%s","size":%s}},"signature":"%s"}\n' \
+            "$VERSION" "$ASSET_KEY" "$DL_URL" "$SHA256" "$(stat -c%s "$ASSET")" "$SIG" > latest.json
+          cat latest.json
           curl -fsSL -X POST \
             -H "Authorization: Bearer $MANIFEST_TOKEN" \
             -H "Content-Type: application/json" \
