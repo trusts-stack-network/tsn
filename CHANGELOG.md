@@ -4,6 +4,13 @@ All notable changes to Trust Stack Network are documented here.
 
 ---
 
+## [2.9.20] — 2026-05-02
+
+### Fixed
+- **v2.9.19 genesis pin rejected pre-v2.9.19 peers**: pre-v2.9.19 nodes were configured with `EXPECTED_GENESIS_HASH=""` and emit `X-TSN-Genesis: ""` in their request headers. After the v2.9.19 pin, the version-gate middleware rejected them with `genesis="" != 007870...`, blocking sync between upgraded seeds and the existing v2.9.15 community network. Empty header is now treated as "not declared" (same as missing), so the gate only rejects peers that explicitly declare a non-matching genesis.
+
+---
+
 ## [2.9.19] — 2026-05-02
 
 ### Fixed

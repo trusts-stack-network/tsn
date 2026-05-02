@@ -478,7 +478,7 @@ pub async fn version_gate_middleware(
                 let still_bad =
                     pv.map(|v| !crate::network::version_check::version_meets_minimum(v)).unwrap_or(false)
                     || pn.map(|n| n != crate::config::NETWORK_NAME).unwrap_or(false)
-                    || pg.map(|g| g != crate::config::EXPECTED_GENESIS_HASH).unwrap_or(false);
+                    || pg.map(|g| !g.is_empty() && g != crate::config::EXPECTED_GENESIS_HASH).unwrap_or(false);
                 if still_bad {
                     let remaining = entry.until.duration_since(now).as_secs();
                     return (
@@ -511,9 +511,13 @@ pub async fn version_gate_middleware(
         Some(n) => n != crate::config::NETWORK_NAME,
         None => false,
     };
+    // v2.9.20: pre-v2.9.19 nodes send X-TSN-Genesis="" because EXPECTED_GENESIS_HASH
+    // was empty in their config — treat empty header as "not declared" (same as None)
+    // so we don't reject otherwise-valid peers running older versions during the
+    // network upgrade window.
     let bad_genesis = match peer_genesis {
-        Some(g) => g != crate::config::EXPECTED_GENESIS_HASH,
-        None => false,
+        Some(g) if !g.is_empty() => g != crate::config::EXPECTED_GENESIS_HASH,
+        _ => false,
     };
     let below_min = bad_version || bad_network || bad_genesis;
     // Build a concise reason for logs and the 403 body.
