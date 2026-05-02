@@ -463,16 +463,31 @@ pub async fn version_gate_middleware(
     let now = std::time::Instant::now();
 
     // (1) Fast path: already banned?
+    // Peek at the version/network/genesis headers first: if the peer has since
+    // upgraded to a compliant version, let the request fall through so that
+    // step (3) clears the stale ban entry. Without this, a peer that was banned
+    // with offense_count >= 11 (24-hour ban) would remain blocked even after
+    // upgrading, because the fast path returned 403 before reading headers.
     {
         let bans = state.version_bans.read().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = bans.get(&ip) {
             if now < entry.until {
-                let remaining = entry.until.duration_since(now).as_secs();
-                return (
-                    axum::http::StatusCode::FORBIDDEN,
-                    format!("IP banned for outdated version (retry in {}s)", remaining),
-                )
-                    .into_response();
+                let pv = headers.get("X-TSN-Version").and_then(|v| v.to_str().ok());
+                let pn = headers.get("X-TSN-Network").and_then(|v| v.to_str().ok());
+                let pg = headers.get("X-TSN-Genesis").and_then(|v| v.to_str().ok());
+                let still_bad =
+                    pv.map(|v| !crate::network::version_check::version_meets_minimum(v)).unwrap_or(false)
+                    || pn.map(|n| n != crate::config::NETWORK_NAME).unwrap_or(false)
+                    || pg.map(|g| g != crate::config::EXPECTED_GENESIS_HASH).unwrap_or(false);
+                if still_bad {
+                    let remaining = entry.until.duration_since(now).as_secs();
+                    return (
+                        axum::http::StatusCode::FORBIDDEN,
+                        format!("IP banned for outdated version (retry in {}s)", remaining),
+                    )
+                        .into_response();
+                }
+                // Peer has upgraded — fall through; step (3) will clear the ban.
             }
         }
     }
