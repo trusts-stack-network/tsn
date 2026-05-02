@@ -4,6 +4,13 @@ All notable changes to Trust Stack Network are documented here.
 
 ---
 
+## [2.9.18] — 2026-05-02
+
+### Fixed
+- **Auto-update blocked by GitHub API rate limit**: Seeds and community nodes were hitting the 60 req/h unauthenticated rate limit; `check_github()` now reads `TSN_GITHUB_TOKEN` env var and adds an `Authorization` header when present (5000 req/h). Fallback manifest at `https://tsnchain.com/releases/latest.json` is now deployed; `AssetInfo.sha256` made optional so the manifest can be deployed without a pre-computed hash.
+
+---
+
 ## [2.9.17] — 2026-05-02
 
 ### Fixed
