@@ -1,6 +1,6 @@
 //! Couche d'adaptation ZK for TSN - Migration Plonky2 → Plonky3
 //!
-//! This module provides a abstraction unified on the systems de preuve ZK,
+//! This module provides a abstraction unified on the systems de proof ZK,
 //! allowstant a migration progressive de Plonky2 vers Plonky3.
 //!
 //! ## Architecture
@@ -25,8 +25,8 @@
 //!
 //! ## Security Considerations
 //!
-//! - Les preuves Plonky2 utilisent FRI (post-quantique, hash-based)
-//! - Les preuves Plonky3 utilisent FRI + AIR (post-quantique, Poseidon2 natif)
+//! - Les proofs Plonky2 utilisent FRI (post-quantique, hash-based)
+//! - Les proofs Plonky3 utilisent FRI + AIR (post-quantique, Poseidon2 natif)
 //! - Les deux fournissent ~128 bits de security post-quantique
 //!
 //! References:
@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// Version of the system de preuve used
+/// Version of the system de proof used
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum ZkSystemVersion {
     /// Plonky2 STARKs - system legacy, post-quantique pur
@@ -96,9 +96,9 @@ pub enum ZkAdapterError {
 /// Preuve ZK generic independsante of the backend
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZkProof {
-    /// Version of the system de preuve
+    /// Version of the system de proof
     pub version: ZkSystemVersion,
-    /// Data de the preuve (format specific at the backend)
+    /// Data de the proof (format specific at the backend)
     #[serde(with = "hex_serde")]
     pub proof_data: Vec<u8>,
     /// Entries publics serializedes
@@ -108,10 +108,10 @@ pub struct ZkProof {
     pub metadata: ProofMetadata,
 }
 
-/// Metadata d'une preuve
+/// Metadata d'une proof
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProofMetadata {
-    /// Size de the preuve in bytes
+    /// Size de the proof in bytes
     pub proof_size: usize,
     /// Number of constraints in the circuit
     pub constraint_count: Option<usize>,
@@ -122,7 +122,7 @@ pub struct ProofMetadata {
 }
 
 impl ZkProof {
-    /// Creates a new preuve
+    /// Creates a new proof
     pub fn new(
         version: ZkSystemVersion,
         proof_data: Vec<u8>,
@@ -140,12 +140,12 @@ impl ZkProof {
         }
     }
 
-    /// Returns the size totale de the preuve
+    /// Returns the size totale de the proof
     pub fn size(&self) -> usize {
         self.proof_data.len() + self.public_inputs.len()
     }
 
-    /// Verifies that the preuve is of the format attendu
+    /// Verifies that the proof is of the format attendu
     pub fn validate_format(&self) -> Result<(), ZkAdapterError> {
         if self.proof_data.is_empty() {
             return Err(ZkAdapterError::InvalidProofFormat(
@@ -163,7 +163,7 @@ impl ZkProof {
     }
 }
 
-/// Size maximale d'une preuve (protection DoS)
+/// Size maximale d'une proof (protection DoS)
 pub const MAX_PROOF_SIZE: usize = 500 * 1024; // 500 KB
 
 /// Entries publics d'une transaction
@@ -212,15 +212,15 @@ pub struct OutputWitness {
     pub randomness: [u8; 32],
 }
 
-/// Trait principal for the systems de preuve ZK
+/// Trait principal for the systems de proof ZK
 ///
 /// Ce trait defines l'interface commune entre Plonky2 and Plonky3.
 /// Les implementations doivent garantir:
-/// - La soundness: a preuve invalid not passe pas the verification
-/// - La completeness: a preuve valid passe toujours
+/// - La soundness: a proof invalid not passe pas the verification
+/// - La completeness: a proof valid passe toujours
 /// - La zero-knowledge: pas de fuite d'information
 pub trait ZkProofSystem: Send + Sync {
-    /// Generates a preuve de transaction
+    /// Generates a proof de transaction
     ///
     /// # Arguments
     /// * `spends` - Witnesses for the notes spentes
@@ -237,10 +237,10 @@ pub trait ZkProofSystem: Send + Sync {
         fee: u64,
     ) -> Result<ZkProof, ZkAdapterError>;
 
-    /// Verifies a preuve de transaction
+    /// Verifies a proof de transaction
     ///
     /// # Arguments
-    /// * `proof` - La preuve to verify
+    /// * `proof` - La proof to verify
     /// * `public_inputs` - Les entries publics
     fn verify_transaction(
         &self,
@@ -261,16 +261,16 @@ pub trait ZkProofSystem: Send + Sync {
     fn preload_circuit_params(&mut self) -> Result<(), ZkAdapterError>;
 }
 
-/// Factory for create the system de preuve appropriate
+/// Factory for create the system de proof appropriate
 pub struct ZkSystemFactory;
 
 impl ZkSystemFactory {
-    /// Creates the system de preuve by default (Plonky3)
+    /// Creates the system de proof by default (Plonky3)
     pub fn create_default() -> Result<Box<dyn ZkProofSystem>, ZkAdapterError> {
         Ok(Box::new(plonky3_adapter::Plonky3Adapter::new()?))
     }
 
-    /// Creates a system de preuve specific
+    /// Creates a system de proof specific
     pub fn create(version: ZkSystemVersion) -> Result<Box<dyn ZkProofSystem>, ZkAdapterError> {
         match version {
             ZkSystemVersion::Plonky2 => {

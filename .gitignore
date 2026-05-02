@@ -1,4 +1,7 @@
 # Wallets
+wallet.db
+wallet.db-shm
+wallet.db-wal
 wallet.json
 wallet2.json
 my-wallet.json

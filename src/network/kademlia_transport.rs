@@ -62,7 +62,7 @@ impl Default for KademliaTransportConfig {
     }
 }
 
-/// Statistiques of the transport
+/// Transport statistics
 #[derive(Debug, Default, Clone)]
 pub struct TransportStats {
     pub udp_messages_sent: u64,

@@ -511,7 +511,7 @@ async fn test_network_congestion_handling() {
             println!("Congestion network managed: {} messages processeds", processed);
         }
         Err(_) => {
-            panic!("Timeout lors du traitement de la congestion");
+            panic!("Timeout while handling congestion");
         }
     }
 }

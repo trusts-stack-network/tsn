@@ -87,7 +87,7 @@ impl AuthContext {
 
 /// Shared state for the authentication middleware
 pub struct AuthMiddlewareState {
-    /// Gestionnaire de keys API
+    /// API key manager
     pub key_manager: Arc<RwLock<ApiKeyManager>>,
     /// Rate limiting par key API: (key_id, bucket)
     pub rate_buckets: Arc<RwLock<HashMap<String, RateBucket>>>,

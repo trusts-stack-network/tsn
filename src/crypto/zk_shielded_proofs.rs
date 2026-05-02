@@ -144,20 +144,20 @@ impl ShieldedOutputNote {
         }
     }
 
-    /// Calculates the commitment de this note d'output
+    /// Calculates the commitment for this output note
     pub fn compute_commitment(&self) -> NoteCommitment {
         commit_to_note(self.value, &self.recipient_pk_hash, &self.commitment_randomness)
     }
 }
 
-/// Transaction shielded completee ready for the preuve ZK
+/// Complete shielded transaction ready for ZK proof generation
 #[derive(Clone)]
 pub struct ShieldedTransaction {
-    /// Notes d'input (spentes)
+    /// Input notes (being spent)
     pub inputs: Vec<ShieldedInputNote>,
-    /// Notes d'output (created)
+    /// Output notes (being created)
     pub outputs: Vec<ShieldedOutputNote>,
-    /// Frais de transaction (publics)
+    /// Transaction fee (public)
     pub transaction_fee: u64,
 }
 
@@ -216,11 +216,11 @@ impl ShieldedTransaction {
 /// C'est this that is visible on the blockchain TSN
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShieldedTransactionPublicData {
-    /// Nullifiers of notes spentes (prevents double-spending)
+    /// Nullifiers of spent notes (prevents double-spending)
     pub input_nullifiers: Vec<Nullifier>,
-    /// Commitments of news notes created
+    /// Commitments of newly created notes
     pub output_commitments: Vec<NoteCommitment>,
-    /// Frais de transaction (en clair)
+    /// Transaction fee (plaintext)
     pub transaction_fee: u64,
 }
 
@@ -237,7 +237,7 @@ pub enum ShieldedTransactionError {
     ImbalancedTransaction,
 }
 
-/// Circuit R1CS for the preuve ZK de transaction shielded
+/// R1CS circuit for the shielded transaction ZK proof
 /// Prouve the validity without reveal the valeurs privates
 #[derive(Clone)]
 pub struct ShieldedTransactionCircuit {
@@ -407,7 +407,7 @@ impl ConstraintSynthesizer<Fr> for ShieldedTransactionCircuit {
         // ALLOCATION DES VARIABLES PUBLIQUES
         // =========================================================================
 
-        // Frais de transaction (public)
+        // Transaction fee (public)
         let fee = UInt64::new_input(cs.clone(), || Ok(transaction.transaction_fee))?;
 
         // Nullifiers of inputs (publics)
@@ -494,7 +494,7 @@ impl ConstraintSynthesizer<Fr> for ShieldedTransactionCircuit {
     }
 }
 
-/// System de preuves ZK for transactions shielded
+/// ZK proof system for shielded transactions
 pub struct ShieldedProofSystem {
     proving_key: ProvingKey<Bn254>,
     verifying_key: VerifyingKey<Bn254>,
@@ -516,7 +516,7 @@ impl ShieldedProofSystem {
         })
     }
 
-    /// Generates a preuve ZK for a transaction shielded
+    /// Generates a ZK proof for a shielded transaction
     pub fn prove_transaction(
         &self,
         transaction: ShieldedTransaction,
@@ -543,7 +543,7 @@ impl ShieldedProofSystem {
             public_inputs.push(bytes32_to_field(&commitment.0));
         }
         
-        // Generates the preuve
+        // Generate the proof
         let proof = Groth16::<Bn254>::prove(&self.proving_key, circuit, &mut OsRng)?;
         
         Ok(ShieldedTransactionZkProof {
@@ -552,7 +552,7 @@ impl ShieldedProofSystem {
         })
     }
 
-    /// Verifies a preuve ZK de transaction shielded
+    /// Verifies a ZK proof for a shielded transaction
     pub fn verify_transaction(
         &self,
         proof: &ShieldedTransactionZkProof,
@@ -560,14 +560,14 @@ impl ShieldedProofSystem {
         // Reconstruit the inputs publics
         let mut public_inputs = Vec::new();
         
-        // Frais
+        // Fee
         public_inputs.push(Fr::from(proof.public_data.transaction_fee));
-        
+
         // Nullifiers
         for nullifier in &proof.public_data.input_nullifiers {
             public_inputs.push(bytes32_to_field(&nullifier.0));
         }
-        
+
         // Commitments
         for commitment in &proof.public_data.output_commitments {
             public_inputs.push(bytes32_to_field(&commitment.0));
@@ -589,22 +589,22 @@ impl ShieldedProofSystem {
     }
 }
 
-/// Preuve ZK completee for a transaction shielded
+/// Complete ZK proof for a shielded transaction
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShieldedTransactionZkProof {
-    /// Preuve Groth16
+    /// Groth16 proof
     pub proof: Proof<Bn254>,
-    /// Data publics de the transaction
+    /// Public transaction data
     pub public_data: ShieldedTransactionPublicData,
 }
 
 impl ShieldedTransactionZkProof {
-    /// Serializes the preuve in bytes for the stockage
+    /// Serializes the proof to bytes for storage
     pub fn to_bytes(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         Ok(bincode::serialize(self)?)
     }
 
-    /// Deserializes a preuve from the bytes
+    /// Deserializes a proof from bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(bincode::deserialize(bytes)?)
     }
@@ -718,19 +718,19 @@ mod tests {
         
         let system = proof_system.unwrap();
         let _vk = system.verifying_key();
-        // Le setup fonctionne without erreur
+        // Setup completes without error
     }
 
     #[test] 
     fn test_proof_serialization() {
-        // Test with a preuve fictive
+        // Test with a dummy proof
         let public_data = ShieldedTransactionPublicData {
             input_nullifiers: vec![],
             output_commitments: vec![],
             transaction_fee: 100,
         };
 
-        // Note: Ce test requiresrait a vraie preuve for be complete
+        // Note: a real proof would be needed for a complete test
         assert!(public_data.transaction_fee == 100);
     }
 }

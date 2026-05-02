@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// Contexte RPC shared
 #[derive(Clone)]
 pub struct RpcContext {
-    /// Gestionnaire de keys API
+    /// API key manager
     pub auth_manager: Arc<tokio::sync::RwLock<auth::ApiKeyManager>>,
     /// Rate limiter
     pub rate_limiter: Arc<tokio::sync::RwLock<rate_limiter::RateLimiter>>,

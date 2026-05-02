@@ -39,7 +39,7 @@ pub enum GovernanceEvent {
 /// Manager integrated de governance for TSN
 #[derive(Debug)]
 pub struct TsnGovernanceManager {
-    /// Gestionnaire de governance principal
+    /// Governance manager principal
     governance: Arc<RwLock<GovernanceManager>>,
     /// Manager de schemas de signature
     signature_manager: SignatureSchemeManager,

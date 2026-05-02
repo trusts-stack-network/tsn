@@ -203,11 +203,11 @@ impl InstrumentedChainManager {
     }
 }
 
-/// Wrapper for instrumenter the preuves ZK
+/// Wrapper for instrumenter the proofs ZK
 pub struct InstrumentedZKValidator;
 
 impl InstrumentedZKValidator {
-    /// Validates a preuve ZK with instrumentation
+    /// Validates a ZK proof with instrumentation
     pub async fn validate_zk_proof<F, R, E>(
         proof_data: &[u8],
         validator_fn: F,
@@ -233,7 +233,7 @@ impl InstrumentedZKValidator {
                 warn!(
                     proof_size = proof_data.len(),
                     error = ?e,
-                    "Failure validation preuve ZK"
+                    "ZK proof validation failure"
                 );
             }
         }

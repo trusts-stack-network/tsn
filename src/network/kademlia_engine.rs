@@ -30,7 +30,7 @@ pub struct KademliaConfig {
     pub listen_addr: SocketAddr,
     /// Seed nodes for bootstrap
     pub seed_nodes: Vec<SocketAddr>,
-    /// Default TTL for stored values (secondes)
+    /// Default TTL for stored values (seconds)
     pub default_value_ttl: u64,
     /// Routing table maintenance interval
     pub maintenance_interval: Duration,
@@ -115,7 +115,7 @@ impl KademliaEngine {
     
     /// Starts the DHT engine with bootstrap
     pub async fn start(&self) -> Result<(), DhtError> {
-        info!("Starting du moteur DHT Kademlia [{}]", self.config.local_id);
+        info!("Starting Kademlia DHT engine [{}]", self.config.local_id);
         
         // Start the message processing loop
         let message_rx = self.message_rx.write().await.take()

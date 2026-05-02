@@ -1,7 +1,7 @@
 //! Tests unitaires exhaustifs for the wallet ZK Halo2
 //! 
-//! Couvre the generation de preuves, the mise in cache, the verification and the cas d'error.
-//! Inclut of tests de performance for mesurer the latence de generation of preuves ZK.
+//! Couvre the generation de proofs, the mise in cache, the verification and the cas d'error.
+//! Inclut of tests de performance for mesurer the latence de generation of proofs ZK.
 
 use super::zk_wallet::*;
 use crate::crypto::{
@@ -118,7 +118,7 @@ mod tests {
         merkle_tree.insert(commitment.hash);
         let merkle_root = merkle_tree.root();
         
-        // Generate a preuve de spending
+        // Generate a proof de spending
         let value_commitment = commit_to_value(note.value, &mut rng);
         let proof = wallet.generate_spend_proof(
             &note,
@@ -128,10 +128,10 @@ mod tests {
             &mut rng,
         ).unwrap();
         
-        // Verify que the preuve a been generatede
+        // Verify que the proof a been generatede
         assert!(!proof.proof_bytes.is_empty());
         
-        // Verify que the preuve is valid (simulation)
+        // Verify que the proof is valid (simulation)
         // En pratique, on utiliserait the vrais parameters de verification
         assert!(proof.proof_bytes.len() > 0);
     }
@@ -145,14 +145,14 @@ mod tests {
         let note = wallet.generate_note(3000, &mut rng).unwrap();
         let value_commitment = commit_to_value(note.value, &mut rng);
         
-        // Generate a preuve de sortie
+        // Generate a proof de sortie
         let proof = wallet.generate_output_proof(
             &note,
             &value_commitment,
             &mut rng,
         ).unwrap();
         
-        // Verify que the preuve a been generatede
+        // Verify que the proof a been generatede
         assert!(!proof.proof_bytes.is_empty());
         assert!(proof.proof_bytes.len() > 0);
     }
@@ -166,21 +166,21 @@ mod tests {
         let note = wallet.generate_note(500, &mut rng).unwrap();
         let value_commitment = commit_to_value(note.value, &mut rng);
         
-        // Generate a preuve and mesurer the temps
+        // Generate a proof and mesurer the temps
         let start = Instant::now();
         let proof1 = wallet.generate_output_proof(&note, &value_commitment, &mut rng).unwrap();
         let first_duration = start.elapsed();
         
-        // Generate the same preuve to nouveau (should utiliser the cache)
+        // Generate the same proof to nouveau (should utiliser the cache)
         let start = Instant::now();
         let proof2 = wallet.generate_output_proof(&note, &value_commitment, &mut rng).unwrap();
         let second_duration = start.elapsed();
         
-        // Verify que the preuves are identiques
+        // Verify que the proofs are identiques
         assert_eq!(proof1.proof_bytes, proof2.proof_bytes);
         
         // Le cache should rendre the second generation plus rapide
-        // (En pratique, with de vraies preuves ZK)
+        // (En pratique, with de vraies proofs ZK)
         println!("First generation: {:?}", first_duration);
         println!("Second generation (cache): {:?}", second_duration);
     }
@@ -269,14 +269,14 @@ mod tests {
         let wallet = Arc::new(Mutex::new(create_test_wallet()));
         let mut handles = vec![];
         
-        // Start multiple threads generating of preuves in parallel
+        // Start multiple threads generating of proofs in parallel
         for i in 0..4 {
             let wallet_clone = Arc::clone(&wallet);
             let handle = thread::spawn(move || {
                 let mut rng = StdRng::seed_from_u64(1000 + i);
                 let mut wallet_guard = wallet_clone.lock().unwrap();
                 
-                // Generate a note and a preuve
+                // Generate a note and a proof
                 let note = wallet_guard.generate_note(100 * (i + 1), &mut rng).unwrap();
                 let value_commitment = commit_to_value(note.value, &mut rng);
                 
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(wallet_guard.notes.len(), 4);
     }
 
-    /// Tests de performance for mesurer the latence de generation of preuves ZK
+    /// Tests de performance for mesurer the latence de generation of proofs ZK
     #[test]
     fn test_proof_generation_performance() {
         let mut rng = StdRng::seed_from_u64(282930);
@@ -307,7 +307,7 @@ mod tests {
         
         println!("=== Tests de Performance ZK ===");
         
-        // Test de generation de preuves de sortie
+        // Test de generation de proofs de sortie
         for i in 0..NUM_ITERATIONS {
             let note = wallet.generate_note(1000 + i as u64, &mut rng).unwrap();
             let value_commitment = commit_to_value(note.value, &mut rng);
@@ -326,14 +326,14 @@ mod tests {
         let min_time = durations.iter().min().unwrap();
         let max_time = durations.iter().max().unwrap();
         
-        println!("=== Statistiques ===");
+        println!("=== Statistics ===");
         println!("Temps moyen: {:?}", avg_time);
         println!("Temps minimum: {:?}", min_time);
         println!("Temps maximum: {:?}", max_time);
         println!("Temps total: {:?}", total_time);
         
         // Assertions de performance (ajustables selon the besoins)
-        assert!(avg_time < Duration::from_secs(5), "Generation de preuve trop lente");
+        assert!(avg_time < Duration::from_secs(5), "Generation de proof trop lente");
         assert!(max_time < Duration::from_secs(10), "Pic de latence trop high");
     }
 
@@ -342,21 +342,21 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(313233);
         let mut wallet = create_test_wallet();
         
-        // Generate multiple notes and preuves for tester l'usage memory
+        // Generate multiple notes and proofs for tester l'usage memory
         const NUM_NOTES: usize = 100;
         
         for i in 0..NUM_NOTES {
             let note = wallet.generate_note(100 + i as u64, &mut rng).unwrap();
             let value_commitment = commit_to_value(note.value, &mut rng);
             
-            // Generate a preuve
+            // Generate a proof
             let _proof = wallet.generate_output_proof(&note, &value_commitment, &mut rng).unwrap();
             
             // Verify que the wallet not grandit pas de manner excessive
             assert!(wallet.notes.len() <= NUM_NOTES);
         }
         
-        println!("Generated {} notes et preuves avec success", NUM_NOTES);
+        println!("Generated {} notes et proofs avec success", NUM_NOTES);
     }
 
     #[test]
@@ -534,10 +534,10 @@ mod benchmarks {
         
         let avg_per_proof = total_duration / ITERATIONS as u32;
         
-        println!("Generation de {} preuves en {:?}", ITERATIONS, total_duration);
-        println!("Temps moyen par preuve: {:?}", avg_per_proof);
+        println!("Generation de {} proofs en {:?}", ITERATIONS, total_duration);
+        println!("Temps moyen par proof: {:?}", avg_per_proof);
         
-        // Les preuves ZK peuvent be lentes, ajuster selon the besoins
-        assert!(avg_per_proof < Duration::from_secs(30), "Generation de preuve trop lente");
+        // Les proofs ZK peuvent be lentes, ajuster selon the besoins
+        assert!(avg_per_proof < Duration::from_secs(30), "Generation de proof trop lente");
     }
 }

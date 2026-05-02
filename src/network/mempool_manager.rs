@@ -19,13 +19,13 @@ use crate::network::types::TransactionId;
 /// Memory manager configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MempoolMemoryConfig {
-    /// Limite de memory maximale in bytes (default: 256 MB).
+    /// Maximum memory limit in bytes (default: 256 MB).
     pub max_memory_bytes: usize,
     
-    /// Seuil de pression memory (% de max_memory_bytes).
+    /// Threshold for pression memory (% de max_memory_bytes).
     pub pressure_threshold: f64,
     
-    /// Seuil critique de memory (% de max_memory_bytes).
+    /// Critical memory threshold (% de max_memory_bytes).
     pub critical_threshold: f64,
     
     /// Maximum number of transactions.
@@ -37,7 +37,7 @@ pub struct MempoolMemoryConfig {
     /// Strategy eviction.
     pub eviction_strategy: EvictionStrategy,
     
-    /// Intervalle de cleanup automatique in secondes.
+    /// Automatic cleanup interval in seconds.
     pub cleanup_interval_seconds: u64,
     
     /// Maximum transaction age in seconds.
@@ -46,7 +46,7 @@ pub struct MempoolMemoryConfig {
     /// Facteur de boost for the fees highs.
     pub high_fee_boost_factor: f64,
     
-    /// Seuil de fees for consider a transaction like "haute priority".
+    /// Threshold for fees for consider a transaction like "haute priority".
     pub high_fee_threshold: u64,
 }
 
@@ -137,7 +137,7 @@ impl TransactionMetadata {
         
         // Penalty for l'age (transactions anciennes ont moins de priority)
         let age_penalty = 1.0 - (age_seconds / config.max_transaction_age_seconds as f64).min(1.0);
-        score *= age_penalty.max(0.1); // Minimum 10% du score original
+        score *= age_penalty.max(0.1); // Minimum 10% of the original score
         
         // Bonus for l'activity recent
         let access_bonus = (self.access_count as f64).ln().max(1.0);
@@ -159,7 +159,7 @@ impl TransactionMetadata {
     }
 }
 
-/// Statistiques de memory.
+/// Memory statistics.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct MemoryStats {
     /// Memory currently used in bytes.
@@ -199,7 +199,7 @@ pub struct MemoryStats {
     pub last_eviction_timestamp: u64,
 }
 
-/// Manager de memory of the mempool.
+/// Mempool memory manager.
 pub struct MempoolMemoryManager {
     /// Configuration.
     config: MempoolMemoryConfig,
@@ -213,7 +213,7 @@ pub struct MempoolMemoryManager {
     /// Queue LRU for eviction.
     lru_queue: Arc<Mutex<VecDeque<TransactionId>>>,
     
-    /// Statistiques.
+    /// Statistics.
     stats: Arc<RwLock<MemoryStats>>,
     
     /// Memory currently used.
@@ -221,7 +221,7 @@ pub struct MempoolMemoryManager {
 }
 
 impl MempoolMemoryManager {
-    /// Create a nouveau manager de memory.
+    /// Create a new memory manager.
     pub fn new(config: MempoolMemoryConfig) -> Self {
         let stats = MemoryStats {
             max_memory_bytes: config.max_memory_bytes,
@@ -383,7 +383,7 @@ impl MempoolMemoryManager {
         usage_ratio >= self.config.pressure_threshold
     }
     
-    /// Calculer the taux de fees minimum requis.
+    /// Calculate the minimum required fee rate.
     async fn calculate_minimum_fee_rate(&self) -> f64 {
         let transactions = self.transactions.read().await;
         
@@ -391,7 +391,7 @@ impl MempoolMemoryManager {
             return 0.0;
         }
         
-        // Calculationate the median of taux de fees
+        // Calculate the median fee rate
         let mut fee_rates: Vec<f64> = transactions
             .values()
             .map(|tx| tx.fee as f64 / tx.size as f64)
@@ -555,7 +555,7 @@ impl MempoolMemoryManager {
         self.evict_smart_lru(needed_space).await
     }
     
-    /// Eviction based on the taux de fees.
+    /// Eviction based on fee rate.
     async fn evict_low_fee_rate(&self, needed_space: usize) -> usize {
         let mut candidates = Vec::new();
         
@@ -680,7 +680,7 @@ impl MempoolMemoryManager {
                 interval_timer.tick().await;
                 
                 if let Err(e) = manager.cleanup().await {
-                    warn!("Error lors du cleanup du manager de memory: {:?}", e);
+                    warn!("Memory manager cleanup error: {:?}", e);
                 }
             }
         })
@@ -701,7 +701,7 @@ impl Clone for MempoolMemoryManager {
     }
 }
 
-/// Errors of the manager de memory.
+/// Memory manager errors.
 #[derive(Debug, thiserror::Error)]
 pub enum MempoolError {
     #[error("Transaction too large")]
@@ -710,7 +710,7 @@ pub enum MempoolError {
     #[error("Memory pressure - unable to add transaction")]
     MemoryPressure,
     
-    #[error("Taux de fees insufficient pour la pression memory current")]
+    #[error("Fee rate too low for current memory pressure")]
     InsufficientFeeRate,
     
     #[error("Internal error: {0}")]

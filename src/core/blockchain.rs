@@ -444,10 +444,37 @@ impl ShieldedBlockchain {
             // tip from disagreeing on cumulative_work and making opposite
             // fork-choice decisions on the next block (root cause of persistent
             // mini-forks observed in v2.4.3-v2.8.2).
-            let mut authoritative_work: u128 = 0;
+            // v2.9.15 — fast-sync awareness for the authoritative recompute.
+            // Pre-fix, this loop walked h=0..=height and silently skipped
+            // [0u8;32] placeholders. After a fast-sync the DB has placeholders
+            // for 0..fast_sync_base_for_index and only the trailing real blocks
+            // above. Walking from 0 produced an authoritative_work that only
+            // counted those few hundred trailing blocks (e.g. 69_000_000 on a
+            // chain whose true cw was 18_281_518_208) — and then the
+            // drift-detection branch below *overwrote* the correct stored cw
+            // with the under-counted recompute. Confirmed empirically by the
+            // sandbox replay of seed4-data-pre-v2.9.14-20260501-0121.tar.gz
+            // on 1 May 2026 (drift=18_206_518_208, blocks_counted=46).
+            //
+            // Fix: when fast_sync_base_for_index > 0, seed authoritative_work
+            // from the cw stored at fsbase (written by the snapshot import)
+            // and walk forward only. If a placeholder hash is found *above*
+            // fsbase, treat it as `missing` so the drift-detection branch
+            // refuses to clobber the stored cw with an under-counted recompute.
+            let (mut authoritative_work, walk_start): (u128, u64) =
+                if fast_sync_base_for_index > 0 {
+                    let seed = db
+                        .get_cumulative_work(fast_sync_base_for_index)
+                        .ok()
+                        .flatten()
+                        .unwrap_or(0);
+                    (seed, fast_sync_base_for_index + 1)
+                } else {
+                    (0u128, 0u64)
+                };
             let mut authoritative_counted: u64 = 0;
             let mut authoritative_missing: u64 = 0;
-            for h in 0..=height {
+            for h in walk_start..=height {
                 if let Some(hash) = height_index.get(h as usize) {
                     if *hash != [0u8; 32] {
                         let difficulty = blocks.get(hash)
@@ -462,6 +489,10 @@ impl ShieldedBlockchain {
                         } else {
                             authoritative_missing += 1;
                         }
+                    } else {
+                        // Placeholder above fast_sync_base = unexpected hole.
+                        // Don't pretend the recompute is complete.
+                        authoritative_missing += 1;
                     }
                 }
             }
@@ -1853,19 +1884,40 @@ impl ShieldedBlockchain {
                             "cumulative_work missing in DB at height {} — repairing",
                             new_height - 1
                         );
-                        // Reconstruct parent work by summing from genesis or last known entry
-                        let mut repair_work = 0u128;
-                        for h in 0..new_height {
+                        // v2.9.15 — fix consensus-critical drift bug.
+                        // The previous loop set `repair_work = w` on every DB hit
+                        // and only added difficulties when DB was missing — so
+                        // every block stored in DB above the last gap was lost
+                        // from the sum. With sparse post-fast-sync DBs the drift
+                        // could be tens of millions on a multi-K-block chain.
+                        //
+                        // Correct strategy: reverse-scan to find the *highest*
+                        // height that already has a stored cw (the most reliable
+                        // seed), then walk forward from seed+1 accumulating each
+                        // real block's difficulty. Heights below the seed are
+                        // already authoritative (whoever wrote them did so with
+                        // the proper accumulation at that time, including the
+                        // fast-sync seed that snapshot import wrote at fsbase).
+                        let mut seed_h: Option<u64> = None;
+                        let mut repair_work: u128 = 0;
+                        for h in (0..new_height).rev() {
                             if let Ok(Some(w)) = db.get_cumulative_work(h) {
+                                seed_h = Some(h);
                                 repair_work = w;
-                            } else if let Some(hash) = self.height_index.get(h as usize) {
+                                break;
+                            }
+                        }
+                        let walk_start = seed_h.map(|h| h + 1).unwrap_or(0);
+                        for h in walk_start..new_height {
+                            if let Some(hash) = self.height_index.get(h as usize) {
                                 if *hash != [0u8; BLOCK_HASH_SIZE] {
                                     if let Some(blk) = self.get_block(hash) {
-                                        repair_work += blk.header.difficulty as u128;
+                                        repair_work = repair_work
+                                            .saturating_add(blk.header.difficulty as u128);
                                     }
                                 }
-                                let _ = db.save_cumulative_work(h, repair_work);
                             }
+                            let _ = db.save_cumulative_work(h, repair_work);
                         }
                         repair_work
                     }
@@ -3798,6 +3850,162 @@ mod tests {
             }
             other => panic!("expected InvalidTransaction, got {:?}", other),
         }
+    }
+
+    /// v2.9.15 — regression test for the consensus-critical
+    /// `recompute_cumulative_work` repair-path bug observed in prod on
+    /// 1 May 2026 (seed-3 cw drift -6_000_000 vs the four other nodes on
+    /// the same hash + same height; sandbox replay produced cw=69_000_000
+    /// instead of 18_281_518_208 on chain `000004d173...` h=18253).
+    ///
+    /// Pre-fix logic in `insert_block_internal` (lines 1856–1871):
+    ///
+    /// ```ignore
+    /// for h in 0..new_height {
+    ///     if let Ok(Some(w)) = db.get_cumulative_work(h) {
+    ///         repair_work = w;                    // overwrite
+    ///     } else if /* placeholder check */ {
+    ///         repair_work += diff_at(h);
+    ///         db.save_cumulative_work(h, repair_work);
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The `repair_work = w` overwrite at every DB hit *combined with* the
+    /// boot drift-detection branch overwriting `stored_cw` with an
+    /// under-counted recompute (because that recompute walked from h=0 and
+    /// silently skipped fast-sync placeholders) made the cw at the same
+    /// tip non-deterministic across nodes. Fork-choice
+    /// (`should_prefer_candidate` cmp at line 2286) then drove opposing
+    /// reorg decisions on the next block.
+    ///
+    /// The patched logic must satisfy: given the same height_index, the
+    /// same per-height block difficulties, and *any* subset of stored cw
+    /// entries (sparse), the value returned at `target_height` equals
+    /// `seed_cw + sum(diff[seed_h+1 .. target_height])`, where `seed_h` is
+    /// the *highest* height with a stored cw entry below `target_height`.
+    /// This invariant guarantees that two nodes whose snapshot import
+    /// wrote the same `cw[fast_sync_base]` and who share the same
+    /// trailing real blocks will agree on `cw[tip]` regardless of which
+    /// intermediate cw entries each node happens to have persisted.
+    fn repair_cumulative_work_logic(
+        target: u64,
+        cw_at: &dyn Fn(u64) -> Option<u128>,
+        diff_at: &dyn Fn(u64) -> Option<u128>,
+    ) -> u128 {
+        let mut seed_h: Option<u64> = None;
+        let mut work: u128 = 0;
+        for h in (0..target).rev() {
+            if let Some(w) = cw_at(h) {
+                seed_h = Some(h);
+                work = w;
+                break;
+            }
+        }
+        let walk_start = seed_h.map(|h| h + 1).unwrap_or(0);
+        for h in walk_start..target {
+            if let Some(d) = diff_at(h) {
+                work = work.saturating_add(d);
+            }
+        }
+        work
+    }
+
+    #[test]
+    fn test_v2915_repair_path_seeds_from_highest_db_entry() {
+        // Scenario A — post-fast-sync: only `cw[fsbase]` is persisted, real
+        // blocks above. Pre-fix would walk from 0 and mis-count under
+        // placeholders ; patched walks from fsbase+1 with the right seed.
+        let cw_a = |h: u64| match h {
+            10 => Some(1_000_000u128),
+            _ => None,
+        };
+        let diff_a = |h: u64| match h {
+            11 => Some(100u128),
+            12 => Some(200u128),
+            _ => None,
+        };
+        assert_eq!(
+            repair_cumulative_work_logic(13, &cw_a, &diff_a),
+            1_000_300,
+            "scenario A: cw[fsbase=10]=1_000_000 + diff[11]+diff[12] must be 1_000_300"
+        );
+
+        // Scenario B — multiple stored cw entries: highest must win.
+        // cw[5]=500, cw[10]=1500 (matches a hypothetical cw[5]+sum), cw[15]=3000
+        // walk 16..19 with diff=50 each → 3200.
+        let cw_b = |h: u64| match h {
+            5 => Some(500u128),
+            10 => Some(1500u128),
+            15 => Some(3000u128),
+            _ => None,
+        };
+        let diff_b = |h: u64| match h {
+            16 | 17 | 18 | 19 => Some(50u128),
+            _ => None,
+        };
+        assert_eq!(
+            repair_cumulative_work_logic(20, &cw_b, &diff_b),
+            3200,
+            "scenario B: highest seed = cw[15]=3000 + 4×50 = 3200"
+        );
+
+        // Scenario C — no stored cw at all (genesis case): walk 0..target.
+        let cw_c = |_h: u64| None::<u128>;
+        let diff_c = |h: u64| Some((h + 1) as u128); // 1, 2, 3, 4, 5
+        assert_eq!(
+            repair_cumulative_work_logic(5, &cw_c, &diff_c),
+            1 + 2 + 3 + 4 + 5,
+            "scenario C: no seed → sum from 0 to target-1"
+        );
+
+        // Scenario D — all heights stored: highest seed = target-1.
+        // Walk start = target → no loop → return cw[target-1].
+        let cw_d = |h: u64| Some((h * 100) as u128);
+        let diff_d = |_h: u64| Some(100u128);
+        assert_eq!(
+            repair_cumulative_work_logic(10, &cw_d, &diff_d),
+            900,
+            "scenario D: cw[9] = 900 is the seed; walk 10..10 is empty"
+        );
+
+        // Scenario E — the prod sandbox case scaled down. Pre-fix
+        // would have produced 200 (sum of trailing real diffs only) ;
+        // patched produces seed + trailing diffs. seed_cw=18_281_518_208,
+        // 4 trailing blocks of difficulty 1_500_000 each.
+        let cw_e = |h: u64| if h == 18249 { Some(18_281_518_208u128) } else { None };
+        let diff_e = |h: u64| match h {
+            18250 | 18251 | 18252 | 18253 => Some(1_500_000u128),
+            _ => None,
+        };
+        assert_eq!(
+            repair_cumulative_work_logic(18254, &cw_e, &diff_e),
+            18_281_518_208 + 4 * 1_500_000,
+            "scenario E (prod-like): seed at 18249 + 4 trailing blocks must equal 18_287_518_208 (NOT 6_000_000)"
+        );
+
+        // Scenario F — determinism across nodes with identical chain but
+        // different intermediate cw persistence. Two nodes both have
+        // cw[100]=10_000 (snapshot seed) and the same 5 trailing blocks
+        // of diff 50 each ; node X also persisted cw[103]=10_150. Both
+        // must compute cw[105]=10_250.
+        let cw_node_x = |h: u64| match h {
+            100 => Some(10_000u128),
+            103 => Some(10_150u128), // intermediate persistence
+            _ => None,
+        };
+        let cw_node_y = |h: u64| match h {
+            100 => Some(10_000u128),
+            _ => None,
+        };
+        let diff_xy = |h: u64| match h {
+            101 | 102 | 103 | 104 | 105 => Some(50u128),
+            _ => None,
+        };
+        let cw_x = repair_cumulative_work_logic(106, &cw_node_x, &diff_xy);
+        let cw_y = repair_cumulative_work_logic(106, &cw_node_y, &diff_xy);
+        assert_eq!(cw_x, cw_y, "scenario F: two nodes must agree on cw[tip] regardless of intermediate persistence");
+        assert_eq!(cw_x, 10_250, "scenario F: 10_000 + 5×50 = 10_250");
     }
 
     #[test]

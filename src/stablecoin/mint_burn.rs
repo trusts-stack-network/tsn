@@ -6,7 +6,7 @@ use crate::stablecoin::errors::StablecoinError;
 use crate::stablecoin::reserve::ReserveEngine;
 use crate::stablecoin::types::*;
 
-/// Gestionnaire of operations mint/burn
+/// Manager of operations mint/burn
 pub struct MintBurnManager {
     engine: ReserveEngine,
 }

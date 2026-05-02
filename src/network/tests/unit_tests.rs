@@ -345,7 +345,7 @@ fn test_insufficient_buffer() {
     
     match result {
         Ok(None) => {
-            // Comportement attendu : pas enough of data
+            // Expected behavior: pas enough of data
         }
         Ok(Some(_)) => {
             panic!("Ne should pas decode avec un buffer insufficient");
@@ -365,7 +365,7 @@ fn test_empty_buffer() {
     
     match result {
         Ok(None) => {
-            // Comportement attendu
+            // Expected behavior
         }
         Ok(Some(_)) => {
             panic!("Ne should pas decode un buffer vide");

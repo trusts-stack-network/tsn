@@ -69,7 +69,7 @@ impl BlockchainInspector {
     /// Inspecte a bloc and returns the data structured
     pub async fn get_block_data(&self, block_height: u64) -> Result<BlockDisplayData> {
         let block = self.storage.get_block(block_height).await
-            .context("Error lors de la retrieval du bloc")?
+            .context("Error retrieving block")?
             .ok_or_else(|| anyhow::anyhow!("Bloc #{} non found", block_height))?;
 
         Ok(BlockDisplayData {
@@ -88,7 +88,7 @@ impl BlockchainInspector {
     /// Inspecte a transaction and returns the data structured
     pub async fn get_transaction_data(&self, tx_hash: &str) -> Result<TransactionDisplayData> {
         let transaction = self.storage.get_transaction(tx_hash).await
-            .context("Error lors de la retrieval de la transaction")?
+            .context("Error retrieving transaction")?
             .ok_or_else(|| anyhow::anyhow!("Transaction {} non founde", tx_hash))?;
 
         let is_signature_valid = match transaction.verify_signature() {
@@ -113,7 +113,7 @@ impl BlockchainInspector {
     /// Inspecte a compte and returns the data structured
     pub async fn get_account_data(&self, address: &str) -> Result<AccountDisplayData> {
         let account = self.storage.get_account(address).await
-            .context("Error lors de la retrieval du compte")?
+            .context("Error retrieving account")?
             .ok_or_else(|| anyhow::anyhow!("Compte {} non found", address))?;
 
         Ok(AccountDisplayData {
@@ -129,7 +129,7 @@ impl BlockchainInspector {
     /// Retrieves the statistics de the blockchain
     pub async fn get_blockchain_stats(&self) -> Result<BlockchainStats> {
         let latest_height = self.storage.get_latest_block_height().await
-            .context("Error lors de la retrieval de la hauteur")?;
+            .context("Error retrieving height")?;
 
         let total_transactions = self.storage.get_total_transaction_count().await
             .context("Error counting transactions")?;
@@ -160,7 +160,7 @@ impl BlockchainInspector {
 
         if verbose {
             let block = self.storage.get_block(block_height).await
-                .context("Error lors de la retrieval du bloc")?
+                .context("Error retrieving block")?
                 .ok_or_else(|| anyhow::anyhow!("Bloc #{} non found", block_height))?;
 
             self.analyze_block_transactions(&block).await?;
@@ -172,14 +172,14 @@ impl BlockchainInspector {
 
     /// Commande d'inspection de transaction with affichage
     pub async fn inspect_transaction(&self, tx_hash: &str, verbose: bool) -> Result<()> {
-        println!("🔍 Inspection de la transaction {}", &tx_hash[..16]);
+        println!("🔍 Inspecting transaction {}", &tx_hash[..16]);
 
         let tx_data = self.get_transaction_data(tx_hash).await?;
         self.print_transaction_info(&tx_data, verbose);
 
         if verbose {
             let transaction = self.storage.get_transaction(tx_hash).await
-                .context("Error lors de la retrieval de la transaction")?
+                .context("Error retrieving transaction")?
                 .ok_or_else(|| anyhow::anyhow!("Transaction {} non founde", tx_hash))?;
 
             self.analyze_transaction_details(&transaction).await?;
@@ -199,7 +199,7 @@ impl BlockchainInspector {
             self.analyze_account_history(address).await?;
             
             let account = self.storage.get_account(address).await
-                .context("Error lors de la retrieval du compte")?
+                .context("Error retrieving account")?
                 .ok_or_else(|| anyhow::anyhow!("Compte {} non found", address))?;
             
             self.check_account_state_consistency(&account).await?;
@@ -210,7 +210,7 @@ impl BlockchainInspector {
 
     /// Commande d'inspection of statistics blockchain with affichage
     pub async fn inspect_blockchain_stats(&self) -> Result<()> {
-        println!("📊 Statistiques de la blockchain");
+        println!("📊 Blockchain statistics");
 
         let stats = self.get_blockchain_stats().await?;
         self.print_blockchain_stats(&stats);
@@ -393,7 +393,7 @@ impl BlockchainInspector {
     }
 
     async fn analyze_transaction_details(&self, transaction: &Transaction) -> Result<()> {
-        println!("\n🔍 Analyse detailed de la transaction:");
+        println!("\n🔍 Detailed transaction analysis:");
 
         // Analyser the inputs/outputs if c'est a transaction complexe
         match transaction.tx_type() {
@@ -425,7 +425,7 @@ impl BlockchainInspector {
         println!("\n📜 Historique du compte:");
 
         let transactions = self.storage.get_account_transactions(address, 10).await
-            .context("Error lors de la retrieval de l'historique")?;
+            .context("Error retrieving history")?;
 
         if transactions.is_empty() {
             println!("  📭 Aucune transaction founde");
@@ -471,7 +471,7 @@ impl BlockchainInspector {
         println!("\n📈 Analyse des {} derniers blocs:", count);
 
         let latest_height = self.storage.get_latest_block_height().await
-            .context("Error lors de la retrieval de la hauteur")?;
+            .context("Error retrieving height")?;
 
         let start_height = if latest_height >= count { latest_height - count + 1 } else { 0 };
 

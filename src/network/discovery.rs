@@ -266,7 +266,7 @@ impl PeerInfo {
     }
 }
 
-/// Gestionnaire de discovery
+/// Discovery manager
 pub struct PeerDiscovery {
     known_peers: Vec<PeerInfo>,
 }

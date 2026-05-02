@@ -9,10 +9,10 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-2.3.9-blue">
-  <img alt="Rust" src="https://img.shields.io/badge/rust-110k+_lines-orange">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-400+_passing-brightgreen">
-  <img alt="Testnet" src="https://img.shields.io/badge/testnet--v5-live-success">
+  <img alt="Version" src="https://img.shields.io/badge/version-2.9.15-blue">
+  <img alt="Rust" src="https://img.shields.io/badge/rust-97k+_lines-orange">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-370+_passing-brightgreen">
+  <img alt="Testnet" src="https://img.shields.io/badge/testnet--v9-live-success">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
@@ -51,7 +51,10 @@ Trust Stack Network is a **Layer 1 blockchain** designed from the ground up for 
 | **zkVM Smart Contracts** | Stack-based VM with 30+ opcodes, gas metering, and ZK execution traces |
 | **MIK Consensus** | Mining Identity Key — Proof of Work with numeric difficulty and 512-bit nonce |
 | **Fast Sync** | Snapshot-based synchronization — full sync in ~2 seconds |
-| **3 Node Roles** | Miner, Relay, Light Client — each with auto-update capability |
+| **4 Node Roles** | Miner, Relay, Cortex, Light Client — each with auto-update capability |
+| **Relay Pool** | 3% of block reward distributed to relay nodes weighted by participation score |
+| **BIP-152 Compact Blocks** | Bandwidth-efficient block relay (short IDs, mempool-based reconstruction) |
+| **Checkpoint Voting** | Quorum-based finality: 4+ seeds sign a checkpoint every 100 blocks |
 
 ## Security Model
 
@@ -96,7 +99,7 @@ Merkle Node     = Poseidon(domain=5, left, right)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                         TSN Node v2.3.9                              │
+│                         TSN Node v2.9.15                             │
 ├──────────────┬──────────────┬──────────────┬─────────────────────────┤
 │    Core      │    Crypto    │  Consensus   │        Network          │
 │  Block       │  Poseidon2   │  PoW Mining  │  libp2p (GossipSub)     │
@@ -119,15 +122,15 @@ TSN is not a fork. Every core component was designed and written from zero — n
 
 | Component | Lines | Status |
 |-----------|-------|--------|
-| **Consensus engine** | 9,880 | LWMA difficulty, PoW validation, fork resolution, checkpoints, reorg protection |
-| **P2P network protocol** | 23,168 | Headers-first sync, peer scoring, eclipse protection, anti-DoS, auto-update |
+| **Consensus engine** | 9,880 | LWMA difficulty, PoW validation, fork resolution, checkpoint voting, reorg protection |
+| **P2P network protocol** | 23,168 | Headers-first sync, BIP-152 compact blocks, peer scoring, eclipse protection, auto-update |
 | **zkVM** | 1,122 | Stack-based bytecode, 40+ opcodes, gas model, ZK execution traces |
 | **Smart contracts** | 2,458 | Executor, on-chain storage, templates (Token, Escrow, Multisig, AMM) |
 | **Cryptographic layer** | 24,070 | Poseidon2 PoW, nullifiers, commitments, Merkle trees, ZK proof adapters |
 | **Block & transaction format** | 9,640 | Custom binary format, shielded TX, binding signatures |
 | **Wallet** | 2,355 | BIP39 seed, ML-DSA-65 keygen, shielded send/receive, TX history |
 | **Stablecoin (ZST)** | 2,617 | Gold-backed stablecoin module with Djed/Zephyr model |
-| **Total** | **92,545** | **298 source files, 432 tests** |
+| **Total** | **97,000+** | **300+ source files, 370+ tests** |
 
 We use battle-tested cryptographic primitives (`fips204` for ML-DSA-65, `p3-poseidon2` for hashing, `plonky2`/`plonky3` for ZK proofs, `libp2p` for transport) — but everything above the primitive layer is original TSN code. We don't reinvent cryptography, we build on it.
 
@@ -187,19 +190,23 @@ Peer discovery is automatic via DNS seeds (seed1-4.tsnchain.com). New nodes fast
 TSN supports 3 distinct node roles, selectable at startup:
 
 ### Miner Node (`./tsn miner`)
-Full node that validates, stores the entire blockchain, relays transactions/blocks, **and mines new blocks**. Miners earn **92% of the block reward** (46 TSN per block). This is the default role.
+Full node that validates, stores the entire blockchain, relays transactions/blocks, **and mines new blocks**. Miners earn **92% of the block reward** (13.52 TSN per block at launch). This is the default role.
 
 ### Relay Node (`./tsn relay`)
-Full node that stores the complete chain and relays blocks/transactions to peers, but **does not mine**. Relays are the backbone of the network — they ensure fast block propagation via GossipSub and serve snapshots to new nodes via fast-sync. They earn from the **3% relay reward pool**.
+Full node that stores the complete chain and relays blocks/transactions to peers, but **does not mine**. Relays are the backbone of the network — they ensure fast block propagation via GossipSub and BIP-152 compact blocks, and serve fast-sync snapshots to new nodes. They earn from the **3% relay reward pool** (scored by participation per block).
+
+### Cortex Node (`./tsn cortex`)
+Service layer node for decentralized applications (dApps). Runs WASM modules, serves dApp endpoints, and earns fees from dApps (NetherSwap, Whispr, ZST). Not funded by coinbase — fees come entirely from dApp activity.
 
 ### Light Client (`./tsn light`)
 Minimal node that **does not store the full chain** — it syncs only block headers and verifies transactions using ZK proofs. Designed for mobile wallets and resource-constrained devices.
 
-| Type | Stores Chain | Mines | Relays | Auto-Update | Reward |
-|------|:-:|:-:|:-:|:-:|--------|
-| **Miner** | Yes | Yes | Yes | Yes | 92% block reward |
-| **Relay** | Yes | — | Yes | Yes | 3% relay pool |
-| **Light Client** | — | — | — | Yes | — |
+| Type | Stores Chain | Mines | Relays | dApps | Auto-Update | Reward |
+|------|:-:|:-:|:-:|:-:|:-:|--------|
+| **Miner** | Yes | Yes | Yes | — | Yes | 92% block reward |
+| **Relay** | Yes | — | Yes | — | Yes | 3% relay pool |
+| **Cortex** | Yes | — | Yes | Yes | Yes | dApp fees |
+| **Light Client** | — | — | — | — | Yes | — |
 
 All node types auto-update when a new version is detected on the network.
 
@@ -215,11 +222,11 @@ TSN is one of the first blockchains with **fully decentralized automatic updates
 5. Current binary backed up, new binary installed, node restarts
 
 ```
-Node A (v2.3.8) connects to Node B (v2.3.9)
+Node A (v2.9.14) connects to Node B (v2.9.15)
   → A detects newer version via P2P handshake
-  → A downloads v2.3.9 from GitHub, verifies Ed25519 signature
+  → A downloads v2.9.15 from GitHub, verifies Ed25519 signature
   → A self-updates and restarts
-  → A is now v2.3.9
+  → A is now v2.9.15
   → A's other peers detect the update via handshake
   → Network propagates the update in minutes
 ```
@@ -348,7 +355,7 @@ New nodes join the network in **seconds** by downloading a compressed state snap
 | **Checkpoint finality** | Every 100 blocks, a checkpoint is created |
 | **Fork ID verification** | Genesis hash checked at sync — prevents silent splits |
 | **Anchor block filter** | Blocks must reference a recent valid ancestor |
-| **P2P version gate** | Nodes below MINIMUM_VERSION (v2.3.7) are rejected, with escalating IP bans on repeat offenders |
+| **P2P version gate** | Nodes below MINIMUM_VERSION (v2.9.15) are rejected, with escalating IP bans on repeat offenders |
 | **Genesis HTTP check** | Peer genesis block hash verified before any sync |
 | **Protocol magic** | TSN2 magic bytes — old network nodes cannot connect |
 | **Smart auto-wipe watchdog** | Solo-fork detection with cooldown + kill-switch guards |
@@ -356,7 +363,7 @@ New nodes join the network in **seconds** by downloading a compressed state snap
 
 ## Testnet Status
 
-The private testnet v5 is live with a **fresh genesis** (hash `dadfa2a3...`), **network identity** `tsn-testnet-v5`, and **strict version enforcement** (v2.3.7 minimum).
+The private testnet v9 is live with a **fresh genesis**, **network identity** `tsn-testnet-v9`, and **strict version enforcement** (**v2.9.15 minimum** — older nodes are rejected at handshake).
 
 > **TSN tokens currently have no value.** The testnet is for development and testing only. Tokens can be mined for free by anyone running a node. Economic value will only be introduced at the incentivized testnet phase.
 
@@ -446,6 +453,44 @@ A cross-chain anonymous DEX built on TSN with AMM pools, escrow P2P, yield farmi
 - **v2.3.2** — Wallet rescan actually deletes DB rows, metrics port auto-fallback 9090..9099, `WalletLock::try_acquire` returns an actionable error.
 - **v2.3.1** — Admin `/mempool/purge` endpoint, HTTP 429 backoff (1s → 32s) on witness fetch and tx submit, auto-consolidation multi-round orchestration.
 - **v2.3.0** — LRU dedup (tip / block / fork-recovery), snapshot auto-trigger from miner path, `agent_version` height hint in libp2p Identify, wallet `resolve_pq_commitment` fallback on server leaf.
+
+### v2.9.x — Checkpoint Voting & Backfill (2026-Q2)
+
+- **v2.9.15** — Zero French in codebase, MINIMUM_VERSION bumped to 2.9.15, all stray test/placeholder files removed, release binary stripped.
+- **v2.9.14** — Backport W1+W1B+H-G+FIX-D patches; auto-recovery timeout extended to 180s.
+- **v2.9.13** — `--role` defaults to relay; full auto-recovery cycle on lost consensus.
+- **v2.9.11/10/9** — Background backfill of historical blocks missing post-fast-sync; descending walk so seeds catch up to tip; treats `[0u8;32]` placeholder entries as missing.
+- **v2.9.8** — CHECKPOINT_QUORUM dynamic 80% with warmup limited to common circuit shapes (Plonky3 RAM fix).
+- **v2.9.7** — Persistent libp2p identity key; `network_name` in `/version.json`; Phase C HTTP fallback; checkpoint history endpoint.
+- **v2.9.6/5/3** — `checkpoint_vote` anchor scan at `fast_sync_base`; shallow fallback window for post-fast-sync transition; always publish snapshot on tick.
+- **v2.9.2** — CHECKPOINT_QUORUM raised to 4; `/chain/quorum_status` endpoint; explorer quorum halo badge.
+- **v2.9.1** — RAM diet: sled cache 1G→256M, block LRU 1000→200, recompute fast-sync anchor; anchor-retry timeout.
+- **v2.9.0** — BIP-152 RAM fix: filter mempool by short_id before clone.
+
+### v2.8.x — Compact Blocks, Checkpoint & Iron Fish Wallet (2026-Q2)
+
+- **v2.8.9** — Trusted-quorum checkpoint vote; BIP-152 DoS protections (max announces, dedup window, rate limit per peer).
+- **v2.8.8** — Phase 1 hardening: invalid anchor retry with exponential backoff.
+- **v2.8.7** — Full **Compact Block Relay** (BIP-152 inspired): `cmpctblock`/`getblocktxn`/`blocktxn` messages, short IDs (SipHash-2-4), mempool-based reconstruction. Bandwidth savings up to 98% on well-connected peers.
+- **v2.8.6** — Proactive tip-pull (Phase 0.2 simplified): nodes pull latest tip on GossipSub announcement.
+- **v2.8.5** — Cumulative work drift fix; **Iron Fish wallet integration** (BIP44 derivation path); **anchored mempool** (tx anchored to a recent block to prevent replays after reorgs).
+- **v2.8.1** — Phase A pipeline fixes; MAX_SPENDS raised from 25 to 50.
+- **v2.8.0** — Phase C wallet bootstrap; signed snapshot; auto-consolidate ON by default.
+
+### v2.7.x — Performance & Fork Hardening (2026-Q2)
+
+- **v2.7.4** — Anti-freeze HTTP timeouts; lock-free chain reads; explorer aggregate fixes.
+
+### v2.5.x — Cortex Node & Fork-Choice Fixes (2026-Q2)
+
+- **v2.5.0** — 4 fork-choice fixes; **Cortex node Phase 1** (WASM runtime for dApp service modules); testnet-v9 reset.
+
+### v2.4.x — Relay Pool, DNS Bootstrap & Testnet Resets (2026-Q2)
+
+- **v2.4.3** — `wallet-cleanup` command; balance shows spendable notes only; `/leaves/bulk` endpoint for wallet pre-validation; `calculate_chain_work` fast-path parent canonical check; seed PeerID dedup in peer tracking; testnet-v8 reset; persist `cumulative_work` on snapshot import.
+- **v2.4.2** — Testnet-v7 reset (private test build).
+- **v2.4.1** — DNS-aware P2P bootstrap (`seed1-4.tsnchain.com`); MINIMUM_VERSION bumped.
+- **v2.4.0** — Testnet-v6 reset; miner attribution in explorer; V2 shielded TX inclusion; **relay pool payouts** (3% block reward distributed to relay nodes by per-block participation score).
 
 ### v2.0.0 — Network Reset & Sync Stability
 

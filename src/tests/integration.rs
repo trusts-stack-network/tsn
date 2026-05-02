@@ -317,7 +317,7 @@ mod shielded_transaction_integration {
         state.apply_block(&genesis).unwrap();
         
         // Simuler the creation d'une transaction shielded
-        // Note: ceci requiresrait a implementation completee of preuves ZK
+        // Note: ceci requiresrait a implementation completee of proofs ZK
         
         // Pour l'instant, on teste juste the structure
         let shielded_tx = ShieldedTransaction {
@@ -355,7 +355,7 @@ mod shielded_transaction_integration {
         let result = state.apply_block(&block_with_tx);
         
         // Note: in the current implementation, ceci pourrait failsr
-        // car the validation completee of preuves ZK n'est pas implementede
+        // car the validation completee of proofs ZK n'est pas implementede
         match result {
             Ok(_) => {
                 assert_eq!(state.get_height(), 2, "State height should be 2 after tx block");
@@ -443,7 +443,7 @@ mod shielded_transaction_integration {
         
         match result2 {
             Err(StateError::DuplicateNullifier) => {
-                // Comportement attendu
+                // Expected behavior
                 println!("Double-spend correctly detected");
             }
             Err(StateError::InvalidZKProof) => {
@@ -533,7 +533,7 @@ mod crypto_integration {
         }
     }
 
-    /// Test d'integration : generation and verification de preuves de path Merkle
+    /// Test d'integration : generation and verification de proofs de path Merkle
     #[test]
     fn test_merkle_path_proof_integration() {
         let mut tree = MerkleTree::new();
@@ -552,18 +552,18 @@ mod crypto_integration {
         
         let root = tree.root();
         
-        // Generate of preuves de path for each commitment
+        // Generate of proofs de path for each commitment
         for (index, commitment) in commitments.iter().enumerate() {
             let path = tree.path(index);
             assert!(path.is_some(), "Should be able to generate path for index {}", index);
             
             let path = path.unwrap();
             
-            // Verify que the preuve is valid
+            // Verify que the proof is valid
             let is_valid = path.verify(*commitment, &root);
             assert!(is_valid, "Path proof should be valid for commitment at index {}", index);
             
-            // Verify qu'une preuve with a mauvais commitment fails
+            // Verify qu'une proof with a mauvais commitment fails
             let wrong_commitment = NoteCommitment::from_bytes([99u8; 32]);
             let is_invalid = path.verify(wrong_commitment, &root);
             assert!(!is_invalid, "Path proof should be invalid for wrong commitment");
@@ -690,7 +690,7 @@ mod performance_integration {
         
         println!("Inserting {} commitments took: {:?}", num_commitments, insertion_time);
         
-        // Mesurer the temps de generation de preuves
+        // Mesurer the temps de generation de proofs
         let start = Instant::now();
         let _path = tree.path(num_commitments / 2);
         let proof_time = start.elapsed();

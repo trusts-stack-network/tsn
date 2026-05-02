@@ -65,22 +65,22 @@ impl CryptoOperation {
 /// State of the circuit breaker
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CircuitState {
-    /// Circuit closed - operations authorizeds
+    /// Circuit closed — operations allowed
     Closed,
-    /// Circuit ouvert - operations blockedes
+    /// Circuit open — operations blocked
     Open,
-    /// Circuit semi-ouvert - test de retrieval
+    /// Circuit half-open — recovery probe in progress
     HalfOpen,
 }
 
-/// Statistiques d'une operation cryptographique
+/// Statistics for a monitored cryptographic operation
 #[derive(Debug, Clone)]
 struct OperationStats {
     /// Total number of operations attempted
     total_attempts: u64,
-    /// Number d'failures (timeout, erreur)
+    /// Number of failures (timeout, error)
     failures: u64,
-    /// Temps de response recents (sliding window)
+    /// Recent response times (sliding window)
     recent_times: VecDeque<Duration>,
     /// Last attempt
     last_attempt: Option<Instant>,
@@ -101,7 +101,7 @@ impl Default for OperationStats {
 }
 
 impl OperationStats {
-    /// Taux d'failure recent (sur the 100 lasts operations)
+    /// Recent failure rate (over the last 100 operations)
     fn failure_rate(&self) -> f64 {
         if self.total_attempts == 0 {
             return 0.0;
@@ -112,15 +112,15 @@ impl OperationStats {
             return 0.0;
         }
         
-        // Approximation: on considers que the failures are distributed uniformly
+        // Approximation: failures are assumed to be uniformly distributed
         let recent_failures = (self.failures * recent_count) / self.total_attempts.max(1);
         recent_failures as f64 / recent_count as f64
     }
 
-    /// Temps de response moyen recent
+    /// Average recent response time
     fn avg_response_time(&self) -> Duration {
         if self.recent_times.is_empty() {
-            // Retourner a temps conservateur instead of 0ms for avoidr the deadlocks
+            // Return a conservative baseline instead of 0ms to avoid deadlocks
             return Duration::from_millis(100);
         }
         
@@ -128,7 +128,7 @@ impl OperationStats {
         total / self.recent_times.len() as u32
     }
 
-    /// Register a attempt d'operation
+    /// Record an operation attempt
     fn record_attempt(&mut self, duration: Duration, success: bool) {
         self.total_attempts += 1;
         self.last_attempt = Some(Instant::now());
@@ -139,7 +139,7 @@ impl OperationStats {
             self.failures += 1;
         }
         
-        // Sliding window of temps de response
+        // Sliding window of response times
         self.recent_times.push_back(duration);
         if self.recent_times.len() > 100 {
             self.recent_times.pop_front();
@@ -150,24 +150,24 @@ impl OperationStats {
 /// Configuration of the circuit breaker
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CircuitBreakerConfig {
-    /// Seuil de taux d'failure for open the circuit (0.0-1.0)
+    /// Failure rate threshold to open the circuit (0.0-1.0)
     pub failure_threshold: f64,
-    /// Number minimum d'operations before d'evaluate the taux d'failure
+    /// Minimum number of operations before evaluating the failure rate
     pub min_operations: u32,
-    /// Duration d'ouverture of the circuit before test de retrieval
+    /// How long the circuit stays open before attempting recovery
     pub recovery_timeout: Duration,
-    /// Number d'operations de test in mode HalfOpen
+    /// Number of probe operations in HalfOpen mode
     pub test_operations: u32,
-    /// Limite de charge globale (operations/seconde)
+    /// Global rate limit (operations/second)
     pub global_rate_limit: u32,
-    /// Window de temps for the rate limiting
+    /// Time window for rate limiting
     pub rate_window: Duration,
 }
 
 impl Default for CircuitBreakerConfig {
     fn default() -> Self {
         Self {
-            failure_threshold: 0.5, // 50% d'failures
+            failure_threshold: 0.5, // 50% failure rate
             min_operations: 10,
             recovery_timeout: Duration::from_secs(60),
             test_operations: 5,
@@ -177,19 +177,19 @@ impl Default for CircuitBreakerConfig {
     }
 }
 
-/// Circuit breaker for operations cryptographiques
+/// Circuit breaker for cryptographic operations
 pub struct CryptoCircuitBreaker {
     /// Configuration
     config: CircuitBreakerConfig,
-    /// State global of the circuit
+    /// Global circuit state
     state: Arc<RwLock<CircuitState>>,
-    /// Statistiques par type d'operation
+    /// Per-operation statistics
     stats: Arc<Mutex<std::collections::HashMap<CryptoOperation, OperationStats>>>,
-    /// Timestamp de the last ouverture of the circuit
+    /// Timestamp of the last circuit open event
     last_opened: Arc<Mutex<Option<Instant>>>,
-    /// Counter d'operations de test in mode HalfOpen
+    /// Probe operation counter in HalfOpen mode
     test_count: Arc<Mutex<u32>>,
-    /// Rate limiter global
+    /// Global rate limiter
     rate_limiter: Arc<Mutex<VecDeque<Instant>>>,
 }
 
@@ -246,7 +246,7 @@ impl CryptoCircuitBreaker {
             }
             
             CircuitState::HalfOpen => {
-                // Mode test - autoriser a number limited d'operations
+                // Test mode — allow a limited number of operations
                 let mut test_count = self.test_count.lock().unwrap();
                 if *test_count < self.config.test_operations {
                     *test_count += 1;
@@ -566,7 +566,7 @@ mod tests {
         assert_eq!(breaker.state(), CircuitState::HalfOpen);
         guard.success();
         
-        // Second operation de test
+        // Second test operation
         let guard = breaker.check_operation(CryptoOperation::MlDsaSignature).await.unwrap();
         guard.success();
         

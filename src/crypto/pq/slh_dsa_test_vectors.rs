@@ -1,14 +1,14 @@
-//! Vecteurs de test FIPS 205 for SLH-DSA (SPHINCS+)
+//! FIPS 205 test vectors for SLH-DSA (SPHINCS+)
 //!
 //! References:
 //! - FIPS PUB 205 (2024): https://doi.org/10.6028/NIST.FIPS.205
 //! - NIST CAVP: https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program
 //!
-//! Ces vecteurs are generateds selon the specifications FIPS 205 for the parameters
+//! These vectors are generated according to FIPS 205 specifications for the parameters
 //! SHA2-128s (n=16, h=63, d=7, a=12, k=14, w=16)
 
-/// Seed de test for generation deterministic (32 bytes)
-/// Used for reproduire the same keys in the tests
+/// Test seed for deterministic key generation (32 bytes)
+/// Used to reproduce the same keys across tests
 pub const TEST_SEED_1: &[u8] = &[
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
     0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
@@ -16,7 +16,7 @@ pub const TEST_SEED_1: &[u8] = &[
     0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
 ];
 
-/// Seed de test alternatif
+/// Alternate test seed
 pub const TEST_SEED_2: &[u8] = &[
     0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, 0xf8,
     0xf7, 0xf6, 0xf5, 0xf4, 0xf3, 0xf2, 0xf1, 0xf0,
@@ -24,29 +24,29 @@ pub const TEST_SEED_2: &[u8] = &[
     0xe7, 0xe6, 0xe5, 0xe4, 0xe3, 0xe2, 0xe1, 0xe0,
 ];
 
-/// Seed de test with zeros (cas limite)
+/// Test seed — all zeros (edge case)
 pub const TEST_SEED_ZEROS: &[u8] = &[0x00; 32];
 
-/// Seed de test with uns (cas limite)
+/// Test seed — all ones (edge case)
 pub const TEST_SEED_ONES: &[u8] = &[0xff; 32];
 
-/// Messages de test de different tailles
+/// Test messages of various lengths
 pub const MESSAGE_EMPTY: &[u8] = b"";
 pub const MESSAGE_SHORT: &[u8] = b"Hello, World!";
 pub const MESSAGE_MEDIUM: &[u8] = b"The quick brown fox jumps over the lazy dog. This is a standard test message for cryptographic operations.";
 pub const MESSAGE_LONG: &[u8] = &[0x42u8; 10000]; // 10KB of data
 
-/// Message with characters special and UTF-8
-pub const MESSAGE_UTF8: &[u8] = "Test avec characters special: eaucn 日本語 🎉".as_bytes();
+/// Message with special UTF-8 characters
+pub const MESSAGE_UTF8: &[u8] = "Test with special characters: eaucn 日本語 🎉".as_bytes();
 
-/// Message with bytes nuls and valeurs extreme
+/// Message with null bytes and extreme values
 pub const MESSAGE_BINARY: &[u8] = &[
     0x00, 0x01, 0x7f, 0x80, 0xff, 0x00, 0x00, 0x00,
     0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
 ];
 
-/// Key publique attendue for TEST_SEED_1 (parameters SHA2-128s)
-/// Size: 32 octets for SHA2-128s
+/// Expected public key for TEST_SEED_1 (parameters SHA2-128s)
+/// Size: 32 bytes for SHA2-128s
 pub const EXPECTED_PK_128S: &[u8] = &[
     // Ces valeurs seraient generatedes par a outil de reference FIPS 205
     // Pour the tests, on utilise of placeholders that seront replaced
@@ -139,47 +139,47 @@ pub const STANDARD_TEST_CASES: &[TestCase] = &[
         name: "medium_message",
         seed: TEST_SEED_1,
         message: MESSAGE_MEDIUM,
-        description: "Message moyen avec espaces",
+        description: "Medium message with spaces",
     },
     TestCase {
         name: "long_message",
         seed: TEST_SEED_1,
         message: MESSAGE_LONG,
-        description: "Message long (10KB)",
+        description: "Long message (10KB)",
     },
     TestCase {
         name: "utf8_message",
         seed: TEST_SEED_1,
         message: MESSAGE_UTF8,
-        description: "Message avec characters UTF-8",
+        description: "Message with UTF-8 characters",
     },
     TestCase {
         name: "binary_message",
         seed: TEST_SEED_1,
         message: MESSAGE_BINARY,
-        description: "Message binaire avec bytes special",
+        description: "Binary message with special bytes",
     },
     TestCase {
         name: "alternate_seed",
         seed: TEST_SEED_2,
         message: MESSAGE_SHORT,
-        description: "Message avec seed alternatif",
+        description: "Message with alternate seed",
     },
     TestCase {
         name: "zero_seed",
         seed: TEST_SEED_ZEROS,
         message: MESSAGE_SHORT,
-        description: "Message avec seed de zeros",
+        description: "Message with all-zero seed",
     },
     TestCase {
         name: "ones_seed",
         seed: TEST_SEED_ONES,
         message: MESSAGE_SHORT,
-        description: "Message avec seed de uns",
+        description: "Message with all-ones seed",
     },
 ];
 
-/// Vecteurs de test for verification d'erreur
+/// Test vectors for error-path verification
 pub struct ErrorTestCase {
     pub name: &'static str,
     pub public_key: &'static [u8],
@@ -189,43 +189,43 @@ pub struct ErrorTestCase {
     pub description: &'static str,
 }
 
-/// Cas d'error for tests de verification
+/// Error test cases for verification failure paths
 pub const ERROR_TEST_CASES: &[ErrorTestCase] = &[
     ErrorTestCase {
         name: "wrong_pk_size_too_short",
-        public_key: &[0x00; 16], // Trop court (should be 32)
+        public_key: &[0x00; 16], // Too short (should be 32)
         message: MESSAGE_SHORT,
         signature: &[0x00; EXPECTED_SIG_SIZE_128S],
         expected_error: "InvalidPublicKeySize",
-        description: "Key publique trop courte",
+        description: "Public key too short",
     },
     ErrorTestCase {
         name: "wrong_pk_size_too_long",
-        public_key: &[0x00; 64], // Trop long (should be 32)
+        public_key: &[0x00; 64], // Too long (should be 32)
         message: MESSAGE_SHORT,
         signature: &[0x00; EXPECTED_SIG_SIZE_128S],
         expected_error: "InvalidPublicKeySize",
-        description: "Key publique trop long",
+        description: "Public key too long",
     },
     ErrorTestCase {
         name: "wrong_sig_size_too_short",
         public_key: EXPECTED_PK_128S,
         message: MESSAGE_SHORT,
-        signature: &[0x00; 100], // Trop court
+        signature: &[0x00; 100], // Too short
         expected_error: "InvalidSignatureSize",
-        description: "Signature trop courte",
+        description: "Signature too short",
     },
     ErrorTestCase {
         name: "wrong_sig_size_too_long",
         public_key: EXPECTED_PK_128S,
         message: MESSAGE_SHORT,
-        signature: &[0x00; EXPECTED_SIG_SIZE_128S + 100], // Trop long
+        signature: &[0x00; EXPECTED_SIG_SIZE_128S + 100], // Too long
         expected_error: "InvalidSignatureSize",
-        description: "Signature trop long",
+        description: "Signature too long",
     },
 ];
 
-/// Data for tests de performance
+/// Data for performance tests
 pub const BENCH_MESSAGE_SIZES: &[usize] = &[
     32,      // 1 bloc hash
     64,      // 2 blocs

@@ -238,7 +238,7 @@ impl SignatureValidator {
             ))
         })?;
 
-        // Construire the signature SLH-DSA
+        // Build the signature SLH-DSA
         let sig = SlhSignature::from_bytes(signature_bytes).ok_or_else(|| {
             SignatureValidationError::SlhDsa(format!(
                 "Invalid signature ({} bytes)",

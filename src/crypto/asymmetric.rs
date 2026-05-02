@@ -13,7 +13,7 @@
 // Correct usage of the macro :
 // mon_macro!();
 
-// Assurez-vous also que the blocs de code soient correctly closeds
+// Ensure all code blocks are properly closed
 // For example:
 // if true {
 //     // code ici
@@ -26,13 +26,13 @@
 // } // end of function
 
 // To resolve the error at line 110, verify that all delimiters are properly closed
-// Si vous utilisez of commentaires multilignes, assurez-vous qu'ils soient correctly closeds
+// Multi-line comments must be properly closed
 // For example:
 // /*
 // code ici
 // */ // Fermeture of the commentaire multiligne
 
-// Si vous utilisez of macros for generate of the code, assurez-vous qu'elles soient correctly definedes and used
+// Macros must be properly defined and used
 // For example:
 // macro_rules! generateur_de_code {
 //     () => {

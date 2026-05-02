@@ -98,7 +98,7 @@ impl ApiKeyMetadata {
     }
 }
 
-/// Gestionnaire d'authentification API
+/// Manager d'authentification API
 pub struct ApiKeyManager {
     /// Stockage of keys API (hash -> metadata)
     keys: Arc<RwLock<HashMap<String, ApiKeyMetadata>>>,

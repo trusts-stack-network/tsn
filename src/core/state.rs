@@ -1127,7 +1127,7 @@ impl StateSnapshotPQ {
             let computed = Self::compute_migration_hash(v1_root, v2_root, height);
             if &computed != expected {
                 return Err(format!(
-                    "Migration hash invalid: attendu {}, calculationated {}",
+                    "Migration hash invalid: expected {}, calculated {}",
                     hex::encode(expected),
                     hex::encode(computed)
                 ));

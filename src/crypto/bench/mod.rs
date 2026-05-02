@@ -29,7 +29,7 @@ pub use halo2_plonky2_comparison::run_comparison;
 /// 
 /// This fonction is the point d'entry principal for all benchmarks ZK.
 /// Elle mesure:
-/// - Temps de generation de preuve
+/// - Temps de generation de proof
 /// - Temps de verification
 /// - Consommation memory
 /// - Scaling with the size of the circuit

@@ -19,7 +19,7 @@ pub enum ShieldedValidationError {
 /// This function checks the following elements:
 /// - Le nullifier is valid
 /// - Le commitment is valid and n'a pas been used previously
-/// - Le preuve de plage (range proof) is valid
+/// - The range proof (range proof) is valid
 pub fn validate_shielded_transaction(
     tx: &ShieldedTransaction,
     nullifiers_tree: &Tree,

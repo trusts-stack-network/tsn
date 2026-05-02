@@ -320,7 +320,7 @@ impl PoseidonMigrator {
         self.cache.as_ref().map(|cache| (cache.cache.len(), cache.max_size))
     }
 
-    /// Vide the cache
+    /// Clears the cache
     pub fn clear_cache(&mut self) {
         if let Some(cache) = &mut self.cache {
             cache.zeroize();

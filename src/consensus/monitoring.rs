@@ -96,7 +96,7 @@ impl TimeSeries {
     }
 }
 
-/// Dashboard de monitoring in temps real
+/// Real-time monitoring dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsensusDashboard {
     pub block_height: u64,
@@ -143,7 +143,7 @@ impl Default for MonitoringConfig {
     }
 }
 
-/// System de monitoring of the consensus
+/// Consensus monitoring system
 pub struct ConsensusMonitor {
     config: MonitoringConfig,
     metrics: Arc<RwLock<ConsensusMetrics>>,
@@ -204,9 +204,9 @@ impl ConsensusMonitor {
         }
     }
 
-    /// Starts the system de monitoring
+    /// Starts the monitoring system
     pub async fn start(&mut self) {
-        info!("🔍 Starting du monitoring du consensus");
+        info!("🔍 Starting consensus monitoring");
 
         // Initialize time series
         self.initialize_time_series().await;
@@ -219,17 +219,17 @@ impl ConsensusMonitor {
 
         // Attend l'shutdown
         tokio::select! {
-            _ = metrics_task => warn!("Task de collecte de metrics completeede"),
-            _ = dashboard_task => warn!("Task de update du dashboard completeede"),
-            _ = alert_task => warn!("Task de processing des alerts completeede"),
-            _ = export_task => warn!("Task d'export des metrics completeede"),
-            _ = self.shutdown_receiver.recv() => info!("Stopping du monitoring requested"),
+            _ = metrics_task => warn!("Metrics collection task completed"),
+            _ = dashboard_task => warn!("Dashboard update task completed"),
+            _ = alert_task => warn!("Alert processing task completed"),
+            _ = export_task => warn!("Metrics export task completed"),
+            _ = self.shutdown_receiver.recv() => info!("Monitoring shutdown requested"),
         }
 
-        info!("🔍 Monitoring du consensus shut down");
+        info!("🔍 Consensus monitoring stopped");
     }
 
-    /// Stoppinge the system de monitoring
+    /// Stops the monitoring system
     pub async fn stop(&self) {
         if let Err(e) = self.shutdown_sender.send(()).await {
             error!("Error shutting down monitoring: {}", e);
@@ -375,10 +375,10 @@ impl ConsensusMonitor {
             while let Some(alert) = self.alert_receiver.recv().await {
                 info!("📢 Nouvelle alert: {} - {}", alert.severity, alert.message);
                 
-                // Ici on pourrait ajouter:
+                // pourrait ajouter:
                 // - Envoi de notifications (email, Slack, Discord)
                 // - Webhooks
-                // - Integration with systems de monitoring externes
+                // - Integration with external monitoring systems
                 // - Actions automatiques de mitigation
             }
         })

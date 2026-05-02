@@ -1,8 +1,8 @@
 //! Benchmarks de consommation memory for the systems ZK de TSN
 //! 
 //! Mesure the consommation memory pendant:
-//! - Generation de preuve
-//! - Verification de preuve
+//! - Generation de proof
+//! - Verification de proof
 //! 
 //! Contexte de security:
 //! - La consommation memory must be O(n) where n = size of the circuit
@@ -145,7 +145,7 @@ pub fn bench_plonky2_memory_verification() -> crate::crypto::bench::halo2_commit
     let circuit_data = build_memory_test_circuit();
     let verifier_data = circuit_data.verifier_data();
     
-    // Generates a preuve a fois
+    // Generates a proof a fois
     let mut pw = PartialWitness::new();
     let initial = circuit_data.prover_only.public_inputs[0];
     pw.set_target(initial, F::from_canonical_u64(42));

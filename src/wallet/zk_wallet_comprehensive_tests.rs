@@ -1,6 +1,6 @@
 //! Tests complets for the wallet ZK Halo2
 //!
-//! Suite de tests exhaustifs couvrant the generation de preuves, the mise in cache,
+//! Suite de tests exhaustifs couvrant the generation de proofs, the mise in cache,
 //! verification and error cases, with performance tests.
 
 #[cfg(test)]
@@ -38,7 +38,7 @@ mod comprehensive_tests {
         assert_eq!(wallet.config().cache_size, 50);
     }
 
-    /// Test de generation de preuve basique
+    /// Test de generation de proof basique
     #[test]
     fn test_basic_proof_generation() {
         let mut wallet = ZkWallet::new().unwrap();
@@ -58,7 +58,7 @@ mod comprehensive_tests {
         assert!(!proof.to_bytes().is_empty());
     }
 
-    /// Test de verification de preuve
+    /// Test de verification de proof
     #[test]
     fn test_proof_verification() {
         let mut wallet = ZkWallet::new().unwrap();
@@ -68,10 +68,10 @@ mod comprehensive_tests {
         let note = Note::new(5000, recipient_pk_hash, &mut rng);
         let commitment = note.commitment();
         
-        // Generates a preuve valid
+        // Generates a proof valid
         let proof = wallet.prove_note(&note).unwrap();
         
-        // Verify the preuve with the bon commitment
+        // Verify the proof with the bon commitment
         let verification_result = wallet.verify_proof(&proof, &commitment);
         assert!(verification_result.is_ok());
         assert!(verification_result.unwrap());
@@ -84,7 +84,7 @@ mod comprehensive_tests {
         assert!(!wrong_verification.unwrap()); // Doit failsr
     }
 
-    /// Test of the cache de preuves
+    /// Test of the cache de proofs
     #[test]
     fn test_proof_caching_behavior() {
         let mut wallet = ZkWallet::new().unwrap();
@@ -110,12 +110,12 @@ mod comprehensive_tests {
         // Le cache hit must be beaucoup plus rapide
         assert!(time2 < time1 / 10);
         
-        // Les preuves doivent be identiques
+        // Les proofs doivent be identiques
         assert_eq!(proof1.to_bytes(), proof2.to_bytes());
         
         // Verify the statistics
         let stats = wallet.get_stats();
-        assert_eq!(stats.total_proofs, 1); // Une only preuve generatede
+        assert_eq!(stats.total_proofs, 1); // Une only proof generatede
         assert!(stats.cache_hit_rate > 0.0);
     }
 
@@ -129,7 +129,7 @@ mod comprehensive_tests {
         let mut wallet = ZkWallet::with_config(config).unwrap();
         let mut rng = OsRng;
         
-        // Generates 5 preuves different
+        // Generates 5 proofs different
         let mut notes = Vec::new();
         for i in 0..5 {
             let recipient_pk_hash = [i as u8; 32];
@@ -137,7 +137,7 @@ mod comprehensive_tests {
             notes.push(note);
         }
         
-        // Generates the preuves
+        // Generates the proofs
         for note in &notes {
             wallet.prove_note(note).unwrap();
         }
@@ -160,7 +160,7 @@ mod comprehensive_tests {
         let mut wallet = ZkWallet::new().unwrap();
         let mut rng = OsRng;
         
-        // Remplit the cache with multiple preuves
+        // Remplit the cache with multiple proofs
         for i in 0..5 {
             let recipient_pk_hash = [i as u8; 32];
             let note = Note::new(1000 + i as u64, recipient_pk_hash, &mut rng);
@@ -179,7 +179,7 @@ mod comprehensive_tests {
         assert_eq!(stats.cached_proofs, 0);
     }
 
-    /// Test de generation de preuve de nullifier
+    /// Test de generation de proof de nullifier
     #[test]
     fn test_nullifier_proof_generation() {
         let mut wallet = ZkWallet::new().unwrap();
@@ -208,7 +208,7 @@ mod comprehensive_tests {
         assert_eq!(initial_stats.min_generation_time_ms, u64::MAX);
         assert_eq!(initial_stats.max_generation_time_ms, 0);
         
-        // Generates multiple preuves
+        // Generates multiple proofs
         let mut generation_times = Vec::new();
         for i in 0..3 {
             let recipient_pk_hash = [i as u8; 32];
@@ -244,13 +244,13 @@ mod comprehensive_tests {
         // assert!(wallet_result.is_err()); // To uncomment quand the validation is implementede
     }
 
-    /// Test de concurrence - generation de preuves in parallel
+    /// Test de concurrence - generation de proofs in parallel
     #[test]
     fn test_concurrent_proof_generation() {
         let wallet = Arc::new(Mutex::new(ZkWallet::new().unwrap()));
         let mut handles = Vec::new();
         
-        // Lance multiple threads generating of preuves
+        // Lance multiple threads generating of proofs
         for i in 0..3 {
             let wallet_clone = Arc::clone(&wallet);
             let handle = thread::spawn(move || {
@@ -272,7 +272,7 @@ mod comprehensive_tests {
             results.push(result.unwrap());
         }
         
-        // Verify that all preuves are different
+        // Verify that all proofs are different
         let mut proof_set = HashSet::new();
         for proof in results {
             let proof_bytes = proof.to_bytes();
@@ -310,7 +310,7 @@ mod comprehensive_tests {
         let min_latency = latencies.iter().min().unwrap();
         let max_latency = latencies.iter().max().unwrap();
         
-        println!("Statistiques de latence de generation de preuve:");
+        println!("Statistics de latence de generation de proof:");
         println!("  Moyenne: {:?}", avg_latency);
         println!("  Minimum: {:?}", min_latency);
         println!("  Maximum: {:?}", max_latency);
@@ -319,7 +319,7 @@ mod comprehensive_tests {
         let wallet_stats = wallet.get_stats();
         assert_eq!(wallet_stats.total_proofs, num_tests as u64);
         
-        // La first preuve not should pas be in cache
+        // La first proof not should pas be in cache
         assert!(wallet_stats.cache_hit_rate < 1.0);
     }
 
@@ -329,7 +329,7 @@ mod comprehensive_tests {
         let mut wallet = ZkWallet::new().unwrap();
         let mut rng = OsRng;
         
-        // Generates multiple preuves
+        // Generates multiple proofs
         let mut proofs_and_commitments = Vec::new();
         for i in 0..10 {
             let recipient_pk_hash = [i as u8; 32];
@@ -354,7 +354,7 @@ mod comprehensive_tests {
         let total_verification_time = start_time.elapsed();
         let avg_verification_time = total_verification_time / proofs_and_commitments.len() as u32;
         
-        println!("Statistiques de verification:");
+        println!("Statistics de verification:");
         println!("  Verifications successful: {}/{}", successful_verifications, proofs_and_commitments.len());
         println!("  Temps total: {:?}", total_verification_time);
         println!("  Temps moyen par verification: {:?}", avg_verification_time);
@@ -381,7 +381,7 @@ mod comprehensive_tests {
             assert!(proof_result.is_ok());
             
             if i % 10 == 0 {
-                println!("Generated {}/{} preuves", i + 1, num_proofs);
+                println!("Generated {}/{} proofs", i + 1, num_proofs);
             }
         }
         
@@ -391,7 +391,7 @@ mod comprehensive_tests {
         println!("Test de stress completed:");
         println!("  Preuves generatedes: {}", num_proofs);
         println!("  Temps total: {:?}", total_time);
-        println!("  Temps moyen par preuve: {:?}", avg_time_per_proof);
+        println!("  Temps moyen par proof: {:?}", avg_time_per_proof);
         
         let final_stats = wallet.get_stats();
         println!("  Cache hit rate: {:.2}%", final_stats.cache_hit_rate * 100.0);
@@ -422,7 +422,7 @@ mod comprehensive_tests {
         let proof1 = wallet.prove_note(&note1).unwrap();
         let proof2 = wallet.prove_note(&note2).unwrap();
         
-        // Les preuves doivent be different same with the same key public
+        // Les proofs doivent be different same with the same key public
         assert_ne!(proof1.to_bytes(), proof2.to_bytes());
     }
 
@@ -437,7 +437,7 @@ mod comprehensive_tests {
         let note = Note::new(3333, recipient_pk_hash, &mut rng);
         let commitment = note.commitment();
         
-        // Generates a preuve with the first wallet
+        // Generates a proof with the first wallet
         let proof = wallet1.prove_note(&note).unwrap();
         
         // Verifies with the second wallet

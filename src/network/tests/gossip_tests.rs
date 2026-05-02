@@ -15,12 +15,12 @@ use crate::network::gossip::{GossipConfig, GossipEngine};
 use crate::network::gossip_protocol::{InventoryId, InventoryType, NetworkMessage};
 use crate::network::PeerId;
 
-/// Creates a PeerId de test
+/// Creates a test PeerId
 fn test_peer_id(port: u16) -> PeerId {
     PeerId(SocketAddr::new("127.0.0.1".parse().unwrap(), port))
 }
 
-/// Creates a bloc de test
+/// Creates a test block
 fn create_test_block(height: u64, nonce: u64) -> Block {
     Block::new(
         height,
