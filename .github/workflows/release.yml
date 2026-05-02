@@ -10,6 +10,9 @@ on:
         description: 'Release tag (e.g. v2.9.15)'
         required: true
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
