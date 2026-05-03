@@ -45,6 +45,39 @@ same version.
 
 ## Releases
 
+### v2.9.23 — KF-008 root fix + remove all open() auto-wipe paths
+
+| Field | Value |
+|-------|-------|
+| `version` | `2.9.23` |
+| `tag` | `v2.9.23` |
+| `commit` | `c5010bc18ab6570d1ed00347efb4ae5ed368a485` |
+| `branch` | `main` |
+| `binary_sha256` | `21a8f59466827835c3c69c31d576670236f4ff6e3bf02751e8ac4dfb80dfbe6a` |
+| `tarball_sha256` | `4dd574921d51078523e300e24689577fb308d7af89bac0d89229d9fff1ad915d` |
+| `signature` | `5c24a2e5137d1cc165078f237de018206407aeacd2e2c2c304d0d84b00ead31d9c4d0dcd02e1afe6b93181f9397d1a13b89a9004b7bee2fb3e0e0c1d6476940a` |
+| `network_profile` | `testnet-v12` |
+| `deployment_ring` | `0` (Ring 0 cluster validated; community rollout via auto-update) |
+| `human_validation` | 2026-05-03 — Ring 0 rolling deploy v2.9.22 → v2.9.23 + 10 min soak: 0 auto-wipe events across the cluster, `uniq_hash@h = 1` on every tick, identical chain hash at the tip on 5/5 nodes. KF-008 cross-validated: cw@h=31100 within <0.5% spread; 3/5 byte-identical via the new `/cumulative_work/:height` endpoint. KF-X / KF-Y validated in isolated test (artificial markers injected on a fresh data dir → halt + DB preserved → escape-hatch env var → boot OK). Manifest signature verified against the embedded release pubkey. |
+| `manifest_url` | `https://tsnchain.com/releases/latest.json` |
+
+**Notes**:
+- This release closes the chain of incident-driven hardening that
+  started with v2.9.16 (mining `reorg_lock` fix on 2026-05-02). After
+  v2.9.23, `blockchain.rs::open()` never destroys chain data without
+  an explicit operator opt-in. Two new env vars are introduced for
+  recovery: `TSN_CLEAR_REORG_MARKER=1` and `TSN_RESET_FOR_FAST_SYNC=1`.
+- `MIN_VERSION` left at `2.9.15` for soft propagation. A follow-up
+  release will bump it once auto-update propagation has been
+  confirmed stable on the community testnet.
+- Genesis hash unchanged at
+  `007870623724127ccf467b74041c3fed0e3569f02c66414a3018d7c04856e38d`
+  (testnet-v12). Verified across the 5/5 Ring 0 cluster: code
+  constant matches the on-disk block 0 hash on the two nodes that
+  hold a real genesis block, and 5/5 nodes converged on a single
+  chain hash at the tip during the soak (mathematically excludes a
+  divergent genesis on any node).
+
 ### v2.9.20 — Empty-genesis transitional fix (incident 2026-05-02 baseline)
 
 | Field | Value |
