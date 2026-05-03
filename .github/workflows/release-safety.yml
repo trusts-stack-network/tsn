@@ -93,7 +93,9 @@ jobs:
           NETWORK="${NETWORK:-testnet-v12}"
           # For testnet-v12, the manifest URL is fixed.
           # For mainnet-v1, the URL is read from the profile.
-          MANIFEST_URL=$(grep -E '`manifest_url`' docs/RELEASE_DECISIONS.md | head -1 | grep -oE 'https://[^ `]+')
+          # Match only release-entry rows (which carry the URL on the same line),
+          # not the field-definition table at the top of the file.
+          MANIFEST_URL=$(grep -E '`manifest_url`.*https://' docs/RELEASE_DECISIONS.md | head -1 | grep -oE 'https://[^ `]+')
           [ -n "$MANIFEST_URL" ] || { echo "::error::could not resolve manifest URL"; exit 1; }
           echo "manifest_url=$MANIFEST_URL" >> $GITHUB_OUTPUT
       - name: Run validate-manifest.sh
