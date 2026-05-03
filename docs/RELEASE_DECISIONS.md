@@ -45,6 +45,34 @@ same version.
 
 ## Releases
 
+### v2.9.24 — peer status classifier, lag-first and age-tolerant
+
+| Field | Value |
+|-------|-------|
+| `version` | `2.9.24` |
+| `tag` | `v2.9.24` |
+| `commit` | `617896b736dd44acdc4d2c541456df5d1a55dddb` |
+| `branch` | `main` |
+| `binary_sha256` | `ef03b991aec014679e27290bc235576b03ad863dc2a3916146d87d6563195db3` |
+| `tarball_sha256` | `b5fcdc19c084521d81f11a28793ea21da4497c6d7011367631b393c4134aab3f` |
+| `signature` | `3a474cbbe6d7afa128205203ecac2b42963ace70d925d3cb3dbe8c6f6422de3f26bf6842a18e38352f01154a95ce9b4160eb3fe49d6170b84560b0f9eecc2d04` |
+| `network_profile` | `testnet-v12` |
+| `deployment_ring` | `2` (community rollout via auto-update) |
+| `human_validation` | 2026-05-04 — Cosmetic / observability fix only. The `/network/status` peer classifier was returning `stale` for healthy miners that had not broadcast in 30 s; lag-first rule ships, frontend `network.js` aligned to the same 180 s threshold so backend and frontend agree on a single notion of stale. Manifest signed locally with the release key (Ed25519 against the embedded pubkey `8abd0a68…`), verified, deployed to `https://tsnchain.com/releases/latest.json`. |
+| `manifest_url` | `https://tsnchain.com/releases/latest.json` |
+
+**Notes**:
+- No consensus, protocol, or genesis change. The fix is strictly the
+  per-peer `status` value returned by `/network/status` (and the
+  matching frontend threshold).
+- `binary_sha256` is the SHA256 of the stripped `tsn` binary
+  extracted from `tsn-v2.9.24-linux-x86_64.tar.gz`. The tarball SHA
+  is recorded separately under `tarball_sha256`.
+- Manifest signature was produced locally because the CI signing
+  secret (`RELEASE_SIGNING_KEY_PEM`) is not configured on this repo.
+  Signature verifies against the embedded release pubkey
+  `8abd0a68f768c744a8e26f27f82688ef002f696068f77b1572c8fb15f0fb290a`.
+
 ### v2.9.23 — KF-008 root fix + remove all open() auto-wipe paths
 
 | Field | Value |
