@@ -562,15 +562,42 @@ async fn apply_update(binary_data: &[u8]) -> Result<PathBuf, String> {
     // Find the tsn binary in the extracted files
     let new_binary = find_binary_in_dir(&tmp_dir)?;
 
-    // Back up current binary
+    // Back up current binary.
+    // v2.9.25 — rename can fail with ENOENT when `current_exe` resolves
+    // to a virtual path (e.g. `/proc/<pid>/exe` on Linux when the binary
+    // path got recycled by a previous swap, or when the executable has
+    // been deleted from its on-disk location). Fall back to a copy in
+    // that case so the auto-update keeps working on non-standard
+    // installs (community relays, nohup, etc.).
     let backup_path = current_exe.with_extension("backup");
     if backup_path.exists() {
         std::fs::remove_file(&backup_path)
             .map_err(|e| format!("Cannot remove old backup: {}", e))?;
     }
-    std::fs::rename(&current_exe, &backup_path)
-        .map_err(|e| format!("Cannot back up current binary: {}", e))?;
-    info!(backup = %backup_path.display(), "Current binary backed up");
+    if let Err(rename_err) = std::fs::rename(&current_exe, &backup_path) {
+        // Rename failed (typically EXDEV across filesystems or ENOENT
+        // on a virtual /proc path). Try a copy + delete instead.
+        match std::fs::copy(&current_exe, &backup_path) {
+            Ok(_) => {
+                // Remove the original best-effort; if it fails the new
+                // binary will overwrite it below anyway.
+                let _ = std::fs::remove_file(&current_exe);
+                info!(
+                    backup = %backup_path.display(),
+                    "Current binary backed up via copy fallback (rename failed: {})",
+                    rename_err
+                );
+            }
+            Err(copy_err) => {
+                return Err(format!(
+                    "Cannot back up current binary: rename failed ({}), copy fallback also failed ({})",
+                    rename_err, copy_err
+                ));
+            }
+        }
+    } else {
+        info!(backup = %backup_path.display(), "Current binary backed up");
+    }
 
     // Move new binary into place
     std::fs::copy(&new_binary, &current_exe)
@@ -660,8 +687,18 @@ fn restart_node(installed_path: Option<PathBuf>) -> ! {
 
     // Check if running under systemd
     if std::env::var("INVOCATION_ID").is_ok() || std::env::var("NOTIFY_SOCKET").is_ok() {
-        info!("Running under systemd — exiting cleanly for automatic restart");
-        std::process::exit(0);
+        // v2.9.25 — exit with a non-zero code so the unit's
+        // `Restart=on-failure` directive triggers an automatic restart
+        // with the freshly-installed binary. The previous code used
+        // `exit(0)`, which only restarted units configured with
+        // `Restart=always` and silently left every other unit dead
+        // after a successful auto-update — exactly what was observed
+        // on the Ring 0 cluster after the v2.9.24 rollout, where the
+        // hardening drop-in had set `Restart=on-failure`. Exiting
+        // non-zero is consistent with both `Restart=always` and
+        // `Restart=on-failure`.
+        info!("Running under systemd — exiting non-zero so Restart= directive triggers a fresh start with the new binary");
+        std::process::exit(1);
     }
 
     // Determine which binary to exec:

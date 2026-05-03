@@ -6719,7 +6719,18 @@ async fn cmd_node(
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
                 .unwrap_or_default();
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            // v2.9.25 — periodic tip broadcast cadence reduced from 10 s to
+            // 3 s. With a target block time of 10 s and N >= 5 community
+            // miners, each miner only broadcasts a fresh tip after winning
+            // a block (~N x block_time on average between local wins), so
+            // the periodic tick is the only signal a seed sees from a
+            // peer that has not just won a block. At 10 s, a peer that
+            // imports a remote block right after the tick stays visible
+            // as "1 block behind" for the full 10 s, even though it is
+            // already on consensus. Dropping to 3 s keeps the explorer
+            // freshness within ~3 s of every peer's true tip while staying
+            // well under the gossipsub mesh capacity.
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
             loop {
                 interval.tick().await;
 
