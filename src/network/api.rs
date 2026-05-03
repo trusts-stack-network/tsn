@@ -2743,14 +2743,30 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
             let lag = h.map(|ph| tip_height.saturating_sub(ph));
             // Compute how old the height data is (seconds since last update)
             let height_age_secs = p.height_updated_at.map(|t| now_secs.saturating_sub(t));
-            // A P2P height is considered stale if it hasn't been updated in 30+ seconds
-            let is_height_stale = height_age_secs.map(|age| age > 30).unwrap_or(true);
-            let status = match (h, lag, is_height_stale) {
+            // v2.9.24 — peer status reflects actual peer health, not just broadcast
+            // recency. The previous logic flagged any peer with age > 30s as
+            // "stale" regardless of its tip lag, which on a PoW network with
+            // ~10 s block time and N miners produced a lot of false positives:
+            // each miner only broadcasts after winning a block (~N × block_time
+            // on average), so most miners are silent for >30 s most of the time
+            // even when they are mining cleanly on consensus.
+            //
+            // Rules now, in order:
+            //   - lag is the strongest signal: if lag <= 5, the peer's tip
+            //     matches consensus, mark "fresh" regardless of broadcast age;
+            //   - lag > 50 is real lag, mark "behind" regardless of age;
+            //   - between, if the last broadcast is older than ~3 min the peer
+            //     has not advanced in a long time, mark "stale";
+            //   - otherwise the peer is moderately lagging but recently seen,
+            //     mark "stale" (label kept identical for back-compat).
+            let stale_age_threshold_secs: u64 = 180;
+            let status = match (h, lag, height_age_secs) {
                 (None, _, _) => "unknown",
-                (_, _, true) => "stale",  // height data too old — don't trust the lag
-                (Some(_), Some(l), false) if l <= 5 => "fresh",
-                (Some(_), Some(l), false) if l <= 50 => "stale",
-                (Some(_), Some(_), false) => "behind",
+                (Some(_), Some(l), _) if l <= 5 => "fresh",
+                (Some(_), Some(_), None) => "stale",                 // never seen height
+                (Some(_), Some(l), Some(_)) if l > 50 => "behind",
+                (Some(_), Some(_), Some(age)) if age > stale_age_threshold_secs => "stale",
+                (Some(_), Some(_), Some(_)) => "stale",              // moderate lag, fresh enough
                 _ => "unknown",
             };
             serde_json::json!({
@@ -2819,10 +2835,13 @@ async fn network_status(State(state): State<Arc<AppState>>) -> Json<serde_json::
             if p.version == "?" || p.version.is_empty() { continue; }
             let lag = tip_height.saturating_sub(p.height);
             let age = now_secs.saturating_sub(p.last_seen);
-            let status = if age > 60 { "stale" }
-                else if lag <= 5 { "fresh" }
-                else if lag <= 50 { "stale" }
-                else { "behind" };
+            // v2.9.24 — same status semantics as the P2P classifier above:
+            // lag is the strongest signal; broadcast-age alone never overrides
+            // a small lag. See the P2P classifier comment for rationale.
+            let status = if lag <= 5 { "fresh" }
+                else if lag > 50 { "behind" }
+                else if age > 180 { "stale" }
+                else { "stale" };
             // Don't double-count seeds: if this peer_info entry matches one
             // of the hardcoded seeds (by libp2p PeerID or URL hash), skip it
             // — the seed is already in the `seeds` list. Applies to both
