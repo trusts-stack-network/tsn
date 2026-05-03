@@ -1,6 +1,6 @@
 [package]
 name = "tsn"
-version = "2.9.20"
+version = "2.9.23"
 edition = "2021"
 description = "TSN (Trust Stack Network) - A privacy-preserving post-quantum cryptocurrency"
 license = "MIT"
@@ -142,6 +142,10 @@ path = "src/bin/miner_monitor.rs"
 [[bin]]
 name = "fuzz_runner"
 path = "fuzz/fuzz_targets/runner.rs"
+
+[[bin]]
+name = "tsn-inject-marker"
+path = "src/bin/inject_marker.rs"
 
 [[bench]]
 name = "timing_bench"

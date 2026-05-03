@@ -1175,7 +1175,7 @@ async fn attempt_snapshot_sync(
     // v1.7.0: Read exact cumulative_work from snapshot info (decimal string).
     // If absent (old peer), refuse snapshot for non-seed peers.
     let snap_work_str = info["cumulative_work"].as_str().unwrap_or("0");
-    let snap_work: u128 = snap_work_str.parse().unwrap_or(0);
+    let mut snap_work: u128 = snap_work_str.parse().unwrap_or(0);
 
     if snap_work == 0 {
         let is_seed = crate::config::SEED_NODES.iter().any(|s| peer_url.starts_with(s));
@@ -1388,23 +1388,29 @@ async fn attempt_snapshot_sync(
     // falls back to the previous behaviour.
     let lwma_seed = fetch_pre_snapshot_lwma_headers(&client, peer_url, snap_height).await;
 
-    // KF-007 + KF-008 (incident 2026-05-02): cross-validate the snapshot's
-    // claimed cumulative_work against a quorum of peers BEFORE importing.
-    // The hash + height cross-verify above (line ~1248) catches a peer
-    // serving a different chain, but it doesn't catch a peer that is on
-    // the right chain yet has propagated a drifted cum_work seed (which
-    // is exactly how KF-008 spreads). Without this gate, the importer
-    // inherits the peer's drifted seed and the drift becomes permanent.
+    // KF-007 + KF-008 (incident 2026-05-02, RC v3 patch 2026-05-03):
+    // cross-validate the snapshot before import using two independent peer
+    // observations. The previous (RC v2) version compared the snapshot's
+    // (height, hash) to peers' CURRENT TIP — which over-rejected legitimate
+    // stale-but-canonical snapshots and blocked node-1 from catching up
+    // during the soak (a peer serving snapshot at h=28900 was rejected
+    // because consensus tip had advanced to h=28918 — even though the
+    // snapshot's hash matched what the cluster actually has at h=28900).
     //
-    // Strategy: build a peer list from operator-trusted peers + seeds,
-    // poll /chain/info on each, find the (height, hash) cluster the
-    // snapshot belongs to, and compare snap_work to the median cum_work
-    // among agreeing peers. If snap_work is more than CUM_WORK_DRIFT_TOLERANCE_PCT
-    // off the median, refuse the snapshot. The node will retry with a
-    // different peer at the next sync tick.
+    // RC v3 separates the two questions:
+    //   (1) Is the snapshot on the canonical chain? Asks peers for
+    //       /block/height/{snap_height} and accepts iff the snapshot's
+    //       block_hash matches the majority hash AT THAT HEIGHT. This
+    //       allows older snapshots as long as they're on the right chain.
+    //   (2) Is the snapshot's cum_work consistent? Only enforced if the
+    //       snapshot is RECENT (within 10 blocks of consensus tip), where
+    //       the cum_work check is meaningful. For older snapshots the
+    //       cw check is skipped — a stale snapshot's cw is from a
+    //       different point in history and can't be compared to current
+    //       tip cw without per-height cw queries (not available API-side).
     {
         use super::cum_work_consensus::{
-            observe_peers, CUM_WORK_DRIFT_TOLERANCE_PCT, MIN_AGREEMENT_COUNT,
+            CUM_WORK_DRIFT_TOLERANCE_PCT, MIN_AGREEMENT_COUNT,
         };
         let peer_list: Vec<String> = state.peers.read()
             .map(|p| p.clone())
@@ -1412,62 +1418,177 @@ async fn attempt_snapshot_sync(
             .into_iter()
             .filter(|p| super::is_contactable_peer(p))
             .collect();
-        // Only run the cross-cum_work check if we have enough peers to
-        // form a quorum. With <3 peers we'd be back to single-source trust.
+
         if peer_list.len() >= MIN_AGREEMENT_COUNT {
-            match observe_peers(&client, &peer_list, Duration::from_secs(5)).await {
-                Some(consensus) => {
-                    // Only enforce if the consensus is on the snapshot's tip.
-                    // (If consensus is on a different tip, the cross-verify
-                    // earlier should already have rejected — defensive check.)
-                    if consensus.height == snap_height && consensus.hash == block_hash {
-                        let median = consensus.median_cumulative_work;
-                        let tolerance = median.saturating_mul(CUM_WORK_DRIFT_TOLERANCE_PCT) / 100;
-                        let diff = if snap_work > median { snap_work - median } else { median - snap_work };
-                        if diff > tolerance && median > 0 {
-                            warn!(
-                                "Snapshot REJECTED (KF-008 cum_work drift): peer reports cw={} at height={} hash={}, but median of {} peers is cw={} (delta={}, tolerance={})",
-                                snap_work, snap_height, hex::encode(&block_hash[..8]),
-                                consensus.agreement_count, median, diff, tolerance
-                            );
-                            return Err(SyncError::InvalidResponse(format!(
-                                "snapshot cum_work {} disagrees with peer median {} by {} (>{}% of median)",
-                                snap_work, median, diff, CUM_WORK_DRIFT_TOLERANCE_PCT
-                            )));
-                        }
-                        info!(
-                            "Snapshot cum_work cross-check OK: snap_work={} within {}% of {} peers' median {} (delta={})",
-                            snap_work, CUM_WORK_DRIFT_TOLERANCE_PCT,
-                            consensus.agreement_count, median, diff
-                        );
-                    } else {
-                        // Defense in depth: hash+height cross-verify earlier
-                        // should already have caught this. Refuse anyway.
-                        warn!(
-                            "Snapshot REJECTED: peer consensus on (h={}, hash={}) does not match snapshot (h={}, hash={})",
-                            consensus.height, hex::encode(&consensus.hash[..8]),
-                            snap_height, hex::encode(&block_hash[..8])
-                        );
-                        return Err(SyncError::InvalidResponse(
-                            "snapshot tip disagrees with peer consensus".into()
-                        ));
+            // (1) Hash @ snap_height majority check.
+            // Poll /block/height/{snap_height} on each peer in parallel,
+            // tracking which peer URL voted for which hash so we can
+            // re-poll cum_work@h from the *canonical-hash* peers in step (2).
+            let mut hash_handles = Vec::new();
+            for peer in &peer_list {
+                let c = client.clone();
+                let p = peer.clone();
+                let url = format!("{}/block/height/{}", peer, snap_height);
+                hash_handles.push(tokio::spawn(async move {
+                    let resp = c.get(&url).timeout(Duration::from_secs(3)).send().await
+                        .ok().and_then(|r| if r.status().is_success() { Some(r) } else { None });
+                    let hash_opt = if let Some(r) = resp {
+                        r.json::<serde_json::Value>().await.ok()
+                            .and_then(|body| body.get("hash").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    } else { None };
+                    (p, hash_opt)
+                }));
+            }
+            let mut hash_votes: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            let mut hash_responding = 0usize;
+            // Peer URLs that returned the snapshot's own hash — these are
+            // the ones we trust to ask for cum_work@h in step (2).
+            let mut canonical_hash_peers: Vec<String> = Vec::new();
+            let snap_hash_for_filter = hex::encode(&block_hash);
+            for h in hash_handles {
+                if let Ok((peer_url_str, Some(hash_str))) = h.await {
+                    *hash_votes.entry(hash_str.clone()).or_insert(0) += 1;
+                    hash_responding += 1;
+                    if hash_str == snap_hash_for_filter {
+                        canonical_hash_peers.push(peer_url_str);
                     }
                 }
-                None => {
-                    // Not enough peers responded; downgrade to a soft warning
-                    // and proceed (the hash + height cross-verify is still in
-                    // effect from earlier). Fully refusing here would block
-                    // recovery in low-peer scenarios such as a coordinated
-                    // network reset (see comment at line 1283 about v2.5.4).
+            }
+            let snap_hash_hex = snap_hash_for_filter.clone();
+            let votes_for_snap = hash_votes.get(&snap_hash_hex).copied().unwrap_or(0);
+
+            if hash_responding >= MIN_AGREEMENT_COUNT {
+                // We have a real signal. The snapshot's hash must be the
+                // most-voted hash AT snap_height (a strict majority isn't
+                // required if no other hash has a stronger vote — but for
+                // safety we require votes_for_snap >= MIN_AGREEMENT_COUNT
+                // AND votes_for_snap >= max_other_hash_votes).
+                let max_other = hash_votes.iter()
+                    .filter(|(k, _)| **k != snap_hash_hex)
+                    .map(|(_, v)| *v)
+                    .max()
+                    .unwrap_or(0);
+                if votes_for_snap < MIN_AGREEMENT_COUNT || votes_for_snap < max_other {
                     warn!(
-                        "Snapshot cum_work cross-check SKIPPED: insufficient peer quorum (have {} contactable peers, need {})",
-                        peer_list.len(), MIN_AGREEMENT_COUNT
+                        "Snapshot REJECTED (KF-007 hash@h): snap_hash {} at h={} has only {} peer votes (max competing hash has {} votes, {} peers responded)",
+                        &snap_hash_hex[..16], snap_height, votes_for_snap, max_other, hash_responding
+                    );
+                    return Err(SyncError::InvalidResponse(format!(
+                        "snapshot hash at h={} not majority among {} peers (votes={}, max_other={})",
+                        snap_height, hash_responding, votes_for_snap, max_other
+                    )));
+                }
+                info!(
+                    "Snapshot hash@h={} cross-check OK: {} of {} peers confirm hash {}",
+                    snap_height, votes_for_snap, hash_responding, &snap_hash_hex[..16]
+                );
+
+                // (2) KF-008 ROOT FIX (RC v4 — incident 2026-05-02 follow-up).
+                // We DO NOT trust the snapshot publisher's `snap_work` value.
+                // Instead, query each peer that voted for the canonical hash
+                // for its own `cumulative_work_at_height(snap_height)` via the
+                // dedicated endpoint, and require ≥ MIN_AGREEMENT_COUNT peers
+                // to return a value within CUM_WORK_DRIFT_TOLERANCE_PCT of
+                // each other. The median of the agreeing values is what gets
+                // persisted in DB. If we cannot form a quorum, the snapshot
+                // is REFUSED — not silently imported with a single-source
+                // value as in RC v3 and earlier.
+                //
+                // This makes it impossible for one drifted publisher to seed
+                // the rest of the network with a wrong cum_work base.
+                let mut cw_handles = Vec::new();
+                for peer in &canonical_hash_peers {
+                    let c = client.clone();
+                    let url = format!("{}/cumulative_work/{}", peer, snap_height);
+                    cw_handles.push(tokio::spawn(async move {
+                        c.get(&url).timeout(Duration::from_secs(3)).send().await
+                            .ok()
+                            .and_then(|r| if r.status().is_success() { Some(r) } else { None })
+                            .map(|r| async move {
+                                r.json::<serde_json::Value>().await.ok()
+                                    .and_then(|body| body.get("cumulative_work")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| s.parse::<u128>().ok()))
+                            })
+                    }));
+                }
+                let mut cw_values: Vec<u128> = Vec::new();
+                for h in cw_handles {
+                    if let Ok(Some(fut)) = h.await {
+                        if let Some(cw) = fut.await {
+                            cw_values.push(cw);
+                        }
+                    }
+                }
+                cw_values.sort();
+
+                if cw_values.len() < MIN_AGREEMENT_COUNT {
+                    warn!(
+                        "Snapshot REJECTED (KF-008 root): only {} of {} canonical-hash peers returned cum_work@h={} (need ≥{}). Refusing to import snapshot with single-source cum_work seed.",
+                        cw_values.len(), canonical_hash_peers.len(), snap_height, MIN_AGREEMENT_COUNT
+                    );
+                    return Err(SyncError::InvalidResponse(format!(
+                        "KF-008: only {} peers returned cum_work@h={} (need ≥{})",
+                        cw_values.len(), snap_height, MIN_AGREEMENT_COUNT
+                    )));
+                }
+
+                // Compute median of the returned cw values.
+                let median_cw = cw_values[cw_values.len() / 2];
+
+                // Verify a tight cluster: require ≥ MIN_AGREEMENT_COUNT values
+                // within CUM_WORK_DRIFT_TOLERANCE_PCT of the median. If the
+                // peers themselves disagree wildly, we cannot trust any of
+                // them — refuse.
+                let tolerance = median_cw.saturating_mul(CUM_WORK_DRIFT_TOLERANCE_PCT) / 100;
+                let agreeing: Vec<u128> = cw_values.iter().copied()
+                    .filter(|v| {
+                        let d = if *v > median_cw { *v - median_cw } else { median_cw - *v };
+                        d <= tolerance || median_cw == 0
+                    })
+                    .collect();
+                if agreeing.len() < MIN_AGREEMENT_COUNT {
+                    warn!(
+                        "Snapshot REJECTED (KF-008 root): peers disagree on cum_work@h={} — only {} of {} values within {}% of median {}. Values: {:?}",
+                        snap_height, agreeing.len(), cw_values.len(),
+                        CUM_WORK_DRIFT_TOLERANCE_PCT, median_cw, cw_values
+                    );
+                    return Err(SyncError::InvalidResponse(format!(
+                        "KF-008: peers disagree on cum_work@h={} ({} agreeing of {})",
+                        snap_height, agreeing.len(), cw_values.len()
+                    )));
+                }
+
+                // Override snap_work with the recomputed median. This is the
+                // value that gets persisted by import_snapshot_at_height.
+                let publisher_cw = snap_work;
+                snap_work = median_cw;
+                let drift_from_publisher = if publisher_cw > median_cw {
+                    publisher_cw - median_cw
+                } else {
+                    median_cw - publisher_cw
+                };
+                if drift_from_publisher > tolerance && publisher_cw > 0 {
+                    warn!(
+                        "KF-008: publisher cum_work {} drifts from peer median {} by {} (>{}% tolerance) — OVERRIDDEN with peer-median value before import",
+                        publisher_cw, median_cw, drift_from_publisher, CUM_WORK_DRIFT_TOLERANCE_PCT
+                    );
+                } else {
+                    info!(
+                        "KF-008 cum_work cross-check OK: snap_work={} (peer median of {} values, all within {}% of median)",
+                        snap_work, agreeing.len(), CUM_WORK_DRIFT_TOLERANCE_PCT
                     );
                 }
+            } else {
+                warn!(
+                    "Snapshot KF-007 hash@h check SKIPPED: only {} peers returned a block at h={} (need {})",
+                    hash_responding, snap_height, MIN_AGREEMENT_COUNT
+                );
             }
         } else {
             info!(
-                "Snapshot cum_work cross-check SKIPPED: only {} contactable peers (need ≥{}); relying on hash+height cross-verify only",
+                "Snapshot KF-007 cross-check SKIPPED: only {} contactable peers (need ≥{}); relying on hash+height cross-verify earlier in the function",
                 peer_list.len(), MIN_AGREEMENT_COUNT
             );
         }

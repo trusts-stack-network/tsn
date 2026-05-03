@@ -785,6 +785,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/miner/stats", get(miner_stats))
         .route("/block/:hash", get(get_block))
         .route("/block/height/:height", get(get_block_by_height))
+        .route("/cumulative_work/:height", get(get_cumulative_work_at_height))
         .route("/tx/:hash", get(get_transaction))
         .route("/transactions/recent", get(get_recent_transactions))
         .route("/blocks/list", get(list_blocks_paginated))
@@ -1082,7 +1083,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "mainnet_launch".to_string(),
         name: "Mainnet Launch".to_string(),
-        description: "Lancement officiel du network principal TSN".to_string(),
+        description: "Official launch of the TSN main network".to_string(),
         quarter: "Q1 2026".to_string(),
         status: "completed".to_string(),
         progress_pct: 100.0,
@@ -1103,7 +1104,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "sharding_v2".to_string(),
         name: "Sharding V2".to_string(),
-        description: "Improvement de scalability avec sharding dynamique".to_string(),
+        description: "Scalability improvements via dynamic sharding".to_string(),
         quarter: "Q2 2026".to_string(),
         status: "active".to_string(),
         progress_pct: sharding_progress,
@@ -1118,7 +1119,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "interoperability".to_string(),
         name: "Interoperability".to_string(),
-        description: "Ponts cross-chain vers Ethereum, Solana et Cosmos".to_string(),
+        description: "Cross-chain bridges with major external networks".to_string(),
         quarter: "Q3 2026".to_string(),
         status: "pending".to_string(),
         progress_pct: 0.0,
@@ -1132,7 +1133,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "mobile_sdk".to_string(),
         name: "Mobile SDK".to_string(),
-        description: "SDK natif pour applications mobiles decentralized".to_string(),
+        description: "Native SDK for decentralized mobile applications".to_string(),
         quarter: "Q4 2026".to_string(),
         status: "pending".to_string(),
         progress_pct: 0.0,
@@ -1279,6 +1280,26 @@ async fn get_block_by_height(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(block_to_response(&block, height)))
+}
+
+/// KF-008 root fix (incident 2026-05-02 follow-up, RC v4 2026-05-03):
+/// expose this node's `cumulative_work` at a specific height. Used by
+/// fast-sync receivers to cross-validate the snapshot publisher's cw seed
+/// against a peer median before persisting it. Returns 404 if the height
+/// is below `fast_sync_base_height` (we don't have a real cw value there)
+/// or above the local tip.
+async fn get_cumulative_work_at_height(
+    State(state): State<Arc<AppState>>,
+    Path(height): Path<u64>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let chain = state.blockchain.read().await;
+    let cw = chain
+        .cumulative_work_at_height(height)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(serde_json::json!({
+        "height": height,
+        "cumulative_work": cw.to_string(),
+    })))
 }
 
 fn block_to_response(block: &ShieldedBlock, height: u64) -> BlockResponse {
