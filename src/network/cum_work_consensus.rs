@@ -160,6 +160,16 @@ pub async fn observe_peers(
             Ok(i) => i,
             Err(_) => continue,
         };
+        // Filter bootstrapping peers (h<10 or zero-hash tip): they are not
+        // reporting "canonical chain at h=0", they are reporting "I have not
+        // yet synced anything". Counting them as voters would tilt consensus
+        // toward (h=0, hash=zeros) and lock the cluster out of fast-sync from
+        // the single peer that actually has the chain. Encountered live
+        // 2026-05-03 during Ring 0 RC rollout when 4 of 5 seeds were
+        // simultaneously force-resynced and only 1 had data.
+        if info.height < 10 {
+            continue;
+        }
         let hash_bytes = match hex::decode(&info.latest_hash) {
             Ok(b) if b.len() == 32 => {
                 let mut a = [0u8; 32];
@@ -168,6 +178,9 @@ pub async fn observe_peers(
             }
             _ => continue,
         };
+        if hash_bytes == [0u8; 32] {
+            continue;
+        }
         let cum_work = match parse_cum_work(&info.cumulative_work) {
             Some(c) => c,
             None => continue,
