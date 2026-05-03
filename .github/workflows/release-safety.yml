@@ -1,0 +1,227 @@
+name: Release Safety Checks
+
+# Hard gate before any TSN release artifact reaches a public URL or
+# a Ring 1+ host. Every job below MUST pass for the release to be
+# considered shippable. Failure of any single check blocks the
+# pipeline.
+#
+# Source incident: 2026-05-02 (see docs/POSTMORTEMS.md and
+# docs/KNOWN_FAILURES.md). Each known failure mode (KF-001..KF-009)
+# corresponds to one or more of the checks below.
+#
+# Triggers:
+#   - On every tag push v* (release candidate).
+#   - On every PR touching docs/RELEASE_DECISIONS.md or
+#     docs/network-profiles/ (so the ledger and profile stay valid).
+#   - On manual dispatch with explicit tag input.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'docs/RELEASE_DECISIONS.md'
+      - 'docs/network-profiles/**'
+      - 'scripts/release-safety/**'
+      - '.github/workflows/release-safety.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to validate (e.g. v2.9.21)'
+        required: true
+      network_profile:
+        description: 'Target network profile (testnet-v12, mainnet-v1)'
+        required: true
+        default: 'testnet-v12'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-release-decision:
+    name: Release Decision is recorded
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve tag
+        id: t
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Validating tag: $TAG"
+      - name: Tag MUST have an entry in docs/RELEASE_DECISIONS.md
+        run: |
+          TAG=${{ steps.t.outputs.tag }}
+          if ! grep -q "^### $TAG " docs/RELEASE_DECISIONS.md; then
+              echo "::error::Tag $TAG has no entry in docs/RELEASE_DECISIONS.md."
+              echo "::error::Add an entry following the template at the bottom of that file."
+              echo "::error::Required fields: commit, binary_sha256, tarball_sha256, signature, network_profile."
+              exit 1
+          fi
+          echo "Entry for $TAG found."
+
+  validate-manifest:
+    name: Public manifest is well-formed and signed
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: validate-release-decision
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install python deps
+        run: pip install --quiet cryptography
+      - name: Resolve tag
+        id: t
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              TAG="${{ inputs.tag }}"
+          else
+              TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      - name: Resolve manifest URL from network profile
+        id: m
+        run: |
+          NETWORK="${{ inputs.network_profile }}"
+          NETWORK="${NETWORK:-testnet-v12}"
+          # For testnet-v12, the manifest URL is fixed.
+          # For mainnet-v1, the URL is read from the profile.
+          MANIFEST_URL=$(grep -E '`manifest_url`' docs/RELEASE_DECISIONS.md | head -1 | grep -oE 'https://[^ `]+')
+          [ -n "$MANIFEST_URL" ] || { echo "::error::could not resolve manifest URL"; exit 1; }
+          echo "manifest_url=$MANIFEST_URL" >> $GITHUB_OUTPUT
+      - name: Run validate-manifest.sh
+        run: |
+          chmod +x scripts/release-safety/validate-manifest.sh
+          scripts/release-safety/validate-manifest.sh "${{ steps.m.outputs.manifest_url }}" "${{ steps.t.outputs.version }}"
+
+  verify-release:
+    name: Binary matches RELEASE_DECISIONS + network profile
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: validate-release-decision
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve tag + profile
+        id: t
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              TAG="${{ inputs.tag }}"
+              PROFILE="${{ inputs.network_profile }}"
+          else
+              TAG="${GITHUB_REF#refs/tags/}"
+              PROFILE=$(awk -v tag="$TAG" '
+                $0 ~ "### "tag" " { found=1; next }
+                found && /network_profile/ { gsub(/[`|]/, ""); for(i=1;i<=NF;i++) if($i ~ /^(testnet-|mainnet-)/) {print $i; exit} }
+                found && /^### / { exit }
+              ' docs/RELEASE_DECISIONS.md)
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "profile=${PROFILE:-testnet-v12}" >> $GITHUB_OUTPUT
+      - name: Run verify-release.sh (incl. KF-001 dedup, profile match, sha256, embedded constants)
+        run: |
+          chmod +x scripts/release-safety/verify-release.sh
+          scripts/release-safety/verify-release.sh "${{ steps.t.outputs.tag }}" "${{ steps.t.outputs.profile }}"
+
+  smoke-test-auto-update:
+    name: Auto-update from previous version succeeds end-to-end
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [validate-manifest, verify-release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip if SMOKETEST_PREVIOUS_BINARY_URL is not configured
+        id: skip
+        run: |
+          if [ -z "${{ secrets.SMOKETEST_PREVIOUS_BINARY_URL }}" ]; then
+              echo "::warning::SMOKETEST_PREVIOUS_BINARY_URL secret not set — skipping auto-update smoke test"
+              echo "::warning::This is permitted for the bootstrap release but BLOCKS subsequent releases."
+              echo "skip=true" >> $GITHUB_OUTPUT
+          else
+              echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Download previous-version binary
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          curl -fsSL "${{ secrets.SMOKETEST_PREVIOUS_BINARY_URL }}" -o /tmp/tsn-prev
+          chmod +x /tmp/tsn-prev
+          /tmp/tsn-prev --version
+      - name: Resolve target version
+        id: t
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          [ "${{ github.event_name }}" = "workflow_dispatch" ] && TAG="${{ inputs.tag }}"
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+      - name: Run auto-update-smoketest.sh
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          SMOKETEST_TIMEOUT: "600"
+        run: |
+          chmod +x scripts/release-safety/auto-update-smoketest.sh
+          scripts/release-safety/auto-update-smoketest.sh \
+            /tmp/tsn-prev \
+            "${{ steps.t.outputs.version }}" \
+            https://tsnchain.com/releases/latest.json
+
+  no-empty-genesis-on-mainnet:
+    name: Mainnet profile has a concrete genesis_hash
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve target profile
+        id: t
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          [ "${{ github.event_name }}" = "workflow_dispatch" ] && TAG="${{ inputs.tag }}"
+          PROFILE=$(awk -v tag="$TAG" '
+            $0 ~ "### "tag" " { found=1; next }
+            found && /network_profile/ { gsub(/[`|]/, ""); for(i=1;i<=NF;i++) if($i ~ /^(testnet-|mainnet-)/) {print $i; exit} }
+            found && /^### / { exit }
+          ' docs/RELEASE_DECISIONS.md)
+          echo "profile=${PROFILE:-testnet-v12}" >> $GITHUB_OUTPUT
+      - name: Mainnet profile must have concrete genesis_hash
+        run: |
+          PROFILE=${{ steps.t.outputs.profile }}
+          if [ "$PROFILE" = "mainnet-v1" ]; then
+              GENESIS=$(grep -E '^\| `genesis_hash` \|' docs/network-profiles/mainnet-v1.md | head -1 | sed -E 's/.*`genesis_hash` \| `?([^|`]+)`?.*/\1/')
+              case "$GENESIS" in
+                *"to be"*|"")
+                  echo "::error::Mainnet profile has placeholder genesis_hash. Mainnet release is BLOCKED."
+                  echo "::error::Run the genesis ceremony described in docs/network-profiles/mainnet-v1.md first."
+                  exit 1
+                  ;;
+              esac
+              if ! [[ "$GENESIS" =~ ^[0-9a-f]{64}$ ]]; then
+                  echo "::error::Mainnet genesis_hash is not 64 hex chars: $GENESIS"
+                  exit 1
+              fi
+              echo "Mainnet genesis_hash is concrete: ${GENESIS:0:24}..."
+          else
+              echo "Not a mainnet release (profile=$PROFILE), skipping mainnet genesis check"
+          fi
+
+  preflight-summary:
+    name: Preflight summary (informational)
+    runs-on: ubuntu-latest
+    needs:
+      - validate-release-decision
+      - validate-manifest
+      - verify-release
+      - smoke-test-auto-update
+      - no-empty-genesis-on-mainnet
+    if: always()
+    steps:
+      - name: Summarize
+        run: |
+          echo "All required release-safety checks have run."
+          echo "If any of validate-release-decision, validate-manifest, verify-release,"
+          echo "smoke-test-auto-update, or no-empty-genesis-on-mainnet failed, the"
+          echo "release is NOT shippable. See the per-job logs above."

@@ -785,6 +785,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/miner/stats", get(miner_stats))
         .route("/block/:hash", get(get_block))
         .route("/block/height/:height", get(get_block_by_height))
+        .route("/cumulative_work/:height", get(get_cumulative_work_at_height))
         .route("/tx/:hash", get(get_transaction))
         .route("/transactions/recent", get(get_recent_transactions))
         .route("/blocks/list", get(list_blocks_paginated))
@@ -1082,7 +1083,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "mainnet_launch".to_string(),
         name: "Mainnet Launch".to_string(),
-        description: "Lancement officiel du network principal TSN".to_string(),
+        description: "Official launch of the TSN main network".to_string(),
         quarter: "Q1 2026".to_string(),
         status: "completed".to_string(),
         progress_pct: 100.0,
@@ -1103,7 +1104,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "sharding_v2".to_string(),
         name: "Sharding V2".to_string(),
-        description: "Improvement de scalability avec sharding dynamique".to_string(),
+        description: "Scalability improvements via dynamic sharding".to_string(),
         quarter: "Q2 2026".to_string(),
         status: "active".to_string(),
         progress_pct: sharding_progress,
@@ -1118,7 +1119,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "interoperability".to_string(),
         name: "Interoperability".to_string(),
-        description: "Ponts cross-chain vers Ethereum, Solana et Cosmos".to_string(),
+        description: "Cross-chain bridges with major external networks".to_string(),
         quarter: "Q3 2026".to_string(),
         status: "pending".to_string(),
         progress_pct: 0.0,
@@ -1132,7 +1133,7 @@ async fn roadmap_status(State(state): State<Arc<AppState>>) -> Json<RoadmapStatu
     milestones.push(RoadmapMilestone {
         id: "mobile_sdk".to_string(),
         name: "Mobile SDK".to_string(),
-        description: "SDK natif pour applications mobiles decentralized".to_string(),
+        description: "Native SDK for decentralized mobile applications".to_string(),
         quarter: "Q4 2026".to_string(),
         status: "pending".to_string(),
         progress_pct: 0.0,
@@ -1279,6 +1280,26 @@ async fn get_block_by_height(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(block_to_response(&block, height)))
+}
+
+/// KF-008 root fix (incident 2026-05-02 follow-up, RC v4 2026-05-03):
+/// expose this node's `cumulative_work` at a specific height. Used by
+/// fast-sync receivers to cross-validate the snapshot publisher's cw seed
+/// against a peer median before persisting it. Returns 404 if the height
+/// is below `fast_sync_base_height` (we don't have a real cw value there)
+/// or above the local tip.
+async fn get_cumulative_work_at_height(
+    State(state): State<Arc<AppState>>,
+    Path(height): Path<u64>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let chain = state.blockchain.read().await;
+    let cw = chain
+        .cumulative_work_at_height(height)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(serde_json::json!({
+        "height": height,
+        "cumulative_work": cw.to_string(),
+    })))
 }
 
 fn block_to_response(block: &ShieldedBlock, height: u64) -> BlockResponse {
@@ -4290,6 +4311,22 @@ struct SnapshotInfoResponse {
 /// tip value — when the snapshot lagged the tip, the receiver adopted a wildly
 /// inflated cw and then rejected every further block with LESS_WORK.
 async fn snapshot_info(State(state): State<Arc<AppState>>) -> Json<SnapshotInfoResponse> {
+    // KF-006 (incident 2026-05-02): toxic-snapshot quarantine.
+    // Before publishing snapshot metadata, check whether this node is on
+    // the canonical chain according to a quorum of peers. If we just
+    // recovered or are on a fork, we don't want to seed our state to
+    // others — that's how seed-1 served h=2 snapshots to seed-2/seed-3
+    // during the 2026-05-02 cascade.
+    if let Some(reason) = quarantine_reason(&state).await {
+        tracing::warn!("snapshot_info: refusing — quarantine: {}", reason);
+        return Json(SnapshotInfoResponse {
+            available: false,
+            height: 0,
+            block_hash: String::new(),
+            size_bytes: 0,
+            cumulative_work: "0".to_string(),
+        });
+    }
     let chain = state.blockchain.read().await;
     match chain.export_snapshot() {
         Some((data, height, hash)) => {
@@ -4314,6 +4351,72 @@ async fn snapshot_info(State(state): State<Arc<AppState>>) -> Json<SnapshotInfoR
     }
 }
 
+/// KF-006 quarantine check shared between `snapshot_info` and `snapshot_download`.
+/// Returns `Some(reason)` if the node MUST NOT serve a snapshot right now,
+/// `None` if serving is OK.
+///
+/// The check is conservative: any condition that suggests the local view is
+/// untrustworthy (just reset, fewer than 3 contactable peers, hash mismatch
+/// vs peer consensus) returns a quarantine reason. Low-peer scenarios
+/// (legitimately) skip the consensus check and only enforce the
+/// "just-reset" guard, so a coordinated network reset is not deadlocked.
+async fn quarantine_reason(state: &Arc<AppState>) -> Option<String> {
+    use crate::network::cum_work_consensus::observe_peers;
+    use std::time::Duration;
+
+    // Guard 1: never serve a snapshot if local height is suspiciously low.
+    // A node serving h<10 has either just reset or is empty; either way it
+    // shouldn't pretend to be a snapshot source.
+    let (local_h, local_hash) = {
+        let chain = state.blockchain.read().await;
+        (chain.height(), chain.latest_hash())
+    };
+    if local_h < 10 {
+        return Some(format!("local height {} below 10 (just reset?)", local_h));
+    }
+
+    // Guard 2: cross-check tip against peer consensus.
+    // Skip this guard if we have <3 contactable peers (low-peer scenario).
+    let peer_list: Vec<String> = state.peers.read()
+        .map(|p| p.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| crate::network::is_contactable_peer(p))
+        .collect();
+    if peer_list.len() < 3 {
+        return None; // Low-peer scenario: trust ourselves.
+    }
+    // 3-second timeout: if peers don't respond fast enough, we don't block
+    // the snapshot endpoint indefinitely. Default-allow on inconclusive.
+    let consensus = match observe_peers(
+        &state.http_client,
+        &peer_list,
+        Duration::from_secs(3),
+    ).await {
+        Some(c) => c,
+        None => return None, // Inconclusive — don't block.
+    };
+    // If consensus exists and matches our tip → serve. If it disagrees on
+    // hash at our height, we're on a fork → quarantine.
+    if consensus.height == local_h && consensus.hash != local_hash {
+        return Some(format!(
+            "fork detected: local hash {} vs consensus {} at h={} ({} peers agree)",
+            hex::encode(&local_hash[..8]),
+            hex::encode(&consensus.hash[..8]),
+            local_h,
+            consensus.agreement_count,
+        ));
+    }
+    // If consensus is significantly ahead of us, we're stale — quarantine.
+    if consensus.height > local_h + 50 {
+        return Some(format!(
+            "local h={} more than 50 blocks behind consensus h={}",
+            local_h, consensus.height
+        ));
+    }
+    None
+}
+
 /// GET /snapshot/download — download the state snapshot as compressed JSON.
 /// Uses a pre-cached snapshot (refreshed every 100 blocks) and semaphore (max 3 concurrent).
 /// Inspired by Cosmos state-sync (pre-generated snapshots) + Substrate (concurrent limits).
@@ -4322,6 +4425,12 @@ async fn snapshot_download(
 ) -> Result<axum::response::Response, StatusCode> {
     use axum::response::IntoResponse;
     use axum::http::header;
+
+    // KF-006 quarantine check (see snapshot_info doc comment).
+    if let Some(reason) = quarantine_reason(&state).await {
+        tracing::warn!("snapshot_download: refusing — quarantine: {}", reason);
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
 
     // Semaphore: max 3 concurrent snapshot downloads to prevent CPU/RAM saturation
     let _permit = state.snapshot_semaphore.clone().try_acquire_owned()

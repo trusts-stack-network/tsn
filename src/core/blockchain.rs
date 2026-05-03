@@ -164,15 +164,43 @@ impl ShieldedBlockchain {
             let reorg_flag = db.get_metadata("reorg_in_progress")
                 .ok().flatten().unwrap_or_default();
             if !reorg_flag.is_empty() {
-                tracing::error!(
-                    "DETECTED INTERRUPTED REORG: '{}'. Chain may be corrupted. Wiping for fresh sync.",
-                    reorg_flag
-                );
-                // Wipe DB and restart fresh — safest recovery
-                let _ = db.set_metadata("reorg_in_progress", "");
-                drop(db);
-                let _ = std::fs::remove_dir_all(db_path);
-                return Self::open(db_path, difficulty);
+                // KF-X (incident 2026-05-03 follow-up, RC v5):
+                // do NOT auto-wipe on interrupted reorg marker. The previous
+                // behaviour (rm -rf data_dir + restart) silently destroyed the
+                // chain on every restart that happened to land mid-reorg —
+                // including any deploy that used `kill -9` while the node was
+                // applying a reorg. The marker means "the reorg WAL was not
+                // committed cleanly", not "the chain is unrecoverable".
+                //
+                // Operator escape hatch: setting `TSN_CLEAR_REORG_MARKER=1`
+                // in the environment clears the flag and lets the startup
+                // consistency-check truncate to the last consistent height.
+                // The chain DB is never deleted; only the marker is cleared.
+                if std::env::var("TSN_CLEAR_REORG_MARKER").as_deref() == Ok("1") {
+                    tracing::warn!(
+                        "Clearing interrupted-reorg marker '{}' (TSN_CLEAR_REORG_MARKER=1). \
+                         Startup consistency-check will truncate to last consistent height. \
+                         Chain DB is preserved.",
+                        reorg_flag
+                    );
+                    let _ = db.set_metadata("reorg_in_progress", "");
+                } else {
+                    tracing::error!(
+                        "STARTUP HALTED: detected interrupted reorg marker '{}'. \
+                         Chain DB has NOT been auto-wiped (auto-wipe removed — see KF-X). \
+                         To recover: restart with `TSN_CLEAR_REORG_MARKER=1` set in the \
+                         environment to clear the flag and let the startup consistency-check \
+                         truncate the chain to the last consistent height; or run \
+                         `/admin/force-resync` after clearing to opt in to a fast-sync. \
+                         Refusing to wipe data_dir without operator consent.",
+                        reorg_flag
+                    );
+                    return Err(BlockchainError::StorageError(format!(
+                        "interrupted reorg marker present ({}); refusing to auto-wipe (KF-X). \
+                         Operator must clear with TSN_CLEAR_REORG_MARKER=1 or via admin API.",
+                        reorg_flag
+                    )));
+                }
             }
 
             // Load existing chain
@@ -225,15 +253,58 @@ impl ShieldedBlockchain {
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
             if snapshot_height.is_none() && fast_sync_base_check > 0 && start_height < fast_sync_base_check {
-                tracing::warn!(
-                    "Snapshot missing but fast-sync placeholders exist (base={}). \
-                     Cannot replay from height {}. Wiping DB for fresh sync.",
+                // KF-Y (incident 2026-05-03 follow-up #2, RC v6):
+                // do NOT auto-wipe on "snapshot missing but placeholders exist".
+                // Same principle as KF-X (interrupted reorg): never destroy
+                // chain data without operator consent. The condition means the
+                // rolling state snapshot file vanished or was never written,
+                // while the metadata still claims a fast-sync base. The
+                // recovery path is "fast-sync again from peers", but that
+                // requires erasing the placeholder height_index which the
+                // operator must opt in to.
+                //
+                // Operator escape hatch: setting `TSN_RESET_FOR_FAST_SYNC=1`
+                // clears `fast_sync_base_height` and `fast_sync_commitment_offset`
+                // metadata so the node can request a fresh fast-sync from peers.
+                // The chain DB is NOT deleted — only the placeholder-related
+                // metadata is cleared. Any real blocks above the old base
+                // remain on disk and will be reconciled by fast-sync.
+                if std::env::var("TSN_RESET_FOR_FAST_SYNC").as_deref() == Ok("1") {
+                    tracing::warn!(
+                        "Clearing fast-sync placeholder metadata (TSN_RESET_FOR_FAST_SYNC=1). \
+                         old fast_sync_base={}, start_height={}. \
+                         Chain DB is preserved. The node will exit cleanly now; \
+                         restart WITHOUT the env var to load the chain and request \
+                         a fresh fast-sync from peers.",
+                        fast_sync_base_check, start_height
+                    );
+                    let _ = db.set_metadata("fast_sync_base_height", "0");
+                    let _ = db.set_metadata("fast_sync_commitment_offset", "0");
+                    let _ = db.flush();
+                    // No recursion: return an error so the process exits. The
+                    // operator restarts once more without the env var and the
+                    // next open() takes the normal path with cleared metadata.
+                    return Err(BlockchainError::StorageError(
+                        "fast-sync placeholders cleared; restart without TSN_RESET_FOR_FAST_SYNC=1 to proceed".to_string()
+                    ));
+                }
+                tracing::error!(
+                    "STARTUP HALTED: snapshot missing but fast-sync placeholders exist \
+                     (base={}, start_height={}). Chain DB has NOT been auto-wiped \
+                     (auto-wipe removed — see KF-Y). To recover: restart with \
+                     `TSN_RESET_FOR_FAST_SYNC=1` set in the environment to clear \
+                     the fast-sync placeholder metadata (fast_sync_base_height / \
+                     fast_sync_commitment_offset) and let the node request a fresh \
+                     fast-sync from peers. The chain DB itself is preserved. \
+                     Refusing to wipe data_dir without operator consent.",
                     fast_sync_base_check, start_height
                 );
-                // Wipe and return empty blockchain — caller will fast-sync from peers
-                drop(db);
-                let _ = std::fs::remove_dir_all(db_path);
-                return Self::open(db_path, difficulty);
+                return Err(BlockchainError::StorageError(format!(
+                    "snapshot missing but placeholders present (base={}, start={}); \
+                     refusing to auto-wipe (KF-Y). Operator must clear with \
+                     TSN_RESET_FOR_FAST_SYNC=1.",
+                    fast_sync_base_check, start_height
+                )));
             }
 
             // Load full height index via sequential scan (much faster than N individual lookups)
@@ -378,11 +449,43 @@ impl ShieldedBlockchain {
                 }
 
                 if replay_failed {
-                    // Wipe DB and restart — node will fast-sync from peers
-                    tracing::warn!("Wiping corrupted database for fresh sync...");
-                    drop(db);
-                    let _ = std::fs::remove_dir_all(db_path);
-                    return Self::open(db_path, difficulty);
+                    // KF-Y branch 2 (incident 2026-05-03 follow-up #2, RC v6):
+                    // do NOT auto-wipe on replay failure. Same principle as
+                    // KF-X / KF-Y branch 1: never destroy chain data without
+                    // operator consent. Replay failure means a block referenced
+                    // by the height_index is missing on disk — typically the
+                    // result of a previous fast-sync that left placeholder
+                    // entries. The recovery is the same as branch 1: clear
+                    // fast-sync metadata and let the node request a fresh
+                    // fast-sync from peers.
+                    if std::env::var("TSN_RESET_FOR_FAST_SYNC").as_deref() == Ok("1") {
+                        tracing::warn!(
+                            "Replay failed; clearing fast-sync placeholder metadata \
+                             (TSN_RESET_FOR_FAST_SYNC=1). Chain DB is preserved. \
+                             The node will exit cleanly now; restart WITHOUT the env \
+                             var to load the chain and request a fresh fast-sync from peers."
+                        );
+                        let _ = db.set_metadata("fast_sync_base_height", "0");
+                        let _ = db.set_metadata("fast_sync_commitment_offset", "0");
+                        let _ = db.flush();
+                        // No recursion: clean exit; operator restarts without env var.
+                        return Err(BlockchainError::StorageError(
+                            "fast-sync placeholders cleared after replay failure; \
+                             restart without TSN_RESET_FOR_FAST_SYNC=1 to proceed".to_string()
+                        ));
+                    }
+                    tracing::error!(
+                        "STARTUP HALTED: replay failed (missing block during replay). \
+                         Chain DB has NOT been auto-wiped (auto-wipe removed — see KF-Y). \
+                         To recover: restart with `TSN_RESET_FOR_FAST_SYNC=1` set in the \
+                         environment to clear fast-sync placeholder metadata and let the \
+                         node request a fresh fast-sync from peers. The chain DB itself \
+                         is preserved. Refusing to wipe data_dir without operator consent."
+                    );
+                    return Err(BlockchainError::StorageError(
+                        "replay failed; refusing to auto-wipe (KF-Y). \
+                         Operator must clear with TSN_RESET_FOR_FAST_SYNC=1.".to_string()
+                    ));
                 }
 
                 tracing::info!("Replay complete ({} blocks)", blocks_to_replay);
@@ -756,6 +859,36 @@ impl ShieldedBlockchain {
             }
         }
         tracing::info!("RESYNC: Chain reset to height 0, ready for snapshot sync");
+    }
+
+    /// KF-008 (incident 2026-05-02): manual cum_work correction for drift recovery.
+    ///
+    /// This method exists ONLY to bring a node's `cumulative_work` value back
+    /// in line with the network consensus when a drift has been detected by
+    /// the runtime monitor in `main.rs`. It is NOT a normal mutation —
+    /// `cumulative_work` should be derived from chain state, not set by hand.
+    ///
+    /// The drift the method addresses is the value drift inherited from
+    /// different snapshots having different cum_work seeds at fast_sync_base.
+    /// Two nodes on the same chain (same hash at every height) end up with
+    /// different cum_work because their snapshots embedded different seeds.
+    /// This method overwrites the local value to match the median of peers
+    /// known to be on the same chain (verified by hash agreement).
+    ///
+    /// Gated by env var `TSN_AUTO_CORRECT_CUMWORK=1` at the call site so the
+    /// adjustment is opt-in. The chain hash is unchanged; only the metric
+    /// the operator sees is reconciled with peers.
+    pub fn set_cumulative_work_for_drift_correction(&mut self, new_value: u128) {
+        let old_value = self.cumulative_work;
+        self.cumulative_work = new_value;
+        if let Some(ref db) = self.db {
+            let _ = db.save_cumulative_work(self.canonical_height, new_value);
+            let _ = db.set_metadata("cumulative_work", &new_value.to_string());
+        }
+        tracing::warn!(
+            "KF-008 drift correction: cumulative_work {} -> {} at height {} (operator opt-in via TSN_AUTO_CORRECT_CUMWORK)",
+            old_value, new_value, self.canonical_height
+        );
     }
 
     /// Get the current chain height (0-indexed).

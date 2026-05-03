@@ -6,6 +6,7 @@ pub mod activity;
 pub mod alerts;
 pub mod anti_dos;
 pub mod api;
+pub mod cum_work_consensus;
 pub mod p2p;
 pub mod discovery;
 pub mod eclipse_protection;

@@ -5820,6 +5820,86 @@ async fn cmd_node(
         tsn::network::auto_update::auto_update_loop().await;
     });
 
+    // KF-008 (incident 2026-05-02): runtime cum_work drift monitor.
+    // Periodically polls peers for /chain/info, finds the consensus
+    // (height, hash, median cum_work), and logs a structured WARN when
+    // local cum_work disagrees with the median by more than the tolerance
+    // for a chain hash that all of us share. This does NOT auto-correct
+    // (cum_work is a stored value, not consensus-critical for the chain
+    // selected by hash). It surfaces the bug to operators and to the
+    // metric `tsn_cumulative_work_drift_total` (incremented on detection).
+    // Auto-correction is gated by env var TSN_AUTO_CORRECT_CUMWORK=1
+    // (off by default — drift-correct is risky if our value happens to
+    // be more accurate than the median).
+    {
+        let drift_state = state.clone();
+        tokio::spawn(async move {
+            // Wait 60s after boot to let the chain settle.
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            loop {
+                let peer_list: Vec<String> = drift_state.peers.read()
+                    .map(|p| p.clone())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|p| tsn::network::is_contactable_peer(p))
+                    .collect();
+                if peer_list.len() >= 3 {
+                    if let Some(consensus) = tsn::network::cum_work_consensus::observe_peers(
+                        &drift_state.http_client,
+                        &peer_list,
+                        std::time::Duration::from_secs(5),
+                    ).await {
+                        let (local_h, local_hash, local_cw) = {
+                            let chain = drift_state.blockchain.read().await;
+                            (chain.height(), chain.latest_hash(), chain.cumulative_work())
+                        };
+                        if let Some(disc) = tsn::network::cum_work_consensus::detect_local_discrepancy(
+                            local_h, local_hash, local_cw, &consensus,
+                        ) {
+                            use tsn::network::cum_work_consensus::DiscrepancyKind;
+                            match disc.kind {
+                                DiscrepancyKind::CumWorkDrift => {
+                                    tracing::warn!(
+                                        "KF-008 cum_work drift detected: {}",
+                                        tsn::network::cum_work_consensus::format_discrepancy(&disc)
+                                    );
+                                    tsn::metrics::cumulative_work_drift_inc();
+                                    if std::env::var("TSN_AUTO_CORRECT_CUMWORK")
+                                        .map(|v| v == "1")
+                                        .unwrap_or(false)
+                                    {
+                                        tracing::warn!(
+                                            "KF-008 auto-correct (TSN_AUTO_CORRECT_CUMWORK=1): \
+                                             adjusting local cum_work {} → {} (median)",
+                                            local_cw, disc.consensus_median_cum_work
+                                        );
+                                        let mut chain = drift_state.blockchain.write().await;
+                                        chain.set_cumulative_work_for_drift_correction(
+                                            disc.consensus_median_cum_work
+                                        );
+                                    }
+                                }
+                                DiscrepancyKind::HashFork => {
+                                    tracing::warn!(
+                                        "KF-007/009 hash fork detected: {}",
+                                        tsn::network::cum_work_consensus::format_discrepancy(&disc)
+                                    );
+                                }
+                                DiscrepancyKind::HeightOutlier => {
+                                    tracing::info!(
+                                        "Height outlier (likely lag or local lead): {}",
+                                        tsn::network::cum_work_consensus::format_discrepancy(&disc)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            }
+        });
+    }
+
     // ========================================================================
     // SELF-HEALING WATCHDOG — monitors node health and auto-repeers
     // ========================================================================
@@ -5846,6 +5926,14 @@ async fn cmd_node(
             const STUCK_BEHIND_THRESHOLD: u64 = 20;  // blocks behind consensus
             const STUCK_BEHIND_GRACE_SECS: u64 = 120;
             let mut behind_stuck_since: Option<std::time::Instant> = None;
+
+            // KF-009 (incident 2026-05-02): persistence guard for SOLO FORK auto-recovery.
+            // We track when the SOLO FORK condition first appeared. The auto-trigger
+            // only fires after SOLO_FORK_AUTO_RECOVERY_GRACE_SECS of continuous
+            // confirmation, AND with the additional cum_work check (we must be losing
+            // by cum_work, not just by height count).
+            const SOLO_FORK_AUTO_RECOVERY_GRACE_SECS: u64 = 300; // 5 min
+            let mut solo_fork_since: Option<std::time::Instant> = None;
 
             // Returns Some(consensus_height) iff ≥MIN_PEERS_AGREE peers share the
             // same tip height (majority), otherwise None. Used to gate auto-wipe.
@@ -6032,7 +6120,7 @@ async fn cmd_node(
                         if ahead_gap > SOLO_FORK_THRESHOLD {
                             let consensus_h = consensus_opt.unwrap();
                             tracing::warn!(
-                                "\x1b[36mWATCHDOG:\x1b[0m SOLO FORK confirmed — local={} consensus={} gap={} ({} peers agree). Auto-wipe DISABLED (v2.6.1). Use /admin/force-resync to recover.",
+                                "\x1b[36mWATCHDOG:\x1b[0m SOLO FORK confirmed — local={} consensus={} gap={} ({} peers agree). Auto-wipe gated by cum_work check (v2.9.21).",
                                 current_height, consensus_h, ahead_gap, verified_peer_heights.len()
                             );
                             tsn::network::log_node_error(
@@ -6044,6 +6132,91 @@ async fn cmd_node(
                                 ),
                             );
                             let _ = is_auto;
+
+                            // KF-009 (incident 2026-05-02): conditional auto-recovery.
+                            // SOLO FORK by HEIGHT is not enough — a legitimate fast miner
+                            // can be ahead in height with MORE cum_work and that's not a
+                            // problem. We only auto-recover when:
+                            //   1. The condition has persisted SOLO_FORK_AUTO_RECOVERY_GRACE_SECS,
+                            //   2. ≥4 peers agree on the canonical view (not just MIN_PEERS_AGREE),
+                            //   3. our cum_work is BELOW the median peer cum_work (we're
+                            //      genuinely on a low-difficulty solo branch),
+                            //   4. the kill-switch env var is not set.
+                            if solo_fork_since.is_none() {
+                                solo_fork_since = Some(std::time::Instant::now());
+                            }
+                            let persisted = solo_fork_since
+                                .map(|t| t.elapsed().as_secs() >= SOLO_FORK_AUTO_RECOVERY_GRACE_SECS)
+                                .unwrap_or(false);
+                            let kill_switch = std::env::var("TSN_DISABLE_AUTO_FORK_RECOVERY")
+                                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                                .unwrap_or(false);
+                            if persisted && !kill_switch && verified_peer_heights.len() >= 4 {
+                                // Cum_work cross-check via the consensus module.
+                                use tsn::network::cum_work_consensus::observe_peers;
+                                let peer_list = peers_list.iter()
+                                    .filter(|p| tsn::network::is_contactable_peer(p))
+                                    .cloned()
+                                    .collect::<Vec<_>>();
+                                if let Some(consensus) = observe_peers(
+                                    &watchdog_state.http_client,
+                                    &peer_list,
+                                    std::time::Duration::from_secs(5),
+                                ).await {
+                                    let local_cw = {
+                                        let chain = watchdog_state.blockchain.read().await;
+                                        chain.cumulative_work()
+                                    };
+                                    let majority_cw = consensus.median_cumulative_work;
+                                    // Trigger only if we're losing on cum_work (chain has fewer
+                                    // work units despite more blocks — classic low-diff solo fork).
+                                    // Use a 5% margin so trivial drift doesn't trip recovery.
+                                    let we_are_losing = local_cw.saturating_mul(100)
+                                        < majority_cw.saturating_mul(95);
+                                    if we_are_losing {
+                                        tracing::error!(
+                                            "\x1b[36mWATCHDOG:\x1b[0m KF-009 AUTO-RECOVERY TRIGGER: \
+                                             local h={} cw={} but consensus (h={}, agree={}) median_cw={}. \
+                                             Local is on a low-difficulty solo branch (cw < 95% of majority). \
+                                             Calling reset_for_snapshot_resync().",
+                                            current_height, local_cw,
+                                            consensus.height, consensus.agreement_count, majority_cw
+                                        );
+                                        tsn::network::log_node_error(
+                                            &watchdog_state,
+                                            "solo_fork_auto_recover",
+                                            &format!(
+                                                "local_h={} local_cw={} consensus_h={} median_cw={}",
+                                                current_height, local_cw,
+                                                consensus.height, majority_cw
+                                            ),
+                                        );
+                                        let mut chain = watchdog_state.blockchain.write().await;
+                                        chain.reset_for_snapshot_resync();
+                                        solo_fork_since = None;
+                                    } else {
+                                        tracing::warn!(
+                                            "\x1b[36mWATCHDOG:\x1b[0m SOLO FORK persistent but local cum_work {} \
+                                             is NOT losing vs majority median {}. Not auto-recovering — \
+                                             local chain may genuinely have more work. Operator decision required.",
+                                            local_cw, majority_cw
+                                        );
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        "\x1b[36mWATCHDOG:\x1b[0m SOLO FORK persistent but cum_work consensus \
+                                         could not be observed (insufficient peer quorum). Holding off."
+                                    );
+                                }
+                            } else if persisted && kill_switch {
+                                tracing::info!(
+                                    "\x1b[36mWATCHDOG:\x1b[0m SOLO FORK persistent — auto-recovery DISABLED \
+                                     by TSN_DISABLE_AUTO_FORK_RECOVERY env var. Operator action required."
+                                );
+                            }
+                        } else {
+                            // Condition cleared — reset persistence counter.
+                            solo_fork_since = None;
                         }
 
                         // v2.3.9 — Check 2d: symmetric case of 2c — local is BEHIND
