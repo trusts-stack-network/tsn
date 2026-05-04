@@ -45,6 +45,32 @@ same version.
 
 ## Releases
 
+### v2.9.25 — auto_update systemd restart + backup fallback + tip cadence
+
+| Field | Value |
+|-------|-------|
+| `version` | `2.9.25` |
+| `tag` | `v2.9.25` |
+| `commit` | `459db9c33b16f6d82851c937e80736732d4ca367` |
+| `branch` | `main` |
+| `binary_sha256` | `c9c49c144def6f23e965451eb66fd177690abd0c22b8683605643a0dfca73d30` |
+| `tarball_sha256` | `d3973fd0c158dbe92637526d0bcaa6ea9dbe6bf7e14886ec5c24fd43da10c68f` |
+| `signature` | published in the public manifest at the URL below |
+| `network_profile` | `testnet-v12` |
+| `deployment_ring` | `2` (community rollout via auto-update) |
+| `human_validation` | 2026-05-04 — Three operational fixes shipped together: `auto_update.rs` exit non-zero under systemd so `Restart=on-failure` triggers a fresh start with the new binary; `auto_update.rs` rename-then-copy fallback for the pre-swap backup so virtual `/proc` paths and cross-filesystem cases no longer abort the update; `main.rs` periodic tip-broadcast cadence reduced from 10 s to 3 s so explorer freshness stays within ~3 s of every peer's true tip on a multi-miner mesh. No consensus change. No protocol change. Manifest signed locally with the release key, verified end-to-end against the embedded release pubkey before publication. |
+| `manifest_url` | `https://tsnchain.com/releases/latest.json` |
+
+**Notes**:
+- No consensus / blockchain.rs / sync.rs / commitment-tree change. Touched files: `Cargo.toml`, `Cargo.lock`, `src/main.rs`, `src/network/auto_update.rs`.
+- `EXPECTED_GENESIS_HASH` unchanged at
+  `007870623724127ccf467b74041c3fed0e3569f02c66414a3018d7c04856e38d`.
+- `MIN_VERSION` left at `2.9.15`. Network-wide bump tracked separately.
+- Manifest signature was produced locally because the CI signing
+  secret (`RELEASE_SIGNING_KEY_PEM`) is not configured on this repo.
+  Signature verifies against the embedded release pubkey
+  `8abd0a68f768c744a8e26f27f82688ef002f696068f77b1572c8fb15f0fb290a`.
+
 ### v2.9.24 — peer status classifier, lag-first and age-tolerant
 
 | Field | Value |
