@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::time::{interval, Duration};
-use tracing::{info, warn, debug};
+use tracing::{info, warn, debug, error};
 use hex;
 
 use crate::core::ShieldedBlock;
@@ -142,14 +142,30 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
             (chain.fast_sync_base_height(), chain.cumulative_work())
         };
         if fsb > 0 && cw <= crate::config::GENESIS_DIFFICULTY as u128 {
-            warn!(
+            // KF-Z (v2.9.26) — previous code automatically called
+            // `reset_for_snapshot_resync()` here, which destroys
+            // in-memory chain state. That is exactly the destructive
+            // path the 2026-05-04 incident exposed. The node is in a
+            // broken post-fast-sync state, but destroying state without
+            // operator consent is what propagated the cascade. Halt
+            // cleanly with a precise error and let the operator decide.
+            //
+            // Operator escape hatch: `POST /admin/force-resync` clears
+            // the chain in a controlled way and lets the next fast-sync
+            // attempt start fresh.
+            error!(
                 "BROKEN_SNAPSHOT: fast_sync_base={} but cumulative_work={} (genesis-level). \
-                 Snapshot restore is corrupted — blocks don't exist. Resetting for fresh sync.",
+                 Snapshot restore is corrupted — blocks don't exist. Auto-recovery DISABLED \
+                 (KF-Z, v2.9.26). The node will keep running and serving its current state, \
+                 but cannot make progress on this chain. Operator must call \
+                 POST /admin/force-resync to clear the corrupted snapshot metadata and \
+                 trigger a fresh fast-sync from peers.",
                 fsb, cw
             );
-            let mut chain = state.blockchain.write().await;
-            chain.reset_for_snapshot_resync();
-            return Ok(0); // Will re-sync from scratch on next cycle
+            return Err(SyncError::InvalidResponse(format!(
+                "BROKEN_SNAPSHOT (fast_sync_base={}, cw={}): refusing to auto-recover (KF-Z); operator must force-resync",
+                fsb, cw
+            )));
         }
     }
 
@@ -615,45 +631,37 @@ pub async fn sync_from_peer(state: Arc<AppState>, peer_url: &str) -> Result<u64,
                 "Sync: {} blocks from {} but none accepted (attempt {}) — diverged",
                 batch_size, peer_id(peer_url), consecutive_empty_batches
             );
-            // v2.9.13 — increment the global stuck-sync counter. Once it
-            // crosses AUTO_FORCE_RESYNC_THRESHOLD (5) we trigger an
-            // automatic chain wipe + snapshot fast-sync, because the local
-            // DB is missing parents that all peers reference (typical
-            // post-fast-sync deep-reorg trap). Cooldown prevents thrashing.
+            // v2.9.26 — the v2.9.13 stuck-sync auto-recovery
+            // (`reset_for_snapshot_resync()` after AUTO_FORCE_RESYNC_THRESHOLD
+            // consecutive empty batches) was the destructive trigger of the
+            // 2026-05-04 cascade. When a node entered a Rollback-BLOCKED
+            // loop because its commitment tree had drifted, the auto-recovery
+            // wiped its in-memory state, the LRU orphans reconstructed a
+            // tiny private chain, and four Ring 0 hosts had to be wiped +
+            // fast-synced manually. Per the KF-Y / KF-Z principle, no path
+            // in the binary destroys chain state without explicit operator
+            // consent. The counter is kept (useful for telemetry) but the
+            // automatic destructive recovery is replaced by a clear,
+            // operator-actionable warning.
+            //
+            // Operator escape hatch: `POST /admin/force-resync` already
+            // exists for cases where a stuck node genuinely needs to
+            // re-fetch its state.
             let stuck = state.stuck_sync_failures
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             if stuck >= crate::config::AUTO_FORCE_RESYNC_THRESHOLD {
-                let should_resync = {
-                    let mut last = state.last_auto_resync.lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    let now = std::time::Instant::now();
-                    let cooldown = std::time::Duration::from_secs(
-                        crate::config::AUTO_FORCE_RESYNC_COOLDOWN_SECS
-                    );
-                    match *last {
-                        Some(t) if now.duration_since(t) < cooldown => false,
-                        _ => { *last = Some(now); true }
-                    }
-                };
-                if should_resync {
-                    warn!(
-                        "v2.9.13 auto-recovery: {} consecutive stuck-sync failures, \
-                         triggering reset_for_snapshot_resync() — node will fast-sync \
-                         from a fresh peer snapshot instead of staying stuck",
-                        stuck
-                    );
-                    {
-                        let mut chain = state.blockchain.write().await;
-                        chain.reset_for_snapshot_resync();
-                    }
-                    {
-                        let mut bans = state.banned_peers.write()
-                            .unwrap_or_else(|e| e.into_inner());
-                        bans.clear();
-                    }
-                    state.stuck_sync_failures.store(0, std::sync::atomic::Ordering::Relaxed);
-                    return Ok(synced);
-                }
+                // Reset the counter once we have logged so the message
+                // does not flood: one alert per threshold crossing is
+                // sufficient.
+                state.stuck_sync_failures.store(0, std::sync::atomic::Ordering::Relaxed);
+                warn!(
+                    "stuck-sync threshold reached ({} consecutive empty batches with peer {}). \
+                     Auto-recovery DISABLED (KF-Z, v2.9.26). The node will keep retrying with \
+                     other peers. If the chain genuinely needs re-fetching, an operator must \
+                     call POST /admin/force-resync explicitly. Never destroying chain state \
+                     without explicit operator consent.",
+                    stuck, peer_id(peer_url)
+                );
             }
 
             if consecutive_empty_batches >= 1 {
@@ -1580,6 +1588,97 @@ async fn attempt_snapshot_sync(
                         snap_work, agreeing.len(), CUM_WORK_DRIFT_TOLERANCE_PCT
                     );
                 }
+
+                // KF-Z (incident 2026-05-04, Layer 4 commitment-tree drift):
+                // before importing the snapshot, cross-check the publisher's
+                // claimed `manifest_state_root` against the
+                // `block.header.state_root` reported by the canonical-hash
+                // peers at `snap_height`. The block header is signed by the
+                // miner and chained, so peers cannot lie about it without
+                // diverging from consensus. If the publisher's manifest
+                // claims a state_root that the peer quorum does not agree
+                // with, the snapshot is from a drifted node and must be
+                // refused — accepting it is what triggered the
+                // self-propagating commitment-tree drift on nexus, seed-1,
+                // seed-3, seed-4 during the 2026-05-04 incident.
+                //
+                // The check only runs when the publisher provided a
+                // `manifest_state_root`. Without it (legacy peers), we
+                // fall back to the post-import state_root check below.
+                if let Some(ref expected_root) = manifest_state_root {
+                    let mut sr_handles = Vec::new();
+                    for peer in &canonical_hash_peers {
+                        let c = client.clone();
+                        let url = format!("{}/block/height/{}", peer, snap_height);
+                        sr_handles.push(tokio::spawn(async move {
+                            c.get(&url).timeout(Duration::from_secs(3)).send().await
+                                .ok()
+                                .and_then(|r| if r.status().is_success() { Some(r) } else { None })
+                                .map(|r| async move {
+                                    r.json::<PeerBlockInfo>().await.ok()
+                                        .and_then(|info| info.state_root)
+                                })
+                        }));
+                    }
+                    let mut sr_values: Vec<String> = Vec::new();
+                    for h in sr_handles {
+                        if let Ok(Some(fut)) = h.await {
+                            if let Some(sr) = fut.await {
+                                sr_values.push(sr);
+                            }
+                        }
+                    }
+
+                    if sr_values.len() < MIN_AGREEMENT_COUNT {
+                        // Not enough peers expose state_root yet (older
+                        // versions). Skip the pre-import check; the
+                        // post-import check at the end of this function
+                        // is still in force and will reject the snapshot
+                        // if `chain.state_root() != manifest_state_root`.
+                        info!(
+                            "KF-Z state_root cross-check SKIPPED: only {} of {} canonical-hash peers exposed state_root (need ≥{}); falling back to post-import check",
+                            sr_values.len(), canonical_hash_peers.len(), MIN_AGREEMENT_COUNT
+                        );
+                    } else {
+                        // Most-voted peer state_root.
+                        let mut counts: std::collections::HashMap<String, usize> =
+                            std::collections::HashMap::new();
+                        for sr in &sr_values {
+                            *counts.entry(sr.clone()).or_insert(0) += 1;
+                        }
+                        let (peer_majority_root, majority_votes) = counts.iter()
+                            .max_by_key(|(_, v)| *v)
+                            .map(|(k, v)| (k.clone(), *v))
+                            .unwrap_or_default();
+                        if majority_votes < MIN_AGREEMENT_COUNT {
+                            warn!(
+                                "Snapshot REJECTED (KF-Z): peers disagree on state_root@h={} — top vote has only {} of {} responses",
+                                snap_height, majority_votes, sr_values.len()
+                            );
+                            return Err(SyncError::InvalidResponse(format!(
+                                "KF-Z: peers disagree on state_root@h={} ({} top of {})",
+                                snap_height, majority_votes, sr_values.len()
+                            )));
+                        }
+                        if &peer_majority_root != expected_root {
+                            warn!(
+                                "Snapshot REJECTED (KF-Z): manifest claims state_root={} but {} of {} canonical-hash peers report state_root={} at h={}. Refusing to import a drifted snapshot.",
+                                &expected_root[..16.min(expected_root.len())],
+                                majority_votes, sr_values.len(),
+                                &peer_majority_root[..16.min(peer_majority_root.len())],
+                                snap_height
+                            );
+                            return Err(SyncError::InvalidResponse(format!(
+                                "KF-Z: manifest state_root disagrees with peer quorum at h={}",
+                                snap_height
+                            )));
+                        }
+                        info!(
+                            "KF-Z state_root cross-check OK: manifest matches {} of {} peers' header.state_root at h={}",
+                            majority_votes, sr_values.len(), snap_height
+                        );
+                    }
+                }
             } else {
                 warn!(
                     "Snapshot KF-007 hash@h check SKIPPED: only {} peers returned a block at h={} (need {})",
@@ -1605,17 +1704,36 @@ async fn attempt_snapshot_sync(
         chain.set_pre_snapshot_lwma(lwma_seed);
     }
 
-    // 4. Post-import: verify state_root if manifest provided one
+    // 4. Post-import: verify state_root if manifest provided one.
+    //
+    // KF-Z (v2.9.26) — this used to log a warning and continue ("the chain
+    // will self-heal via sync"). It does not. A mismatched snapshot is
+    // committed to disk, the chain advances on top of an inconsistent state,
+    // every subsequent block produces a COMMITMENT_ROOT_MISMATCH, rollbacks
+    // get blocked because the local snapshot is now ahead of any reachable
+    // target, and the v2.9.13 stuck-sync auto-recovery wipes in-memory
+    // state. The accumulated LRU orphans then rebuild a tiny mini-chain.
+    // This was the root cause of the 2026-05-04 cascade.
+    //
+    // Now: on mismatch, return an error. The fast-sync caller iterates
+    // over peers in the outer sync loop, so the next call will try a
+    // different peer. If no peer can produce a snapshot whose state_root
+    // matches its own manifest claim, the node halts with an explicit
+    // error and waits for operator intervention rather than importing a
+    // drifted state silently.
     if let Some(expected_root) = manifest_state_root {
         let computed_root = hex::encode(chain.state_root());
         if computed_root == expected_root {
             info!("Manifest check 4/4: state_root MATCH after import ({})", &computed_root[..16]);
         } else {
             warn!(
-                "Snapshot state_root MISMATCH after import: computed={}, manifest={}. Chain may be inconsistent.",
+                "Snapshot state_root MISMATCH after import (REJECTED, KF-Z): computed={}, manifest={}. The fast-sync loop will retry from a different peer; if no peer can produce a self-consistent snapshot, the node will halt cleanly and wait for operator action.",
                 &computed_root[..16], &expected_root[..16]
             );
-            // Don't reject — the chain will self-heal via sync. Log for monitoring.
+            return Err(SyncError::InvalidResponse(format!(
+                "KF-Z: snapshot state_root mismatch after import at h={} (computed={}, manifest={})",
+                snap_height, &computed_root[..16], &expected_root[..16]
+            )));
         }
     }
 
@@ -2148,6 +2266,12 @@ struct PeerBlockInfo {
     hash: String,
     height: u64,
     prev_hash: String,
+    /// v2.9.26 — block header `state_root` exposed by the peer's
+    /// `/block/height/{h}` endpoint. Older peers that don't expose
+    /// this field deserialise to `None` (serde default), so the
+    /// receiver can degrade gracefully without breaking the cross-check.
+    #[serde(default)]
+    state_root: Option<String>,
 }
 
 /// Compact header response from /headers/since endpoint.

@@ -1234,6 +1234,15 @@ struct BlockResponse {
     tx_count_v2: usize,
     commitment_root: String,
     nullifier_root: String,
+    /// v2.9.26 — block header `state_root` (Poseidon2 hash over V1
+    /// commitment_root, V2 PQ commitment tree root, and nullifier_root).
+    /// Surfaced so fast-sync receivers can cross-check a publisher's
+    /// `manifest_state_root` against a quorum of canonical-hash peers
+    /// before importing the snapshot. Without this, a single drifted
+    /// publisher could feed every fast-sync importer a snapshot whose
+    /// state_root nobody else agrees with — the cause of the
+    /// 2026-05-04 Layer 4 cascade.
+    state_root: String,
     transactions: Vec<String>,
     transactions_v2: Vec<String>,
     coinbase_reward: u64,
@@ -1314,6 +1323,7 @@ fn block_to_response(block: &ShieldedBlock, height: u64) -> BlockResponse {
         tx_count_v2: block.transactions_v2.len(),
         commitment_root: hex::encode(block.header.commitment_root),
         nullifier_root: hex::encode(block.header.nullifier_root),
+        state_root: hex::encode(block.header.state_root),
         transactions: block.transactions.iter().map(|tx| hex::encode(tx.hash())).collect(),
         transactions_v2: block.transactions_v2.iter().map(|tx| hex::encode(tx.hash())).collect(),
         coinbase_reward: block.coinbase.reward,
