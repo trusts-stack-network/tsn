@@ -45,6 +45,32 @@ same version.
 
 ## Releases
 
+### v2.9.26 — KF-Z state_root quorum + remove destructive auto-recovery
+
+| Field | Value |
+|-------|-------|
+| `version` | `2.9.26` |
+| `tag` | `v2.9.26` |
+| `commit` | `47c056166e704f2c47c590028fdcd16b36d3ce49` |
+| `branch` | `main` |
+| `binary_sha256` | `5d405c0097955a2767f6e5d1bd5b9d4c7872f66e5cf41c84e6c43afd99815d12` |
+| `tarball_sha256` | `502c946c04cde6e6450b0f9bf24f2c47d53f8da69d12892408f6b9d47c532def` |
+| `signature` | published in the public manifest at the URL below |
+| `network_profile` | `testnet-v12` |
+| `deployment_ring` | `2` (Ring 0 manually deployed first, community via auto-update) |
+| `human_validation` | 2026-05-04 — Layer 4 hardening release. KF-Z adds a pre-import quorum check on `block.header.state_root` from canonical-hash peers (≥3 must agree with the publisher's `manifest_state_root`) plus a hard reject post-import if `chain.state_root() != manifest_state_root`. The destructive `reset_for_snapshot_resync()` triggered after `AUTO_FORCE_RESYNC_THRESHOLD` consecutive empty batches is removed; the BROKEN_SNAPSHOT auto-recovery is removed. Both replaced with operator-actionable warnings. Manually deployed Ring 0 (nexus first, then seed-1, seed-2, seed-3, seed-4); manifest signed locally with the release key, verified end-to-end against the embedded release pubkey. Ring 0 converged 5/5 at h=37222 with identical hash before manifest publication. |
+| `manifest_url` | `https://tsnchain.com/releases/latest.json` |
+
+**Notes**:
+- No consensus / blockchain.rs / state.rs / commitment-tree change. Touched files: `Cargo.toml`, `Cargo.lock`, `src/network/api.rs`, `src/network/sync.rs`.
+- `EXPECTED_GENESIS_HASH` unchanged at `007870623724127ccf467b74041c3fed0e3569f02c66414a3018d7c04856e38d`.
+- `MIN_VERSION` left at `2.9.15`. Network-wide bump tracked separately and explicitly NOT shipped in this defensive release.
+- Operator escape hatch unchanged: `POST /admin/force-resync` is the only path that destroys local chain state, and it requires explicit operator action.
+- Manifest signature was produced locally because the CI signing
+  secret (`RELEASE_SIGNING_KEY_PEM`) is not configured on this repo.
+  Signature verifies against the embedded release pubkey
+  `8abd0a68f768c744a8e26f27f82688ef002f696068f77b1572c8fb15f0fb290a`.
+
 ### v2.9.25 — auto_update systemd restart + backup fallback + tip cadence
 
 | Field | Value |
