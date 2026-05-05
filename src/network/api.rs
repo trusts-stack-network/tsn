@@ -339,6 +339,14 @@ pub struct AppState {
     /// `GET /chain/checkpoints` so the explorer can render a "Checkpoints"
     /// tab listing every committed checkpoint with its vote count.
     pub checkpoint_history: arc_swap::ArcSwap<Vec<CheckpointRecord>>,
+    /// v2.9.27 — Set to true after a successful snapshot import (in either
+    /// `sync_loop`'s snapshot path or the mining-loop auto-resync path) to
+    /// force the next `sync_loop` iteration to bypass the per-peer
+    /// fail-count throttle. `sync_loop` swaps it back to false on read.
+    /// Without this, a node that just imported a snapshot post-partition
+    /// can sit idle until the throttle timer fires (60 s), because
+    /// `peer_failures` accumulated >=20 during the partition.
+    pub force_sync_kick: std::sync::atomic::AtomicBool,
 }
 
 /// v2.9.7 — One entry of the finalized checkpoint history. Held inside

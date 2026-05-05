@@ -1737,6 +1737,9 @@ async fn attempt_snapshot_sync(
         }
     }
 
+    // v2.9.27 — wake sync_loop immediately for block-sync after a fully
+    // successful import (incl. state_root verification).
+    state.force_sync_kick.store(true, Ordering::Relaxed);
     Ok(snap_height)
 }
 
@@ -2149,9 +2152,20 @@ pub async fn sync_loop(state: Arc<AppState>, seed_peers: Vec<String>, sync_inter
 
     let mut interval = interval(Duration::from_secs(sync_interval_secs));
     let mut peer_failures: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    // v2.9.27 — per-peer last-attempt instant for the timer-based throttle
+    // that replaces the global cycle-counter throttle.
+    let mut peer_last_attempt: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
 
     loop {
         interval.tick().await;
+        // v2.9.27 — consume the post-snapshot kick for this iteration.
+        // When set, this iteration bypasses the per-peer fail-count throttle so
+        // a node that just imported a snapshot can immediately attempt
+        // block-sync without waiting for the timer to fire.
+        let kick = state.force_sync_kick.swap(false, Ordering::Relaxed);
+        if kick {
+            debug!("force_sync_kick consumed — bypassing throttle this iteration");
+        }
 
         // Cleanup expired bans
         {
@@ -2186,12 +2200,26 @@ pub async fn sync_loop(state: Arc<AppState>, seed_peers: Vec<String>, sync_inter
             // This prevents the sync loop from wasting time on dead peers while
             // other live peers with forked chains go undetected.
             let fail_count = peer_failures.get(peer).copied().unwrap_or(0);
-            if fail_count >= 20 {
-                // Only attempt dead peers every 10th cycle to detect recovery
-                let cycle = SYNC_FAIL_COUNT.load(Ordering::Relaxed);
-                if cycle % 10 != 0 {
-                    continue;
+            // v2.9.27 — timer-based throttle for high-fail peers.
+            // Replaces the previous cycle-counter throttle (cycle =
+            // SYNC_FAIL_COUNT, skip if `cycle % 10 != 0`) which got stuck at
+            // fail_count=21 cycle=21: the global counter only incremented on
+            // actual sync attempts, but the throttle skipped those attempts,
+            // so the counter never reached the next multiple of 10 and the
+            // throttle became permanent. Now: high-fail peers are retried
+            // at most once per 60 s. The `kick` from a successful snapshot
+            // import overrides this for one pass.
+            if !kick && fail_count >= 20 {
+                if let Some(t) = peer_last_attempt.get(peer) {
+                    if t.elapsed() < Duration::from_secs(60) {
+                        debug!(
+                            "sync throttle: peer={} fail={} elapsed_since_last={}s",
+                            peer_id(peer), fail_count, t.elapsed().as_secs()
+                        );
+                        continue;
+                    }
                 }
+                peer_last_attempt.insert(peer.clone(), std::time::Instant::now());
             }
 
             // v2.0.9: Max 50 iterations per peer to prevent infinite loop
