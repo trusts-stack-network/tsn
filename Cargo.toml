@@ -1,6 +1,6 @@
 [package]
 name = "tsn"
-version = "2.9.26"
+version = "2.9.27"
 edition = "2021"
 description = "TSN (Trust Stack Network) - A privacy-preserving post-quantum cryptocurrency"
 license = "MIT"
