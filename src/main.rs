@@ -5519,6 +5519,8 @@ async fn cmd_node(
         // v2.9.7 — Empty checkpoint history; checkpoint_vote::tick pushes
         // a new record on every successful finalize.
         checkpoint_history: arc_swap::ArcSwap::from_pointee(Vec::new()),
+        // v2.9.27 — initialize false; set true after snapshot imports.
+        force_sync_kick: std::sync::atomic::AtomicBool::new(false),
     });
 
     // v2.9.14 (W1B) — populate the lock-free state-check caches from the
@@ -7146,6 +7148,8 @@ async fn cmd_node(
                                                                     }
                                                                     println!("Re-synced to height {} from network.", snap_height);
                                                                     resync_attempts = 0;
+                                                                    // v2.9.27 — wake sync_loop immediately for block-sync.
+                                                                    mine_state.force_sync_kick.store(true, std::sync::atomic::Ordering::Relaxed);
                                                                 }
                                                             }
                                                         }
